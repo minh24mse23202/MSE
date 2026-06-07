@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import random
 from pathlib import Path
@@ -59,18 +60,12 @@ def main() -> None:
     train_dataset = make_dataset(Dataset, train_records, tokenizer, args.max_length)
     validation_dataset = make_dataset(Dataset, validation_records, tokenizer, args.max_length)
 
-    training_args = TrainingArguments(
+    training_args = make_training_args(
+        TrainingArguments,
         output_dir=args.output_dir,
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
         learning_rate=args.learning_rate,
-        per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=args.batch_size,
-        num_train_epochs=args.epochs,
-        weight_decay=0.01,
-        load_best_model_at_end=True,
-        metric_for_best_model="macro_f1",
-        report_to=[],
+        batch_size=args.batch_size,
+        epochs=args.epochs,
         seed=args.seed,
     )
 
@@ -135,6 +130,28 @@ def compute_metrics(eval_pred, accuracy_score, f1_score) -> Dict[str, float]:
         "accuracy": float(accuracy_score(labels, predicted_ids)),
         "macro_f1": float(f1_score(labels, predicted_ids, average="macro", zero_division=0)),
     }
+
+
+def make_training_args(TrainingArguments, output_dir: str, learning_rate: float, batch_size: int, epochs: float, seed: int):
+    kwargs = {
+        "output_dir": output_dir,
+        "save_strategy": "epoch",
+        "learning_rate": learning_rate,
+        "per_device_train_batch_size": batch_size,
+        "per_device_eval_batch_size": batch_size,
+        "num_train_epochs": epochs,
+        "weight_decay": 0.01,
+        "load_best_model_at_end": True,
+        "metric_for_best_model": "macro_f1",
+        "report_to": [],
+        "seed": seed,
+    }
+    parameters = inspect.signature(TrainingArguments.__init__).parameters
+    if "evaluation_strategy" in parameters:
+        kwargs["evaluation_strategy"] = "epoch"
+    else:
+        kwargs["eval_strategy"] = "epoch"
+    return TrainingArguments(**kwargs)
 
 
 def split_records(records: List[QACRecord], validation_ratio: float, seed: int) -> Tuple[List[QACRecord], List[QACRecord]]:
