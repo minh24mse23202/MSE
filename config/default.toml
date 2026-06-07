@@ -1,0 +1,17 @@
+[paths]
+sample_dataset = "data/sample/business_workflows.jsonl"
+feedback_store = "feedback.jsonl"
+
+[classifier]
+simple_top_k = 2
+moderate_top_k = 4
+complex_top_k = 6
+
+[retrieval]
+default_mode = "hybrid"
+bm25_weight = 0.65
+dense_weight = 0.35
+
+[generator]
+max_context_chars = 900
+
