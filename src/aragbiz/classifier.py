@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import inspect
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Protocol, Union
@@ -117,32 +118,49 @@ class HuggingFaceQueryClassifier:
     def __init__(self, model_dir: Union[str, Path], max_length: int = 128):
         self.model_dir = Path(model_dir)
         self.max_length = max_length
-        self._pipeline = None
+        self._runtime = None
         self.id2label = self._load_id2label()
 
     def predict(self, query: str) -> ComplexityLabel:
-        classifier = self._load_pipeline()
-        result = classifier(query, truncation=True, max_length=self.max_length)
-        if isinstance(result, list):
-            result = result[0]
-        label = str(result["label"])
-        if label.startswith("LABEL_"):
-            label = self.id2label.get(label.split("_", 1)[1], label)
+        tokenizer, model, torch, accepted_inputs, device = self._load_runtime()
+        encoded = tokenizer(
+            query,
+            truncation=True,
+            padding=True,
+            max_length=self.max_length,
+            return_tensors="pt",
+        )
+        model_inputs = {
+            key: value.to(device)
+            for key, value in encoded.items()
+            if key in accepted_inputs
+        }
+        with torch.no_grad():
+            output = model(**model_inputs)
+        label_id = int(output.logits.argmax(dim=-1).item())
+        label = self.id2label.get(str(label_id), f"LABEL_{label_id}")
         if label not in COMPLEXITY_LABELS:
             raise ValueError(f"Hugging Face classifier returned unsupported label: {label!r}")
         return label  # type: ignore[return-value]
 
-    def _load_pipeline(self):
-        if self._pipeline is None:
+    def _load_runtime(self):
+        if self._runtime is None:
             try:
-                from transformers import pipeline
+                import torch
+                from transformers import AutoModelForSequenceClassification, AutoTokenizer
             except ImportError as exc:
                 raise ImportError(
                     "HuggingFaceQueryClassifier requires the optional ML dependencies. "
                     "Install them with: python -m pip install -e \".[ml]\""
                 ) from exc
-            self._pipeline = pipeline("text-classification", model=str(self.model_dir), tokenizer=str(self.model_dir))
-        return self._pipeline
+            tokenizer = AutoTokenizer.from_pretrained(str(self.model_dir))
+            model = AutoModelForSequenceClassification.from_pretrained(str(self.model_dir))
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            model.to(device)
+            model.eval()
+            accepted_inputs = set(inspect.signature(model.forward).parameters)
+            self._runtime = (tokenizer, model, torch, accepted_inputs, device)
+        return self._runtime
 
     def _load_id2label(self) -> Dict[str, str]:
         config_path = self.model_dir / "config.json"

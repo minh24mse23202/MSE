@@ -13,7 +13,7 @@ st.title("Adaptive RAG Workflow QA")
 question = st.text_input("Business workflow question", value="How should we handle an invoice mismatch after goods are received?")
 
 if st.button("Ask", type="primary") and question.strip():
-    response = requests.post(f"{API_URL}/answer", json={"question": question}, timeout=30)
+    response = requests.post(f"{API_URL}/answer", json={"question": question}, timeout=120)
     response.raise_for_status()
     payload = response.json()
     st.subheader("Answer")
