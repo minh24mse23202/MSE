@@ -6,6 +6,7 @@ import pytest
 from aragbiz.classifier import HuggingFaceQueryClassifier
 from aragbiz.config import AppConfig
 from aragbiz.factory import build_query_classifier
+from scripts.train_hf_query_classifier import make_trainer
 
 
 def test_hf_classifier_reads_id2label_config(tmp_path):
@@ -46,3 +47,31 @@ def test_hf_classifier_has_clear_missing_dependency_error(tmp_path, monkeypatch)
     monkeypatch.setattr(builtins, "__import__", fake_import)
     with pytest.raises(ImportError, match="optional ML dependencies"):
         classifier.predict("How do I approve a purchase order?")
+
+
+def test_make_trainer_supports_processing_class_signature():
+    captured = {}
+
+    class FakeTrainer:
+        def __init__(
+            self,
+            model,
+            args,
+            train_dataset,
+            eval_dataset,
+            compute_metrics,
+            processing_class=None,
+        ):
+            captured["processing_class"] = processing_class
+
+    trainer = make_trainer(
+        FakeTrainer,
+        model=object(),
+        training_args=object(),
+        train_dataset=[],
+        validation_dataset=[],
+        tokenizer="tokenizer",
+        compute_metrics=lambda output: {},
+    )
+    assert isinstance(trainer, FakeTrainer)
+    assert captured["processing_class"] == "tokenizer"

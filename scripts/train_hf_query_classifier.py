@@ -69,11 +69,12 @@ def main() -> None:
         seed=args.seed,
     )
 
-    trainer = Trainer(
+    trainer = make_trainer(
+        Trainer,
         model=model,
-        args=training_args,
+        training_args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=validation_dataset,
+        validation_dataset=validation_dataset,
         tokenizer=tokenizer,
         compute_metrics=lambda output: compute_metrics(output, accuracy_score, f1_score),
     )
@@ -152,6 +153,22 @@ def make_training_args(TrainingArguments, output_dir: str, learning_rate: float,
     else:
         kwargs["eval_strategy"] = "epoch"
     return TrainingArguments(**kwargs)
+
+
+def make_trainer(Trainer, model, training_args, train_dataset, validation_dataset, tokenizer, compute_metrics):
+    kwargs = {
+        "model": model,
+        "args": training_args,
+        "train_dataset": train_dataset,
+        "eval_dataset": validation_dataset,
+        "compute_metrics": compute_metrics,
+    }
+    parameters = inspect.signature(Trainer.__init__).parameters
+    if "processing_class" in parameters:
+        kwargs["processing_class"] = tokenizer
+    elif "tokenizer" in parameters:
+        kwargs["tokenizer"] = tokenizer
+    return Trainer(**kwargs)
 
 
 def split_records(records: List[QACRecord], validation_ratio: float, seed: int) -> Tuple[List[QACRecord], List[QACRecord]]:
