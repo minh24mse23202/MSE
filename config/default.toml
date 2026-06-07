@@ -1,11 +1,21 @@
 [paths]
-sample_dataset = "data/sample/business_workflows.jsonl"
+sample_dataset = "data/processed/wixqa_expertwritten_qac.jsonl"
+fallback_sample_dataset = "data/sample/business_workflows.jsonl"
+kb_corpus = "data/processed/wix_kb_corpus_documents.jsonl"
 feedback_store = "feedback.jsonl"
+
+[wixqa]
+dataset_name = "Wix/WixQA"
+qa_subset = "wixqa_expertwritten"
+kb_subset = "wix_kb_corpus"
+revision = "main"
 
 [classifier]
 simple_top_k = 2
 moderate_top_k = 4
 complex_top_k = 6
+model_path = "data/artifacts/query_classifier_nb.json"
+use_trained_model = true
 
 [retrieval]
 default_mode = "hybrid"
@@ -14,4 +24,3 @@ dense_weight = 0.35
 
 [generator]
 max_context_chars = 900
-

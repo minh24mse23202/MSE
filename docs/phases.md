@@ -3,13 +3,13 @@
 ## Phase 1: Literature Review and Dataset Preparation
 
 - Capture notes for RAG, Adaptive RAG, hybrid retrieval, and evaluation frameworks.
-- Normalize business workflow QA data into QAC JSONL.
+- Download WixQA from Hugging Face and normalize QA rows plus KB articles into QAC JSONL and retrieval documents.
 - Define complexity labeling guidelines and a validation split.
 
 ## Phase 2: Model Specialization
 
-- Generate synthetic QAC examples where useful.
-- Fine-tune or distill a lightweight classifier.
+- Generate balanced synthetic QAC examples from the Wix KB corpus for classifier bootstrapping.
+- Train the dependency-light Naive Bayes student classifier first, then use Colab notebooks for T5/DistilBERT fine-tuning.
 - Track accuracy, macro F1, confusion matrix, and per-label recall.
 
 ## Phase 3: Adaptive RAG Pipeline
@@ -34,4 +34,3 @@
 
 - Prepare reproducible demo.
 - Finalize slides, report, and architecture/evaluation figures.
-

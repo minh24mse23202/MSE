@@ -43,6 +43,9 @@ def _routing_match(record: QACRecord, result: AnswerResult) -> float:
 
 def _context_relevance(record: QACRecord, result: AnswerResult) -> float:
     retrieved_ids = {context.document.id for context in result.contexts}
+    article_ids = set(record.metadata.get("article_ids", []))
+    if article_ids:
+        return float(bool(article_ids & retrieved_ids))
     return float(record.id in retrieved_ids)
 
 
@@ -67,4 +70,3 @@ def _tokens(text: str) -> list[str]:
     import re
 
     return re.findall(r"[a-z0-9]+", text.lower())
-

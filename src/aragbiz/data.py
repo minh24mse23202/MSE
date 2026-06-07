@@ -18,6 +18,26 @@ def load_qac_jsonl(path: Union[str, Path]) -> List[QACRecord]:
     return records
 
 
+def load_documents_jsonl(path: Union[str, Path]) -> List[Document]:
+    documents: List[Document] = []
+    with Path(path).open("r", encoding="utf-8") as file:
+        for line_number, line in enumerate(file, start=1):
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            missing = {"id", "text"} - set(payload)
+            if missing:
+                raise ValueError(f"Missing document fields on line {line_number}: {sorted(missing)}")
+            documents.append(
+                Document(
+                    id=str(payload["id"]),
+                    text=str(payload["text"]),
+                    metadata=dict(payload.get("metadata", {})),
+                )
+            )
+    return documents
+
+
 def qac_from_mapping(payload: dict, line_number: Optional[int] = None) -> QACRecord:
     missing = {"id", "question", "answer", "context", "complexity_label"} - set(payload)
     if missing:

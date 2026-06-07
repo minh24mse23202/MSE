@@ -7,11 +7,15 @@ from typing import Any, Dict, Union
 
 @dataclass(frozen=True)
 class AppConfig:
-    sample_dataset: str = "data/sample/business_workflows.jsonl"
+    sample_dataset: str = "data/processed/wixqa_expertwritten_qac.jsonl"
+    fallback_sample_dataset: str = "data/sample/business_workflows.jsonl"
+    kb_corpus: str = "data/processed/wix_kb_corpus_documents.jsonl"
     feedback_store: str = "feedback.jsonl"
     simple_top_k: int = 2
     moderate_top_k: int = 4
     complex_top_k: int = 6
+    classifier_model_path: str = "data/artifacts/query_classifier_nb.json"
+    use_trained_classifier: bool = True
     default_mode: str = "hybrid"
     bm25_weight: float = 0.65
     dense_weight: float = 0.35
@@ -25,10 +29,14 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
     raw = _load_toml(config_path)
     return AppConfig(
         sample_dataset=raw.get("paths", {}).get("sample_dataset", AppConfig.sample_dataset),
+        fallback_sample_dataset=raw.get("paths", {}).get("fallback_sample_dataset", AppConfig.fallback_sample_dataset),
+        kb_corpus=raw.get("paths", {}).get("kb_corpus", AppConfig.kb_corpus),
         feedback_store=raw.get("paths", {}).get("feedback_store", AppConfig.feedback_store),
         simple_top_k=int(raw.get("classifier", {}).get("simple_top_k", AppConfig.simple_top_k)),
         moderate_top_k=int(raw.get("classifier", {}).get("moderate_top_k", AppConfig.moderate_top_k)),
         complex_top_k=int(raw.get("classifier", {}).get("complex_top_k", AppConfig.complex_top_k)),
+        classifier_model_path=raw.get("classifier", {}).get("model_path", AppConfig.classifier_model_path),
+        use_trained_classifier=bool(raw.get("classifier", {}).get("use_trained_model", AppConfig.use_trained_classifier)),
         default_mode=raw.get("retrieval", {}).get("default_mode", AppConfig.default_mode),
         bm25_weight=float(raw.get("retrieval", {}).get("bm25_weight", AppConfig.bm25_weight)),
         dense_weight=float(raw.get("retrieval", {}).get("dense_weight", AppConfig.dense_weight)),

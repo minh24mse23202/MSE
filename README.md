@@ -34,10 +34,33 @@ Run the chatbot UI:
 streamlit run app/streamlit_app.py
 ```
 
-Run the sample evaluation:
+Download and convert WixQA:
+
+```powershell
+$env:PYTHONPATH='src'
+python scripts/download_wixqa.py --subset wixqa_expertwritten
+```
+
+Run the evaluation:
 
 ```powershell
 python scripts/evaluate_sample.py
+```
+
+Train the Phase 2 lightweight query complexity classifier:
+
+```powershell
+$env:PYTHONPATH='src'
+python scripts/generate_synthetic_qac.py --limit 90
+python scripts/train_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
+python scripts/evaluate_sample.py --limit 10
+```
+
+For a pure WixQA-only classifier run:
+
+```powershell
+$env:PYTHONPATH='src'
+python scripts/train_query_classifier.py
 ```
 
 ## Current Baseline
@@ -45,9 +68,9 @@ python scripts/evaluate_sample.py
 The first implementation is intentionally lightweight and offline:
 
 - query complexity classification uses deterministic heuristics;
+- when `data/artifacts/query_classifier_nb.json` exists, routing uses the trained Phase 2 classifier artifact;
 - retrieval combines BM25 and hashed dense similarity;
 - generation uses retrieved context snippets;
 - evaluation reports routing accuracy, retrieval relevance, faithfulness proxy, answer overlap, and latency.
 
-This gives every phase a runnable target before adding Hugging Face models, Colab training, WixQA preprocessing, and RAGAS-based evaluation.
-
+By default, the app uses processed WixQA files when they exist and falls back to the small bundled sample dataset when they do not.

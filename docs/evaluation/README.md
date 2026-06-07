@@ -12,6 +12,6 @@ Evaluation tracks:
 Run the baseline sample:
 
 ```powershell
+python scripts/download_wixqa.py --subset wixqa_expertwritten
 python scripts/evaluate_sample.py
 ```
-

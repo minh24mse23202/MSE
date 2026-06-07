@@ -1,0 +1,33 @@
+{
+  "dataset": "data/processed/wixqa_expertwritten_qac.jsonl",
+  "metrics": {
+    "accuracy": 0.7413793103448276,
+    "confusion_matrix": {
+      "complex": {
+        "complex": 7,
+        "moderate": 0,
+        "simple": 2
+      },
+      "moderate": {
+        "complex": 0,
+        "moderate": 18,
+        "simple": 7
+      },
+      "simple": {
+        "complex": 0,
+        "moderate": 6,
+        "simple": 18
+      }
+    },
+    "macro_f1": 0.771858743497399,
+    "per_label_recall": {
+      "complex": 0.7777777777777778,
+      "moderate": 0.72,
+      "simple": 0.75
+    },
+    "total": 58
+  },
+  "model_path": "data/artifacts/query_classifier_nb.json",
+  "train_records": 232,
+  "validation_records": 58
+}
