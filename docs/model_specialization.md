@@ -14,12 +14,26 @@ python scripts/generate_synthetic_qac.py --limit 90
 python scripts/train_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
 ```
 
+Train the DistilBERT classifier in Colab or another GPU environment:
+
+```powershell
+python -m pip install -e ".[ml]"
+$env:PYTHONPATH='src'
+python scripts/train_hf_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
+```
+
 Outputs:
 
 - `data/artifacts/query_classifier_nb.json`
+- `data/artifacts/query_classifier_distilbert/`
 - `docs/evaluation/query_classifier_metrics.json`
+- `docs/evaluation/hf_query_classifier_metrics.json`
 
-The app automatically uses the trained artifact when it exists. If no artifact is available, it falls back to the deterministic heuristic classifier.
+The app uses classifier artifacts in this order:
+
+1. Hugging Face directory at `data/artifacts/query_classifier_distilbert/`
+2. Naive Bayes JSON at `data/artifacts/query_classifier_nb.json`
+3. deterministic heuristic classifier
 
 The synthetic bootstrap generator creates template-based QAC examples from KB documents to balance the initial `simple`, `moderate`, and `complex` classes. This is a temporary Phase 2 bridge before Colab-based T5/DistilBERT fine-tuning.
 

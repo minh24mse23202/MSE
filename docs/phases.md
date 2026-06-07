@@ -9,7 +9,7 @@
 ## Phase 2: Model Specialization
 
 - Generate balanced synthetic QAC examples from the Wix KB corpus for classifier bootstrapping.
-- Train the dependency-light Naive Bayes student classifier first, then use Colab notebooks for T5/DistilBERT fine-tuning.
+- Train the dependency-light Naive Bayes student classifier first, then train DistilBERT in Colab using the same classifier interface.
 - Track accuracy, macro F1, confusion matrix, and per-label recall.
 
 ## Phase 3: Adaptive RAG Pipeline

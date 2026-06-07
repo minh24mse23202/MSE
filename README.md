@@ -63,12 +63,23 @@ $env:PYTHONPATH='src'
 python scripts/train_query_classifier.py
 ```
 
+Train the Hugging Face DistilBERT classifier in Colab or a GPU environment:
+
+```powershell
+python -m pip install -e ".[ml]"
+$env:PYTHONPATH='src'
+python scripts/train_hf_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
+```
+
+When `data/artifacts/query_classifier_distilbert/` exists, the app uses it first. If it is absent, the app falls back to `data/artifacts/query_classifier_nb.json`, then to the heuristic classifier.
+
 ## Current Baseline
 
 The first implementation is intentionally lightweight and offline:
 
 - query complexity classification uses deterministic heuristics;
-- when `data/artifacts/query_classifier_nb.json` exists, routing uses the trained Phase 2 classifier artifact;
+- when `data/artifacts/query_classifier_distilbert/` exists, routing uses the Hugging Face classifier artifact;
+- otherwise, routing can fall back to `data/artifacts/query_classifier_nb.json` or the deterministic heuristic;
 - retrieval combines BM25 and hashed dense similarity;
 - generation uses retrieved context snippets;
 - evaluation reports routing accuracy, retrieval relevance, faithfulness proxy, answer overlap, and latency.

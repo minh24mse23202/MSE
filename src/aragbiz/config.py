@@ -14,7 +14,8 @@ class AppConfig:
     simple_top_k: int = 2
     moderate_top_k: int = 4
     complex_top_k: int = 6
-    classifier_model_path: str = "data/artifacts/query_classifier_nb.json"
+    classifier_model_path: str = "data/artifacts/query_classifier_distilbert"
+    classifier_fallback_model_path: str = "data/artifacts/query_classifier_nb.json"
     use_trained_classifier: bool = True
     default_mode: str = "hybrid"
     bm25_weight: float = 0.65
@@ -36,6 +37,7 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
         moderate_top_k=int(raw.get("classifier", {}).get("moderate_top_k", AppConfig.moderate_top_k)),
         complex_top_k=int(raw.get("classifier", {}).get("complex_top_k", AppConfig.complex_top_k)),
         classifier_model_path=raw.get("classifier", {}).get("model_path", AppConfig.classifier_model_path),
+        classifier_fallback_model_path=raw.get("classifier", {}).get("fallback_model_path", AppConfig.classifier_fallback_model_path),
         use_trained_classifier=bool(raw.get("classifier", {}).get("use_trained_model", AppConfig.use_trained_classifier)),
         default_mode=raw.get("retrieval", {}).get("default_mode", AppConfig.default_mode),
         bm25_weight=float(raw.get("retrieval", {}).get("bm25_weight", AppConfig.bm25_weight)),

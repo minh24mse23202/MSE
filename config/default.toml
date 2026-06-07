@@ -14,7 +14,8 @@ revision = "main"
 simple_top_k = 2
 moderate_top_k = 4
 complex_top_k = 6
-model_path = "data/artifacts/query_classifier_nb.json"
+model_path = "data/artifacts/query_classifier_distilbert"
+fallback_model_path = "data/artifacts/query_classifier_nb.json"
 use_trained_model = true
 
 [retrieval]
@@ -24,3 +25,6 @@ dense_weight = 0.35
 
 [generator]
 max_context_chars = 900
+
+[pipeline]
+max_subqueries = 4

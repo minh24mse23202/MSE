@@ -5,7 +5,11 @@ from aragbiz.factory import build_sample_pipeline, existing_dataset_path
 
 
 def test_pipeline_answers_sample_query():
-    config = AppConfig(sample_dataset="data/sample/business_workflows.jsonl", kb_corpus="data/processed/missing_docs.jsonl")
+    config = AppConfig(
+        sample_dataset="data/sample/business_workflows.jsonl",
+        kb_corpus="data/processed/missing_docs.jsonl",
+        use_trained_classifier=False,
+    )
     pipeline = build_sample_pipeline(config)
     result = pipeline.answer("How should we handle an invoice mismatch after goods are received?")
     assert result.answer
@@ -15,7 +19,11 @@ def test_pipeline_answers_sample_query():
 
 
 def test_evaluator_returns_expected_metric_schema():
-    config = AppConfig(sample_dataset="data/sample/business_workflows.jsonl", kb_corpus="data/processed/missing_docs.jsonl")
+    config = AppConfig(
+        sample_dataset="data/sample/business_workflows.jsonl",
+        kb_corpus="data/processed/missing_docs.jsonl",
+        use_trained_classifier=False,
+    )
     dataset = load_qac_jsonl(existing_dataset_path(config))
     metrics = Evaluator(build_sample_pipeline(config)).evaluate(dataset)
     assert set(metrics) == {

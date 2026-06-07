@@ -111,6 +111,47 @@ class NaiveBayesQueryClassifier:
         )
 
 
+class HuggingFaceQueryClassifier:
+    """Runtime wrapper for a local Hugging Face sequence-classification artifact."""
+
+    def __init__(self, model_dir: Union[str, Path], max_length: int = 128):
+        self.model_dir = Path(model_dir)
+        self.max_length = max_length
+        self._pipeline = None
+        self.id2label = self._load_id2label()
+
+    def predict(self, query: str) -> ComplexityLabel:
+        classifier = self._load_pipeline()
+        result = classifier(query, truncation=True, max_length=self.max_length)
+        if isinstance(result, list):
+            result = result[0]
+        label = str(result["label"])
+        if label.startswith("LABEL_"):
+            label = self.id2label.get(label.split("_", 1)[1], label)
+        if label not in COMPLEXITY_LABELS:
+            raise ValueError(f"Hugging Face classifier returned unsupported label: {label!r}")
+        return label  # type: ignore[return-value]
+
+    def _load_pipeline(self):
+        if self._pipeline is None:
+            try:
+                from transformers import pipeline
+            except ImportError as exc:
+                raise ImportError(
+                    "HuggingFaceQueryClassifier requires the optional ML dependencies. "
+                    "Install them with: python -m pip install -e \".[ml]\""
+                ) from exc
+            self._pipeline = pipeline("text-classification", model=str(self.model_dir), tokenizer=str(self.model_dir))
+        return self._pipeline
+
+    def _load_id2label(self) -> Dict[str, str]:
+        config_path = self.model_dir / "config.json"
+        if not config_path.exists():
+            return {}
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+        return {str(key): str(value) for key, value in payload.get("id2label", {}).items()}
+
+
 def train_naive_bayes_classifier(records: Iterable[QACRecord], alpha: float = 1.0) -> NaiveBayesQueryClassifier:
     records = list(records)
     if not records:

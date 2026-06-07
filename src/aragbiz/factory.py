@@ -3,7 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from aragbiz.classifier import HeuristicQueryClassifier, NaiveBayesQueryClassifier, QueryClassifier
+from aragbiz.classifier import (
+    HeuristicQueryClassifier,
+    HuggingFaceQueryClassifier,
+    NaiveBayesQueryClassifier,
+    QueryClassifier,
+)
 from aragbiz.config import AppConfig, load_config
 from aragbiz.data import load_documents_jsonl, load_qac_jsonl, records_to_documents
 from aragbiz.generation import ExtractiveGenerator
@@ -45,7 +50,12 @@ def existing_dataset_path(config: AppConfig) -> str:
 def build_query_classifier(config: AppConfig) -> QueryClassifier:
     model_path = Path(config.classifier_model_path)
     if config.use_trained_classifier and model_path.exists():
+        if model_path.is_dir():
+            return HuggingFaceQueryClassifier(model_path)
         return NaiveBayesQueryClassifier.load(model_path)
+    fallback_path = Path(config.classifier_fallback_model_path)
+    if config.use_trained_classifier and fallback_path.exists():
+        return NaiveBayesQueryClassifier.load(fallback_path)
     return HeuristicQueryClassifier()
 
 
