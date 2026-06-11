@@ -1,4 +1,8 @@
+import os
+
 import pytest
+
+os.environ["ARAGBIZ_USE_TRAINED_CLASSIFIER"] = "false"
 
 fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient

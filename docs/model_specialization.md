@@ -22,12 +22,30 @@ $env:PYTHONPATH='src'
 python scripts/train_hf_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
 ```
 
+Train the T5-small seq2seq classifier:
+
+```powershell
+python -m pip install -e ".[ml]"
+$env:PYTHONPATH='src'
+python scripts/train_t5_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
+```
+
+Compare available classifiers:
+
+```powershell
+$env:PYTHONPATH='src'
+python scripts/compare_query_classifiers.py --limit 50
+```
+
 Outputs:
 
 - `data/artifacts/query_classifier_nb.json`
 - `data/artifacts/query_classifier_distilbert/`
+- `data/artifacts/query_classifier_t5_small/`
 - `docs/evaluation/query_classifier_metrics.json`
 - `docs/evaluation/hf_query_classifier_metrics.json`
+- `docs/evaluation/t5_query_classifier_metrics.json`
+- `docs/evaluation/classifier_comparison.json`
 
 The app uses classifier artifacts in this order:
 

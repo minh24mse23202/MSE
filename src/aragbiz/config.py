@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Union
@@ -28,6 +29,10 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
     if not config_path.exists():
         return AppConfig()
     raw = _load_toml(config_path)
+    use_trained = bool(raw.get("classifier", {}).get("use_trained_model", AppConfig.use_trained_classifier))
+    env_use_trained = os.getenv("ARAGBIZ_USE_TRAINED_CLASSIFIER")
+    if env_use_trained is not None:
+        use_trained = _parse_bool(env_use_trained)
     return AppConfig(
         sample_dataset=raw.get("paths", {}).get("sample_dataset", AppConfig.sample_dataset),
         fallback_sample_dataset=raw.get("paths", {}).get("fallback_sample_dataset", AppConfig.fallback_sample_dataset),
@@ -38,7 +43,7 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
         complex_top_k=int(raw.get("classifier", {}).get("complex_top_k", AppConfig.complex_top_k)),
         classifier_model_path=raw.get("classifier", {}).get("model_path", AppConfig.classifier_model_path),
         classifier_fallback_model_path=raw.get("classifier", {}).get("fallback_model_path", AppConfig.classifier_fallback_model_path),
-        use_trained_classifier=bool(raw.get("classifier", {}).get("use_trained_model", AppConfig.use_trained_classifier)),
+        use_trained_classifier=use_trained,
         default_mode=raw.get("retrieval", {}).get("default_mode", AppConfig.default_mode),
         bm25_weight=float(raw.get("retrieval", {}).get("bm25_weight", AppConfig.bm25_weight)),
         dense_weight=float(raw.get("retrieval", {}).get("dense_weight", AppConfig.dense_weight)),
@@ -91,3 +96,7 @@ def _parse_scalar(value: str) -> Any:
         return int(value)
     except ValueError:
         return value
+
+
+def _parse_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}

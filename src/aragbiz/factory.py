@@ -8,6 +8,7 @@ from aragbiz.classifier import (
     HuggingFaceQueryClassifier,
     NaiveBayesQueryClassifier,
     QueryClassifier,
+    T5QueryClassifier,
 )
 from aragbiz.config import AppConfig, load_config
 from aragbiz.data import load_documents_jsonl, load_qac_jsonl, records_to_documents
@@ -51,12 +52,21 @@ def build_query_classifier(config: AppConfig) -> QueryClassifier:
     model_path = Path(config.classifier_model_path)
     if config.use_trained_classifier and model_path.exists():
         if model_path.is_dir():
+            if _is_t5_artifact(model_path):
+                return T5QueryClassifier(model_path)
             return HuggingFaceQueryClassifier(model_path)
         return NaiveBayesQueryClassifier.load(model_path)
     fallback_path = Path(config.classifier_fallback_model_path)
     if config.use_trained_classifier and fallback_path.exists():
         return NaiveBayesQueryClassifier.load(fallback_path)
     return HeuristicQueryClassifier()
+
+
+def _is_t5_artifact(model_path: Path) -> bool:
+    config_path = model_path / "config.json"
+    if not config_path.exists():
+        return False
+    return '"model_type": "t5"' in config_path.read_text(encoding="utf-8")
 
 
 def _existing_path(primary: str, fallback: str) -> str:

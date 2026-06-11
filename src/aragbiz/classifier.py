@@ -170,6 +170,54 @@ class HuggingFaceQueryClassifier:
         return {str(key): str(value) for key, value in payload.get("id2label", {}).items()}
 
 
+class T5QueryClassifier:
+    """Runtime wrapper for a local T5-style seq2seq classifier artifact."""
+
+    def __init__(self, model_dir: Union[str, Path], max_length: int = 128, generation_max_length: int = 8):
+        self.model_dir = Path(model_dir)
+        self.max_length = max_length
+        self.generation_max_length = generation_max_length
+        self._runtime = None
+
+    def predict(self, query: str) -> ComplexityLabel:
+        tokenizer, model, torch, accepted_inputs, device = self._load_runtime()
+        encoded = tokenizer(
+            _format_t5_input(query),
+            truncation=True,
+            padding=True,
+            max_length=self.max_length,
+            return_tensors="pt",
+        )
+        model_inputs = {
+            key: value.to(device)
+            for key, value in encoded.items()
+            if key in accepted_inputs
+        }
+        with torch.no_grad():
+            generated_ids = model.generate(**model_inputs, max_length=self.generation_max_length)
+        decoded = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+        return _normalize_generated_label(decoded)
+
+    def _load_runtime(self):
+        if self._runtime is None:
+            try:
+                import torch
+                from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+            except ImportError as exc:
+                raise ImportError(
+                    "T5QueryClassifier requires the optional ML dependencies. "
+                    "Install them with: python -m pip install -e \".[ml]\""
+                ) from exc
+            tokenizer = AutoTokenizer.from_pretrained(str(self.model_dir))
+            model = AutoModelForSeq2SeqLM.from_pretrained(str(self.model_dir))
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            model.to(device)
+            model.eval()
+            accepted_inputs = set(inspect.signature(model.forward).parameters)
+            self._runtime = (tokenizer, model, torch, accepted_inputs, device)
+        return self._runtime
+
+
 def train_naive_bayes_classifier(records: Iterable[QACRecord], alpha: float = 1.0) -> NaiveBayesQueryClassifier:
     records = list(records)
     if not records:
@@ -237,3 +285,19 @@ def evaluate_classifier(records: Iterable[QACRecord], classifier: QueryClassifie
 
 def _tokens(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _format_t5_input(query: str) -> str:
+    return f"classify query complexity: {query}"
+
+
+def _normalize_generated_label(text: str) -> ComplexityLabel:
+    normalized = text.strip().lower()
+    for label in COMPLEXITY_LABELS:
+        if normalized == label or label in normalized.split():
+            return label
+    if "complex" in normalized:
+        return "complex"
+    if "moderate" in normalized:
+        return "moderate"
+    return "simple"

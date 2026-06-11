@@ -71,6 +71,15 @@ $env:PYTHONPATH='src'
 python scripts/train_hf_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
 ```
 
+Train and compare a T5-small classifier:
+
+```powershell
+python -m pip install -e ".[ml]"
+$env:PYTHONPATH='src'
+python scripts/train_t5_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
+python scripts/compare_query_classifiers.py --limit 50
+```
+
 When `data/artifacts/query_classifier_distilbert/` exists, the app uses it first. If it is absent, the app falls back to `data/artifacts/query_classifier_nb.json`, then to the heuristic classifier.
 
 ## Current Baseline

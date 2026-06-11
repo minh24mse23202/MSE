@@ -1,0 +1,87 @@
+{
+  "classifiers": {
+    "distilbert": {
+      "accuracy": 1.0,
+      "confusion_matrix": {
+        "complex": {
+          "complex": 0,
+          "moderate": 0,
+          "simple": 0
+        },
+        "moderate": {
+          "complex": 0,
+          "moderate": 1,
+          "simple": 0
+        },
+        "simple": {
+          "complex": 0,
+          "moderate": 0,
+          "simple": 2
+        }
+      },
+      "macro_f1": 0.6666666666666666,
+      "per_label_recall": {
+        "complex": 0.0,
+        "moderate": 1.0,
+        "simple": 1.0
+      },
+      "total": 3
+    },
+    "heuristic": {
+      "accuracy": 0.0,
+      "confusion_matrix": {
+        "complex": {
+          "complex": 0,
+          "moderate": 0,
+          "simple": 0
+        },
+        "moderate": {
+          "complex": 1,
+          "moderate": 0,
+          "simple": 0
+        },
+        "simple": {
+          "complex": 2,
+          "moderate": 0,
+          "simple": 0
+        }
+      },
+      "macro_f1": 0.0,
+      "per_label_recall": {
+        "complex": 0.0,
+        "moderate": 0.0,
+        "simple": 0.0
+      },
+      "total": 3
+    },
+    "naive_bayes": {
+      "accuracy": 1.0,
+      "confusion_matrix": {
+        "complex": {
+          "complex": 0,
+          "moderate": 0,
+          "simple": 0
+        },
+        "moderate": {
+          "complex": 0,
+          "moderate": 1,
+          "simple": 0
+        },
+        "simple": {
+          "complex": 0,
+          "moderate": 0,
+          "simple": 2
+        }
+      },
+      "macro_f1": 0.6666666666666666,
+      "per_label_recall": {
+        "complex": 0.0,
+        "moderate": 1.0,
+        "simple": 1.0
+      },
+      "total": 3
+    }
+  },
+  "dataset": "data/processed/wixqa_expertwritten_qac.jsonl",
+  "records": 3
+}
