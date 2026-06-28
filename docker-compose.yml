@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aragbiz-postgres
+    environment:
+      POSTGRES_DB: aragbiz
+      POSTGRES_USER: aragbiz
+      POSTGRES_PASSWORD: aragbiz
+    ports:
+      - "5432:5432"
+    volumes:
+      - aragbiz_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aragbiz -d aragbiz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  aragbiz_postgres_data:

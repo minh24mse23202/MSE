@@ -14,6 +14,7 @@
 
 ## Phase 3: Adaptive RAG Pipeline
 
+- Implement Knowledge & data processing first: source selection, file/website loaders, metadata extraction, deduplication, chunking, embeddings, PostgreSQL metadata and pgVector storage.
 - Replace baseline retriever/generator pieces with stronger model-backed components.
 - Add decomposition for complex queries.
 - Keep the current interfaces stable.

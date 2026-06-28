@@ -22,6 +22,14 @@ class AppConfig:
     bm25_weight: float = 0.65
     dense_weight: float = 0.35
     max_context_chars: int = 900
+    knowledge_backend: str = "postgres"
+    knowledge_database_url: str = "postgresql+psycopg://aragbiz:aragbiz@localhost:5432/aragbiz"
+    knowledge_json_store: str = "data/knowledge/knowledge_store.json"
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_dimension: int = 384
+    use_sentence_transformers: bool = False
+    chunk_size: int = 800
+    chunk_overlap: int = 120
 
 
 def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
@@ -48,6 +56,22 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
         bm25_weight=float(raw.get("retrieval", {}).get("bm25_weight", AppConfig.bm25_weight)),
         dense_weight=float(raw.get("retrieval", {}).get("dense_weight", AppConfig.dense_weight)),
         max_context_chars=int(raw.get("generator", {}).get("max_context_chars", AppConfig.max_context_chars)),
+        knowledge_backend=os.getenv("ARAGBIZ_KNOWLEDGE_BACKEND", raw.get("knowledge", {}).get("backend", AppConfig.knowledge_backend)),
+        knowledge_database_url=os.getenv(
+            "ARAGBIZ_DATABASE_URL",
+            raw.get("knowledge", {}).get("database_url", AppConfig.knowledge_database_url),
+        ),
+        knowledge_json_store=os.getenv(
+            "ARAGBIZ_KNOWLEDGE_STORE",
+            raw.get("knowledge", {}).get("json_store", AppConfig.knowledge_json_store),
+        ),
+        embedding_model=raw.get("knowledge", {}).get("embedding_model", AppConfig.embedding_model),
+        embedding_dimension=int(raw.get("knowledge", {}).get("embedding_dimension", AppConfig.embedding_dimension)),
+        use_sentence_transformers=_parse_bool(
+            str(raw.get("knowledge", {}).get("use_sentence_transformers", AppConfig.use_sentence_transformers))
+        ),
+        chunk_size=int(raw.get("knowledge", {}).get("chunk_size", AppConfig.chunk_size)),
+        chunk_overlap=int(raw.get("knowledge", {}).get("chunk_overlap", AppConfig.chunk_overlap)),
     )
 
 

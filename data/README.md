@@ -15,3 +15,5 @@ Generated files:
 - `data/processed/wixqa_expertwritten_qac.jsonl`
 
 The Hugging Face dataset card describes WixQA as a MIT-licensed enterprise RAG QA benchmark with QA configs grounded in a Wix Help Center KB corpus.
+
+Knowledge-base ingestion stores local fallback state in `data/knowledge/knowledge_store.json` when PostgreSQL is not configured. The intended demo runtime uses Docker Compose PostgreSQL with pgVector and stores relational metadata plus chunk embeddings there.

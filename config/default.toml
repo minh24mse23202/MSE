@@ -28,3 +28,13 @@ max_context_chars = 900
 
 [pipeline]
 max_subqueries = 4
+
+[knowledge]
+backend = "postgres"
+database_url = "postgresql+psycopg://aragbiz:aragbiz@localhost:5432/aragbiz"
+json_store = "data/knowledge/knowledge_store.json"
+embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
+embedding_dimension = 384
+use_sentence_transformers = false
+chunk_size = 800
+chunk_overlap = 120

@@ -13,6 +13,8 @@ from aragbiz.classifier import (
 from aragbiz.config import AppConfig, load_config
 from aragbiz.data import load_documents_jsonl, load_qac_jsonl, records_to_documents
 from aragbiz.generation import ExtractiveGenerator
+from aragbiz.knowledge import KnowledgeService, OverlapChunker, build_embedder
+from aragbiz.knowledge_store import JsonKnowledgeRepository, PostgresKnowledgeRepository
 from aragbiz.pipeline import RAGPipeline
 from aragbiz.retrieval import InMemoryHybridRetriever
 from aragbiz.routing import AdaptiveRouter, RouterConfig
@@ -60,6 +62,29 @@ def build_query_classifier(config: AppConfig) -> QueryClassifier:
     if config.use_trained_classifier and fallback_path.exists():
         return NaiveBayesQueryClassifier.load(fallback_path)
     return HeuristicQueryClassifier()
+
+
+def build_knowledge_service(config: Optional[AppConfig] = None) -> KnowledgeService:
+    config = config or load_config()
+    if config.knowledge_backend.lower() == "json":
+        repository = JsonKnowledgeRepository(config.knowledge_json_store)
+    else:
+        try:
+            repository = PostgresKnowledgeRepository(
+                config.knowledge_database_url,
+                embedding_dimension=config.embedding_dimension,
+            )
+        except Exception:
+            repository = JsonKnowledgeRepository(config.knowledge_json_store)
+    return KnowledgeService(
+        repository=repository,
+        chunker=OverlapChunker(chunk_size=config.chunk_size, chunk_overlap=config.chunk_overlap),
+        embedder=build_embedder(
+            model_name=config.embedding_model,
+            dimension=config.embedding_dimension,
+            use_sentence_transformers=config.use_sentence_transformers,
+        ),
+    )
 
 
 def _is_t5_artifact(model_path: Path) -> bool:

@@ -22,6 +22,12 @@ python -m pip install -e ".[dev,api,app]"
 python -m pytest
 ```
 
+Start local PostgreSQL + pgVector for the Knowledge & data processing layer:
+
+```powershell
+docker compose up -d postgres
+```
+
 Run the API:
 
 ```powershell
@@ -33,6 +39,30 @@ Run the chatbot UI:
 ```powershell
 streamlit run app/streamlit_app.py
 ```
+
+Run the React RAG Studio:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+The React app calls the FastAPI backend at `http://127.0.0.1:8000`.
+
+Knowledge-base ingestion APIs are available under:
+
+- `GET /knowledge-bases`
+- `POST /knowledge-bases`
+- `PUT /knowledge-bases/{id}`
+- `DELETE /knowledge-bases/{id}`
+- `POST /knowledge-bases/{id}/sources/upload`
+- `POST /knowledge-bases/{id}/sources/website`
+- `POST /knowledge-bases/{id}/reindex`
+- `GET /knowledge-bases/{id}/documents`
+- `POST /knowledge-bases/{id}/documents`
+- `PUT /knowledge-bases/{id}/documents/{document_id}`
+- `DELETE /knowledge-bases/{id}/documents/{document_id}`
 
 Download and convert WixQA:
 
@@ -92,5 +122,7 @@ The first implementation is intentionally lightweight and offline:
 - retrieval combines BM25 and hashed dense similarity;
 - generation uses retrieved context snippets;
 - evaluation reports routing accuracy, retrieval relevance, faithfulness proxy, answer overlap, and latency.
+- knowledge ingestion supports local files and public websites, then performs metadata extraction, deduplication, chunking, embedding, and PostgreSQL/pgVector persistence.
+- each knowledge base contains many documents; documents can be added, modified, deleted, and reindexed independently from the UI/API.
 
 By default, the app uses processed WixQA files when they exist and falls back to the small bundled sample dataset when they do not.
