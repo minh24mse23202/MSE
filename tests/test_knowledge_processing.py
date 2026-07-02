@@ -1,9 +1,14 @@
 import json
+import builtins
+
+import pytest
 
 from aragbiz.knowledge import (
     HashEmbeddingModel,
+    KnowledgeProcessingError,
     KnowledgeService,
     OverlapChunker,
+    SentenceTransformerEmbeddingModel,
     StoredKnowledgeDocument,
     content_hash,
     load_file_documents,
@@ -39,7 +44,20 @@ def test_document_crud_regenerates_chunks(tmp_path):
     document = service.create_document(kb.id, "Policy", "First policy text " * 5)
 
     assert service.get_knowledge_base(kb.id).document_count == 1
-    assert service.list_chunks(kb.id)
+    chunks = service.list_chunks(kb.id)
+    assert chunks
+    assert chunks[0].has_embedding is True
+    assert chunks[0].embedding_model == "hash-embedding-384"
+    assert chunks[0].embedding_dimension == 16
+    trace = service.processing_trace(kb.id)
+    assert [step.step for step in trace] == [
+        "Knowledge base selected",
+        "Data source loading",
+        "Metadata extraction and deduplication",
+        "Chunking",
+        "Embedding",
+        "Storage",
+    ]
 
     updated = service.update_document(kb.id, document.id, "Policy v2", "Second policy text " * 6)
     assert updated.title == "Policy v2"
@@ -48,6 +66,143 @@ def test_document_crud_regenerates_chunks(tmp_path):
     service.delete_document(kb.id, document.id)
     assert service.get_knowledge_base(kb.id).document_count == 0
     assert service.list_chunks(kb.id) == []
+
+
+def test_knowledge_base_configuration_controls_chunking(tmp_path):
+    service = KnowledgeService(
+        repository=JsonKnowledgeRepository(str(tmp_path / "knowledge.json")),
+        chunker=OverlapChunker(chunk_size=800, chunk_overlap=120),
+        embedder=HashEmbeddingModel(dimension=16),
+    )
+    kb = service.create_knowledge_base(
+        "Configured KB",
+        configuration={
+            "chunking_strategy": "fixed_size",
+            "chunk_size": 100,
+            "chunk_overlap": 40,
+            "embedding_provider": "Local",
+            "embedding_model": "hash-embedding-384",
+        },
+    )
+    service.ingest_uploaded_file(kb.id, "workflow.txt", ("approval workflow " * 40).encode("utf-8"))
+
+    refreshed = service.get_knowledge_base(kb.id)
+    assert refreshed.metadata["configuration"]["chunking_strategy"] == "fixed_size"
+    assert refreshed.metadata["configuration"]["chunk_overlap"] == 0
+    chunks = service.list_chunks(kb.id)
+    assert len(chunks) > 1
+    assert chunks[0].metadata["chunk_size"] == 100
+    assert chunks[0].metadata["chunk_overlap"] == 0
+    assert chunks[0].metadata["embedding_provider"] == "Local"
+    assert chunks[0].metadata["embedding_model_requested"] == "hash-embedding-384"
+    assert chunks[0].embedding_model == "hash-embedding-384"
+
+
+def test_sentence_transformer_configuration_resolves_runtime_embedder(tmp_path):
+    service = KnowledgeService(
+        repository=JsonKnowledgeRepository(str(tmp_path / "knowledge.json")),
+        chunker=OverlapChunker(chunk_size=800, chunk_overlap=120),
+        embedder=HashEmbeddingModel(dimension=16),
+    )
+    kb = service.create_knowledge_base(
+        "Transformer KB",
+        configuration={
+            "embedding_provider": "Local",
+            "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+        },
+    )
+
+    embedder = service._embedder_for_configuration(kb.metadata["configuration"])
+
+    assert isinstance(embedder, SentenceTransformerEmbeddingModel)
+    assert embedder.model_name == "sentence-transformers/all-MiniLM-L6-v2"
+    assert embedder.dimension == 16
+
+
+def test_sentence_transformer_runtime_errors_are_processing_errors(monkeypatch):
+    real_import = builtins.__import__
+
+    def broken_import(name, *args, **kwargs):
+        if name == "transformers":
+            raise TypeError("broken optional dependency")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", broken_import)
+    embedder = SentenceTransformerEmbeddingModel("sentence-transformers/all-MiniLM-L6-v2", dimension=16)
+
+    with pytest.raises(KnowledgeProcessingError, match="Unable to initialize transformer embedding model"):
+        embedder.embed(["workflow text"])
+
+
+def test_unsupported_embedding_configuration_is_rejected(tmp_path):
+    service = KnowledgeService(
+        repository=JsonKnowledgeRepository(str(tmp_path / "knowledge.json")),
+        chunker=OverlapChunker(chunk_size=800, chunk_overlap=120),
+        embedder=HashEmbeddingModel(dimension=16),
+    )
+
+    with pytest.raises(KnowledgeProcessingError, match="Local"):
+        service.create_knowledge_base(
+            "Unsupported KB",
+            configuration={
+                "embedding_provider": "Cohere",
+                "embedding_model": "embed-english-v3.0",
+            },
+        )
+
+
+def test_existing_unsupported_knowledge_base_fails_embedding_paths(tmp_path):
+    repository = JsonKnowledgeRepository(str(tmp_path / "knowledge.json"))
+    service = KnowledgeService(
+        repository=repository,
+        chunker=OverlapChunker(chunk_size=800, chunk_overlap=120),
+        embedder=HashEmbeddingModel(dimension=16),
+    )
+    repository.initialize()
+    kb = repository.create_knowledge_base(
+        "Legacy Unsupported KB",
+        metadata={
+            "configuration": {
+                "embedding_provider": "Cohere",
+                "embedding_model": "embed-english-v3.0",
+            },
+        },
+    )
+
+    with pytest.raises(KnowledgeProcessingError, match="Modify the knowledge base to use Local"):
+        service.ingest_uploaded_file(kb.id, "workflow.txt", b"approval workflow")
+    with pytest.raises(KnowledgeProcessingError, match="Modify the knowledge base to use Local"):
+        service.reindex(kb.id)
+
+
+def test_reindex_uses_updated_knowledge_base_embedding_configuration(tmp_path, monkeypatch):
+    service = KnowledgeService(
+        repository=JsonKnowledgeRepository(str(tmp_path / "knowledge.json")),
+        chunker=OverlapChunker(chunk_size=60, chunk_overlap=10),
+        embedder=HashEmbeddingModel(dimension=16),
+    )
+    kb = service.create_knowledge_base("Reindex KB")
+    service.create_document(kb.id, "Policy", "Approval policy text " * 10)
+    assert service.list_chunks(kb.id)[0].embedding_model == "hash-embedding-384"
+
+    def fake_embed(self, texts):
+        return [[0.0] * self.dimension for _ in texts]
+
+    monkeypatch.setattr(SentenceTransformerEmbeddingModel, "embed", fake_embed)
+    service.update_knowledge_base_details(
+        kb.id,
+        "Reindex KB",
+        configuration={
+            "embedding_provider": "Local",
+            "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+        },
+    )
+    service.reindex(kb.id)
+
+    chunks = service.list_chunks(kb.id)
+    assert chunks[0].embedding_model == "sentence-transformers/all-MiniLM-L6-v2"
+    assert chunks[0].metadata["embedding_model_requested"] == "sentence-transformers/all-MiniLM-L6-v2"
+    assert service.get_knowledge_base(kb.id).embedding_model == "sentence-transformers/all-MiniLM-L6-v2"
 
 
 def test_knowledge_base_update_and_delete_cascades(tmp_path):

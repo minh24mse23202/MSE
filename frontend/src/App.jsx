@@ -2,16 +2,16 @@ import { useEffect, useState } from "react";
 import {
   askQuestion,
   createKnowledgeBase,
-  createKnowledgeDocument,
   deleteKnowledgeBase,
   deleteKnowledgeDocument,
+  getKnowledgeProcessingTrace,
   ingestWebsiteSource,
+  listKnowledgeChunks,
   listKnowledgeDocuments,
   listKnowledgeBases,
   reindexKnowledgeBase,
   submitFeedback,
   updateKnowledgeBase,
-  updateKnowledgeDocument,
   uploadKnowledgeSource
 } from "./api.js";
 import {
@@ -32,6 +32,52 @@ const navItems = [
 
 const classifiers = ["DistilBERT", "T5-small", "Naive Bayes", "Heuristic"];
 const routes = ["Adaptive", "L1 Direct", "L2 Simple RAG", "L3 Complex RAG"];
+const chunkingStrategies = [
+  { value: "fixed_size", label: "Fixed-size Chunking" },
+  { value: "sliding_window_overlap", label: "Sliding window / overlap chunking" },
+  { value: "header_based", label: "Header-based Chunking" },
+  { value: "semantic", label: "Semantic Chunking" },
+  { value: "recursive", label: "Recursive Chunking" },
+  { value: "hierarchical_parent_child", label: "Hierarchical / parent-child chunking" },
+  { value: "structure_aware_custom", label: "Structure-aware / custom ara* chunking" }
+];
+const embeddingProviders = [
+  "Local",
+  "AI21",
+  "Aleph Alpha",
+  "Baidu",
+  "Google",
+  "Azure",
+  "Cohere",
+  "Fastembed",
+  "Gradient",
+  "Jina",
+  "Mistral",
+  "Voyage"
+];
+const embeddingModelsByProvider = {
+  Local: ["hash-embedding-384", "sentence-transformers/all-MiniLM-L6-v2"],
+  AI21: ["jamba-embeddings-v1"],
+  "Aleph Alpha": ["luminous-base"],
+  Baidu: ["bge-large-zh", "ernie-embedding"],
+  Google: ["text-embedding-004", "gemini-embedding-001"],
+  Azure: ["text-embedding-3-small", "text-embedding-3-large"],
+  Cohere: ["embed-english-v3.0", "embed-multilingual-v3.0"],
+  Fastembed: ["BAAI/bge-small-en-v1.5", "sentence-transformers/all-MiniLM-L6-v2"],
+  Gradient: ["bge-large"],
+  Jina: ["jina-embeddings-v3", "jina-embeddings-v2-base-en"],
+  Mistral: ["mistral-embed"],
+  Voyage: ["voyage-3", "voyage-large-2"]
+};
+const supportedEmbeddingProvider = "Local";
+const supportedLocalEmbeddingModels = embeddingModelsByProvider.Local;
+const defaultKnowledgeConfiguration = {
+  chunking_strategy: "sliding_window_overlap",
+  chunk_size: 800,
+  chunk_overlap: 120,
+  embedding_provider: "Local",
+  embedding_model: "hash-embedding-384"
+};
 const SPLASH_SEEN_KEY = "aragbiz:splash-seen";
 const SPLASH_DURATION_MS = 1900;
 
@@ -632,12 +678,14 @@ ${body}`}</pre>
 function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
   const [items, setItems] = useState([]);
   const [documents, setDocuments] = useState([]);
+  const [chunks, setChunks] = useState([]);
+  const [processingTrace, setProcessingTrace] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingDocuments, setIsLoadingDocuments] = useState(false);
   const [error, setError] = useState("");
   const [knowledgeBaseModal, setKnowledgeBaseModal] = useState(null);
-  const [documentModal, setDocumentModal] = useState(null);
   const [actionStatus, setActionStatus] = useState("");
+  const [detailTab, setDetailTab] = useState("documents");
 
   async function refreshKnowledgeBases() {
     setIsLoading(true);
@@ -658,11 +706,20 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
   async function refreshDocuments(knowledgeBaseId = selectedKnowledgeBaseId) {
     if (!knowledgeBaseId) {
       setDocuments([]);
+      setChunks([]);
+      setProcessingTrace([]);
       return;
     }
     setIsLoadingDocuments(true);
     try {
-      setDocuments(await listKnowledgeDocuments(knowledgeBaseId));
+      const [nextDocuments, nextChunks, nextTrace] = await Promise.all([
+        listKnowledgeDocuments(knowledgeBaseId),
+        listKnowledgeChunks(knowledgeBaseId),
+        getKnowledgeProcessingTrace(knowledgeBaseId)
+      ]);
+      setDocuments(nextDocuments);
+      setChunks(nextChunks);
+      setProcessingTrace(nextTrace);
     } catch (requestError) {
       setActionStatus(`Document load failed: ${requestError.message}`);
     } finally {
@@ -692,6 +749,9 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
 
   async function handleDeleteDocument(documentId) {
     if (!selectedKnowledgeBaseId) return;
+    const document = documents.find((item) => item.id === documentId);
+    const confirmed = window.confirm(`Delete "${document?.title || "this document"}" and all of its chunks?`);
+    if (!confirmed) return;
     setActionStatus("Deleting document...");
     try {
       await deleteKnowledgeDocument(selectedKnowledgeBaseId, documentId);
@@ -713,6 +773,8 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
       setActionStatus("Knowledge base deleted");
       onSelectKnowledgeBase("");
       setDocuments([]);
+      setChunks([]);
+      setProcessingTrace([]);
       await refreshKnowledgeBases();
     } catch (requestError) {
       setActionStatus(`Delete knowledge base failed: ${requestError.message}`);
@@ -720,6 +782,12 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
   }
 
   const selectedKnowledgeBase = items.find((item) => item.id === selectedKnowledgeBaseId);
+  const chunksByDocument = chunks.reduce((groups, chunk) => {
+    const nextGroups = groups;
+    if (!nextGroups[chunk.document_id]) nextGroups[chunk.document_id] = [];
+    nextGroups[chunk.document_id].push(chunk);
+    return nextGroups;
+  }, {});
 
   return (
     <section className="page-stack">
@@ -727,19 +795,6 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
       <div className="toolbar">
         <button className="primary-action" onClick={() => setKnowledgeBaseModal({ mode: "create" })}>Add knowledge base</button>
         <button className="secondary-action" onClick={refreshKnowledgeBases}>Refresh</button>
-        {selectedKnowledgeBase && (
-          <>
-            <button className="secondary-action" onClick={() => setKnowledgeBaseModal({ mode: "edit", knowledgeBase: selectedKnowledgeBase })}>
-              Modify knowledge base
-            </button>
-            <button className="secondary-action danger-action" onClick={handleDeleteKnowledgeBase}>
-              Delete knowledge base
-            </button>
-            <button className="secondary-action" onClick={() => setDocumentModal({ mode: "create", document: null })}>
-              Add document
-            </button>
-          </>
-        )}
       </div>
       {error && <div className="alert">Knowledge API unavailable: {error}</div>}
       {actionStatus && <div className="inline-status">{actionStatus}</div>}
@@ -754,22 +809,33 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
               <th>Embedding model</th>
               <th>Status</th>
               <th>Last indexed</th>
-              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {isLoading && (
               <tr>
-                <td colSpan="8">Loading knowledge bases...</td>
+                <td colSpan="7">Loading knowledge bases...</td>
               </tr>
             )}
             {!isLoading && items.length === 0 && (
               <tr>
-                <td colSpan="8">No knowledge bases yet. Add one from local files or a public website.</td>
+                <td colSpan="7">No knowledge bases yet. Add one from local files or a public website.</td>
               </tr>
             )}
             {items.map((kb) => (
-              <tr key={kb.id} className={kb.id === selectedKnowledgeBaseId ? "selected-row" : ""}>
+              <tr
+                key={kb.id}
+                className={`selectable-row ${kb.id === selectedKnowledgeBaseId ? "selected-row" : ""}`}
+                tabIndex={0}
+                aria-selected={kb.id === selectedKnowledgeBaseId}
+                onClick={() => onSelectKnowledgeBase(kb.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelectKnowledgeBase(kb.id);
+                  }
+                }}
+              >
                 <td>{kb.name}</td>
                 <td>{kb.description || "No description"}</td>
                 <td>{kb.document_count}</td>
@@ -780,17 +846,6 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
                   {kb.error && <small className="error-text">{kb.error}</small>}
                 </td>
                 <td>{formatDateTime(kb.updated_at)}</td>
-                <td>
-                  <button className="secondary-action compact-action" onClick={() => onSelectKnowledgeBase(kb.id)}>
-                    Select
-                  </button>
-                  <button className="secondary-action compact-action" onClick={() => handleReindex(kb.id)}>
-                    Re-index
-                  </button>
-                  <button className="secondary-action compact-action" onClick={() => setKnowledgeBaseModal({ mode: "edit", knowledgeBase: kb })}>
-                    Modify
-                  </button>
-                </td>
               </tr>
             ))}
           </tbody>
@@ -803,42 +858,85 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
             <h2>{selectedKnowledgeBase ? selectedKnowledgeBase.name : "Select a knowledge base"}</h2>
           </div>
           {selectedKnowledgeBase && (
-            <button className="primary-action" onClick={() => setDocumentModal({ mode: "create", document: null })}>
-              Add document
-            </button>
+            <div className="document-manager-actions">
+              <button className="secondary-action" onClick={() => setKnowledgeBaseModal({ mode: "edit", knowledgeBase: selectedKnowledgeBase })}>
+                Modify KB
+              </button>
+              <button className="secondary-action" onClick={() => handleReindex(selectedKnowledgeBase.id)}>
+                Re-index
+              </button>
+              <button className="secondary-action danger-action" onClick={handleDeleteKnowledgeBase}>
+                Delete KB
+              </button>
+            </div>
           )}
         </div>
         {!selectedKnowledgeBase && <p className="muted-text">Choose a knowledge base above to add, modify, or delete documents.</p>}
         {selectedKnowledgeBase && (
-          <div className="document-list">
-            {isLoadingDocuments && <p className="muted-text">Loading documents...</p>}
-            {!isLoadingDocuments && documents.length === 0 && <p className="muted-text">No documents yet. Add one manually or upload files through Add knowledge base.</p>}
-            {documents.map((document) => (
-              <article key={document.id} className="document-card">
-                <div>
-                  <strong>{document.title}</strong>
-                  <small>{document.metadata?.source_type || "document"} - {document.text.length} chars - {document.content_hash.slice(0, 10)}</small>
-                  <p>{document.text.slice(0, 220)}{document.text.length > 220 ? "..." : ""}</p>
-                </div>
-                <div className="document-actions">
-                  <button className="secondary-action compact-action" onClick={() => setDocumentModal({ mode: "edit", document })}>
-                    Modify
-                  </button>
-                  <button className="secondary-action compact-action danger-action" onClick={() => handleDeleteDocument(document.id)}>
-                    Delete
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
+          <>
+            <div className="detail-tabs" role="tablist" aria-label="Knowledge base details">
+              <button
+                className={detailTab === "documents" ? "active" : ""}
+                type="button"
+                role="tab"
+                aria-selected={detailTab === "documents"}
+                onClick={() => setDetailTab("documents")}
+              >
+                Documents
+              </button>
+              <button
+                className={detailTab === "trace" ? "active" : ""}
+                type="button"
+                role="tab"
+                aria-selected={detailTab === "trace"}
+                onClick={() => setDetailTab("trace")}
+              >
+                Processing trace
+              </button>
+            </div>
+            {detailTab === "documents" ? (
+              <div className="document-list detail-tab-panel">
+                {isLoadingDocuments && <p className="muted-text">Loading documents...</p>}
+                {!isLoadingDocuments && documents.length === 0 && <p className="muted-text">No documents yet. Use Modify KB to add local files or website sources.</p>}
+                {documents.map((document, index) => (
+                  <details key={document.id} className="document-card document-accordion" defaultOpen={index === 0}>
+                    <summary className="document-card-top">
+                      <div>
+                        <strong>{document.title}</strong>
+                        <small>{document.metadata?.source_type || "document"} - {document.text.length} chars - {document.content_hash.slice(0, 10)}</small>
+                      </div>
+                      <button
+                        className="secondary-action compact-action danger-action"
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          handleDeleteDocument(document.id);
+                        }}
+                      >
+                        Delete document
+                      </button>
+                    </summary>
+                    <div className="document-accordion-body">
+                      <p className="document-preview">{document.text.slice(0, 260)}{document.text.length > 260 ? "..." : ""}</p>
+                      <MetadataGrid metadata={document.metadata} />
+                      <DocumentChunkList chunks={chunksByDocument[document.id] || []} />
+                    </div>
+                  </details>
+                ))}
+              </div>
+            ) : (
+              <div className="detail-tab-panel">
+                <ProcessingTracePanel steps={processingTrace} />
+              </div>
+            )}
+          </>
         )}
       </section>
       {knowledgeBaseModal && (
         <AddKnowledgeBaseModal
           mode={knowledgeBaseModal.mode}
           knowledgeBase={knowledgeBaseModal.knowledgeBase}
-          documents={documents}
-          onDeleteDocument={handleDeleteDocument}
           onClose={() => setKnowledgeBaseModal(null)}
           onCreated={async () => {
             setKnowledgeBaseModal(null);
@@ -847,18 +945,114 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
           }}
         />
       )}
-      {documentModal && selectedKnowledgeBase && (
-        <DocumentEditorModal
-          mode={documentModal.mode}
-          document={documentModal.document}
-          knowledgeBase={selectedKnowledgeBase}
-          onClose={() => setDocumentModal(null)}
-          onSaved={async () => {
-            setDocumentModal(null);
-            await refreshKnowledgeBases();
-            await refreshDocuments(selectedKnowledgeBase.id);
-          }}
-        />
+    </section>
+  );
+}
+
+function MetadataGrid({ metadata = {} }) {
+  const entries = Object.entries(metadata || {});
+  if (entries.length === 0) {
+    return <p className="muted-text compact-muted">No metadata captured yet.</p>;
+  }
+  return (
+    <dl className="metadata-grid">
+      {entries.map(([key, value]) => (
+        <div key={key}>
+          <dt>{key}</dt>
+          <dd>{formatMetadataValue(value)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function DocumentChunkList({ chunks = [] }) {
+  return (
+    <section className="chunk-section">
+      <div className="chunk-section-header">
+        <strong>Chunks</strong>
+        <span>{chunks.length} chunk{chunks.length === 1 ? "" : "s"}</span>
+      </div>
+      {chunks.length === 0 ? (
+        <p className="muted-text compact-muted">No chunks indexed for this document.</p>
+      ) : (
+        <div className="chunk-list">
+          {chunks.map((chunk) => (
+            <article key={chunk.id} className="chunk-card">
+              <header>
+                <div>
+                  <strong>Chunk {chunk.chunk_index + 1}</strong>
+                  <small>{chunk.token_count} tokens - {chunk.text.length} chars</small>
+                </div>
+                <span className={`status-pill ${chunk.has_embedding ? "status-indexed" : "status-waiting"}`}>
+                  {chunk.has_embedding ? "embedded" : "not embedded"}
+                </span>
+              </header>
+              <dl className="chunk-facts">
+                <div>
+                  <dt>Embedding model</dt>
+                  <dd>{chunk.embedding_model || "Not available"}</dd>
+                </div>
+                <div>
+                  <dt>Vector dimension</dt>
+                  <dd>{chunk.embedding_dimension || 0}</dd>
+                </div>
+                <div>
+                  <dt>Range</dt>
+                  <dd>{chunk.metadata?.start_char ?? "-"} - {chunk.metadata?.end_char ?? "-"}</dd>
+                </div>
+                <div>
+                  <dt>Mode</dt>
+                  <dd>{chunk.metadata?.chunking_mode || "overlap"}</dd>
+                </div>
+              </dl>
+              <pre>{chunk.text}</pre>
+              <MetadataGrid metadata={chunk.metadata} />
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ProcessingTracePanel({ steps = [] }) {
+  return (
+    <section className="processing-trace-panel">
+      <div className="processing-trace-header">
+        <div>
+          <p className="eyebrow">Processing trace</p>
+          <h3>Knowledge and data processing pipeline</h3>
+        </div>
+        <span>{steps.length} steps</span>
+      </div>
+      {steps.length === 0 ? (
+        <p className="muted-text">No processing trace available yet.</p>
+      ) : (
+        <div className="processing-trace-list">
+          {steps.map((step, index) => (
+            <article key={`${step.step}-${index}`} className="processing-trace-step">
+              <span className="trace-step-index">{index + 1}</span>
+              <div>
+                <header>
+                  <strong>{step.step}</strong>
+                  <span className={`status-pill status-${step.status}`}>{step.status}</span>
+                </header>
+                <p>{step.detail}</p>
+                {(step.started_at || step.finished_at) && (
+                  <small>
+                    {step.started_at ? `Started ${formatDateTime(step.started_at)}` : ""}
+                    {step.finished_at ? ` - Finished ${formatDateTime(step.finished_at)}` : ""}
+                  </small>
+                )}
+                <details>
+                  <summary>Metadata</summary>
+                  <MetadataGrid metadata={step.metadata} />
+                </details>
+              </div>
+            </article>
+          ))}
+        </div>
       )}
     </section>
   );
@@ -867,14 +1061,13 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
 function AddKnowledgeBaseModal({
   mode = "create",
   knowledgeBase,
-  documents = [],
-  onDeleteDocument,
   onClose,
   onCreated
 }) {
   const isEdit = mode === "edit";
   const [name, setName] = useState(knowledgeBase?.name || "Business Workflow Knowledge Base");
   const [description, setDescription] = useState(knowledgeBase?.description || "Uploaded workflow documents and website content.");
+  const [configuration, setConfiguration] = useState(() => knowledgeConfigurationFromRecord(knowledgeBase));
   const [sourceType, setSourceType] = useState("upload");
   const [files, setFiles] = useState([]);
   const [websiteUrl, setWebsiteUrl] = useState("");
@@ -886,9 +1079,14 @@ function AddKnowledgeBaseModal({
     setIsSubmitting(true);
     setStatus(isEdit ? "Updating knowledge base..." : "Creating knowledge base...");
     try {
+      const payload = {
+        name,
+        description,
+        configuration: sanitizeKnowledgeConfiguration(configuration)
+      };
       const savedKnowledgeBase = isEdit
-        ? await updateKnowledgeBase(knowledgeBase.id, { name, description })
-        : await createKnowledgeBase({ name, description });
+        ? await updateKnowledgeBase(knowledgeBase.id, payload)
+        : await createKnowledgeBase(payload);
       if (sourceType === "upload") {
         if (!isEdit && !files.length) throw new Error("Choose at least one local file.");
         if (files.length) {
@@ -929,6 +1127,94 @@ function AddKnowledgeBaseModal({
             Description
             <textarea value={description} onChange={(event) => setDescription(event.target.value)} />
           </label>
+          <section className="kb-config-section">
+            <div>
+              <h3>Configuration</h3>
+              <p>These settings are saved with the knowledge base and applied to new ingestion or re-indexing.</p>
+            </div>
+            <label>
+              Chunking strategy
+              <select
+                value={configuration.chunking_strategy}
+                onChange={(event) => {
+                  const strategy = event.target.value;
+                  setConfiguration((current) => ({
+                    ...current,
+                    chunking_strategy: strategy,
+                    chunk_overlap: strategy === "fixed_size" ? 0 : current.chunk_overlap
+                  }));
+                }}
+              >
+                {chunkingStrategies.map((strategy) => (
+                  <option key={strategy.value} value={strategy.value}>{strategy.label}</option>
+                ))}
+              </select>
+            </label>
+            <div className="kb-config-grid">
+              <label>
+                Chunk size
+                <input
+                  type="number"
+                  min="100"
+                  max="12000"
+                  step="50"
+                  value={configuration.chunk_size}
+                  onChange={(event) => setConfiguration((current) => ({ ...current, chunk_size: Number(event.target.value) }))}
+                />
+              </label>
+              <label>
+                Overlap size
+                <input
+                  type="number"
+                  min="0"
+                  max={Math.max(Number(configuration.chunk_size) - 1, 0)}
+                  step="10"
+                  disabled={!chunkingStrategyUsesOverlap(configuration.chunking_strategy)}
+                  value={chunkingStrategyUsesOverlap(configuration.chunking_strategy) ? configuration.chunk_overlap : 0}
+                  onChange={(event) => setConfiguration((current) => ({ ...current, chunk_overlap: Number(event.target.value) }))}
+                />
+              </label>
+            </div>
+            <div className="kb-config-grid">
+              <label>
+                Embedding provider
+                <select
+                  value={configuration.embedding_provider}
+                  onChange={(event) => {
+                    const provider = event.target.value === supportedEmbeddingProvider
+                      ? supportedEmbeddingProvider
+                      : defaultKnowledgeConfiguration.embedding_provider;
+                    setConfiguration((current) => ({
+                      ...current,
+                      embedding_provider: provider,
+                      embedding_model: supportedLocalEmbeddingModels[0] || current.embedding_model
+                    }));
+                  }}
+                >
+                  {embeddingProviders.map((provider) => (
+                    <option key={provider} value={provider} disabled={provider !== supportedEmbeddingProvider}>
+                      {provider}{provider !== supportedEmbeddingProvider ? " (coming soon)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Embedding model
+                <select
+                  value={configuration.embedding_model}
+                  onChange={(event) => setConfiguration((current) => ({ ...current, embedding_model: event.target.value }))}
+                >
+                  {supportedLocalEmbeddingModels.map((model) => (
+                    <option key={model} value={model}>{model}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <p className="muted-text compact-muted">
+              V1 executes Local embeddings only. `hash-embedding-384` works with the base API install; MiniLM requires `python -m pip install -e ".[ml]"`.
+              External providers stay visible for the roadmap and are disabled until provider adapters and API-key handling are added.
+            </p>
+          </section>
           <div className="source-selector">
             <button type="button" className={sourceType === "upload" ? "selected" : ""} onClick={() => setSourceType("upload")}>
               {isEdit ? "Add local files" : "Local device"}
@@ -961,27 +1247,6 @@ function AddKnowledgeBaseModal({
               />
             </label>
           )}
-          {isEdit && (
-            <section className="modal-document-list">
-              <h3>Documents in this knowledge base</h3>
-              {documents.length === 0 && <p className="muted-text">No documents yet.</p>}
-              {documents.map((document) => (
-                <article key={document.id} className="modal-document-row">
-                  <div>
-                    <strong>{document.title}</strong>
-                    <small>{document.text.length} chars - {document.content_hash.slice(0, 10)}</small>
-                  </div>
-                  <button
-                    type="button"
-                    className="secondary-action compact-action danger-action"
-                    onClick={() => onDeleteDocument(document.id)}
-                  >
-                    Delete
-                  </button>
-                </article>
-              ))}
-            </section>
-          )}
           <div className="pipeline-preview">
             {["Metadata extraction", "Deduplication", "Chunking", "Embedding", "PostgreSQL + pgVector"].map((step) => (
               <span key={step}>{step}</span>
@@ -992,81 +1257,6 @@ function AddKnowledgeBaseModal({
             <button type="button" className="secondary-action" onClick={onClose}>Cancel</button>
             <button type="submit" className="primary-action" disabled={isSubmitting}>
               {isSubmitting ? "Processing..." : isEdit ? "Save knowledge base" : "Create and index"}
-            </button>
-          </div>
-        </form>
-      </section>
-    </div>
-  );
-}
-
-function DocumentEditorModal({ mode, document, knowledgeBase, onClose, onSaved }) {
-  const [title, setTitle] = useState(document?.title || "New workflow document");
-  const [text, setText] = useState(document?.text || "");
-  const [status, setStatus] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const isEdit = mode === "edit";
-
-  async function submit(event) {
-    event.preventDefault();
-    setIsSubmitting(true);
-    setStatus(isEdit ? "Updating document and regenerating chunks..." : "Adding document and generating chunks...");
-    try {
-      const payload = {
-        title,
-        text,
-        metadata: {
-          edited_from_ui: true
-        }
-      };
-      if (isEdit) {
-        await updateKnowledgeDocument(knowledgeBase.id, document.id, payload);
-      } else {
-        await createKnowledgeDocument(knowledgeBase.id, payload);
-      }
-      setStatus(isEdit ? "Document updated" : "Document added");
-      await onSaved();
-    } catch (requestError) {
-      setStatus(requestError.message);
-    } finally {
-      setIsSubmitting(false);
-    }
-  }
-
-  return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
-      <section className="modal kb-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-        <header className="modal-header">
-          <div>
-            <h2>{isEdit ? "Modify document" : "Add document"}</h2>
-            <p>{knowledgeBase.name}: document changes regenerate chunks and embeddings for this document.</p>
-          </div>
-          <button className="icon-button modal-close" aria-label="Close modal" onClick={onClose}>x</button>
-        </header>
-        <form className="kb-form" onSubmit={submit}>
-          <label>
-            Document title
-            <input value={title} onChange={(event) => setTitle(event.target.value)} />
-          </label>
-          <label>
-            Document text
-            <textarea
-              className="document-textarea"
-              value={text}
-              onChange={(event) => setText(event.target.value)}
-              placeholder="Paste or write document content here..."
-            />
-          </label>
-          <div className="pipeline-preview">
-            {["Metadata update", "Deduplication", "Chunk regeneration", "Embedding", "pgVector update"].map((step) => (
-              <span key={step}>{step}</span>
-            ))}
-          </div>
-          {status && <p className="inline-status">{status}</p>}
-          <div className="modal-actions">
-            <button type="button" className="secondary-action" onClick={onClose}>Cancel</button>
-            <button type="submit" className="primary-action" disabled={isSubmitting}>
-              {isSubmitting ? "Saving..." : isEdit ? "Save changes" : "Add document"}
             </button>
           </div>
         </form>
@@ -1209,6 +1399,49 @@ function formatDateTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
+}
+
+function formatMetadataValue(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  if (Array.isArray(value)) return value.length ? value.map(formatMetadataValue).join(", ") : "[]";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function knowledgeConfigurationFromRecord(knowledgeBase) {
+  return sanitizeKnowledgeConfiguration(knowledgeBase?.metadata?.configuration || defaultKnowledgeConfiguration);
+}
+
+function sanitizeKnowledgeConfiguration(configuration) {
+  const raw = { ...defaultKnowledgeConfiguration, ...(configuration || {}) };
+  const chunkSize = clampNumber(raw.chunk_size, 800, 100, 12000);
+  const strategy = chunkingStrategies.some((item) => item.value === raw.chunking_strategy)
+    ? raw.chunking_strategy
+    : defaultKnowledgeConfiguration.chunking_strategy;
+  const provider = String(raw.embedding_provider || "").toLowerCase() === supportedEmbeddingProvider.toLowerCase()
+    ? supportedEmbeddingProvider
+    : defaultKnowledgeConfiguration.embedding_provider;
+  const models = supportedLocalEmbeddingModels;
+  const embeddingModel = models.includes(raw.embedding_model) ? raw.embedding_model : models[0];
+  return {
+    chunking_strategy: strategy,
+    chunk_size: chunkSize,
+    chunk_overlap: chunkingStrategyUsesOverlap(strategy)
+      ? clampNumber(raw.chunk_overlap, 120, 0, Math.max(chunkSize - 1, 0))
+      : 0,
+    embedding_provider: provider,
+    embedding_model: embeddingModel
+  };
+}
+
+function chunkingStrategyUsesOverlap(strategy) {
+  return ["sliding_window_overlap", "semantic", "recursive", "hierarchical_parent_child"].includes(strategy);
+}
+
+function clampNumber(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(Math.trunc(parsed), max));
 }
 
 function createId() {

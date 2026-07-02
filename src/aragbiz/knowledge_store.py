@@ -24,7 +24,12 @@ class JsonKnowledgeRepository:
         if not self.path.exists():
             self._write(_empty_state())
 
-    def create_knowledge_base(self, name: str, description: str = "") -> KnowledgeBaseRecord:
+    def create_knowledge_base(
+        self,
+        name: str,
+        description: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> KnowledgeBaseRecord:
         state = self._read()
         now = utc_now()
         record = KnowledgeBaseRecord(
@@ -32,6 +37,7 @@ class JsonKnowledgeRepository:
             name=name,
             description=description,
             status="empty",
+            metadata=dict(metadata or {}),
             created_at=now,
             updated_at=now,
         )
@@ -58,6 +64,7 @@ class JsonKnowledgeRepository:
         description: Optional[str] = None,
         status: Optional[str] = None,
         embedding_model: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
         error: Optional[str] = None,
     ) -> None:
         state = self._read()
@@ -72,6 +79,8 @@ class JsonKnowledgeRepository:
             payload["status"] = status
         if embedding_model is not None:
             payload["embedding_model"] = embedding_model
+        if metadata is not None:
+            payload["metadata"] = metadata
         payload["error"] = error
         payload["updated_at"] = utc_now()
         self._write(state)
@@ -230,12 +239,22 @@ class JsonKnowledgeRepository:
     def list_chunks(self, knowledge_base_id: str, limit: int = 100) -> List[StoredKnowledgeChunk]:
         state = self._read()
         chunks = [
-            _chunk_from_dict(payload)
-            for payload in state["chunks"].values()
+            _chunk_from_dict(payload, state["chunk_embeddings"].get(chunk_id))
+            for chunk_id, payload in state["chunks"].items()
             if payload["knowledge_base_id"] == knowledge_base_id
         ]
         chunks.sort(key=lambda chunk: (chunk.document_id, chunk.chunk_index))
         return chunks[:limit]
+
+    def list_ingestion_runs(self, knowledge_base_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        state = self._read()
+        runs = [
+            dict(payload)
+            for payload in state["ingestion_runs"].values()
+            if payload["knowledge_base_id"] == knowledge_base_id
+        ]
+        runs.sort(key=lambda run: run.get("finished_at", ""), reverse=True)
+        return runs[:limit]
 
     def record_ingestion_run(
         self,
@@ -371,7 +390,12 @@ class PostgresKnowledgeRepository:
             for statement in [part.strip() for part in ddl.split(";") if part.strip()]:
                 connection.exec_driver_sql(statement)
 
-    def create_knowledge_base(self, name: str, description: str = "") -> KnowledgeBaseRecord:
+    def create_knowledge_base(
+        self,
+        name: str,
+        description: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> KnowledgeBaseRecord:
         from sqlalchemy import text
 
         record = KnowledgeBaseRecord(
@@ -379,6 +403,7 @@ class PostgresKnowledgeRepository:
             name=name,
             description=description,
             status="empty",
+            metadata=dict(metadata or {}),
             created_at=utc_now(),
             updated_at=utc_now(),
         )
@@ -445,6 +470,7 @@ class PostgresKnowledgeRepository:
         description: Optional[str] = None,
         status: Optional[str] = None,
         embedding_model: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
         error: Optional[str] = None,
     ) -> None:
         from sqlalchemy import text
@@ -459,6 +485,7 @@ class PostgresKnowledgeRepository:
                         description = :description,
                         status = :status,
                         embedding_model = :embedding_model,
+                        metadata_json = CAST(:metadata AS JSONB),
                         error = :error,
                         updated_at = :updated_at
                     WHERE id = :id
@@ -470,6 +497,7 @@ class PostgresKnowledgeRepository:
                     "description": description if description is not None else current.description,
                     "status": status if status is not None else current.status,
                     "embedding_model": embedding_model if embedding_model is not None else current.embedding_model,
+                    "metadata": json.dumps(metadata if metadata is not None else current.metadata),
                     "error": error,
                     "updated_at": utc_now(),
                 },
@@ -661,15 +689,49 @@ class PostgresKnowledgeRepository:
             rows = connection.execute(
                 text(
                     """
-                    SELECT * FROM chunks
-                    WHERE knowledge_base_id = :id
-                    ORDER BY document_id, chunk_index
+                    SELECT c.*,
+                           ce.embedding_model,
+                           ce.embedding::text AS embedding_text
+                    FROM chunks c
+                    LEFT JOIN chunk_embeddings ce ON ce.chunk_id = c.id
+                    WHERE c.knowledge_base_id = :id
+                    ORDER BY c.document_id, c.chunk_index
                     LIMIT :limit
                     """
                 ),
                 {"id": knowledge_base_id, "limit": limit},
             ).mappings()
             return [_chunk_from_row(row) for row in rows]
+
+    def list_ingestion_runs(self, knowledge_base_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        from sqlalchemy import text
+
+        with self.engine.begin() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT *
+                    FROM ingestion_runs
+                    WHERE knowledge_base_id = :id
+                    ORDER BY finished_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"id": knowledge_base_id, "limit": limit},
+            ).mappings()
+            return [
+                {
+                    "id": row["id"],
+                    "knowledge_base_id": row["knowledge_base_id"],
+                    "source_id": row.get("source_id"),
+                    "status": row["status"],
+                    "counts": dict(row.get("counts_json") or {}),
+                    "error": row.get("error"),
+                    "started_at": row["started_at"],
+                    "finished_at": row["finished_at"],
+                }
+                for row in rows
+            ]
 
     def record_ingestion_run(
         self,
@@ -775,7 +837,8 @@ def _document_from_dict(payload: Dict[str, Any]) -> StoredKnowledgeDocument:
     )
 
 
-def _chunk_from_dict(payload: Dict[str, Any]) -> StoredKnowledgeChunk:
+def _chunk_from_dict(payload: Dict[str, Any], embedding_payload: Optional[Dict[str, Any]] = None) -> StoredKnowledgeChunk:
+    embedding = embedding_payload.get("embedding", []) if embedding_payload else []
     return StoredKnowledgeChunk(
         id=payload["id"],
         knowledge_base_id=payload["knowledge_base_id"],
@@ -784,6 +847,9 @@ def _chunk_from_dict(payload: Dict[str, Any]) -> StoredKnowledgeChunk:
         text=payload["text"],
         token_count=int(payload["token_count"]),
         metadata=dict(payload.get("metadata", {})),
+        embedding_model=(embedding_payload or {}).get("embedding_model", ""),
+        embedding_dimension=len(embedding) if isinstance(embedding, list) else _vector_dimension(str(embedding)),
+        has_embedding=bool(embedding_payload),
     )
 
 
@@ -817,6 +883,7 @@ def _document_from_row(row: Any) -> StoredKnowledgeDocument:
 
 
 def _chunk_from_row(row: Any) -> StoredKnowledgeChunk:
+    embedding_text = row.get("embedding_text") or ""
     return StoredKnowledgeChunk(
         id=row["id"],
         knowledge_base_id=row["knowledge_base_id"],
@@ -825,8 +892,18 @@ def _chunk_from_row(row: Any) -> StoredKnowledgeChunk:
         text=row["text"],
         token_count=int(row["token_count"]),
         metadata=dict(row.get("metadata_json") or {}),
+        embedding_model=row.get("embedding_model") or "",
+        embedding_dimension=_vector_dimension(embedding_text),
+        has_embedding=bool(row.get("embedding_model")),
     )
 
 
 def _vector_literal(values: List[float]) -> str:
     return "[" + ",".join(f"{value:.8f}" for value in values) + "]"
+
+
+def _vector_dimension(value: str) -> int:
+    stripped = value.strip().strip("[]")
+    if not stripped:
+        return 0
+    return stripped.count(",") + 1

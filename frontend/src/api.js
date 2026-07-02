@@ -6,9 +6,7 @@ export async function askQuestion(question, knowledgeBaseId = "") {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question, knowledge_base_id: knowledgeBaseId || null })
   });
-  if (!response.ok) {
-    throw new Error(`Answer request failed: ${response.status}`);
-  }
+  await assertOk(response, "Answer request failed");
   return response.json();
 }
 
@@ -18,17 +16,13 @@ export async function submitFeedback(payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
-  if (!response.ok) {
-    throw new Error(`Feedback request failed: ${response.status}`);
-  }
+  await assertOk(response, "Feedback request failed");
   return response.json();
 }
 
 export async function listKnowledgeBases() {
   const response = await fetch(`${API_BASE_URL}/knowledge-bases`);
-  if (!response.ok) {
-    throw new Error(`Knowledge base request failed: ${response.status}`);
-  }
+  await assertOk(response, "Knowledge base request failed");
   return response.json();
 }
 
@@ -38,9 +32,7 @@ export async function createKnowledgeBase(payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
-  if (!response.ok) {
-    throw new Error(`Create knowledge base failed: ${response.status}`);
-  }
+  await assertOk(response, "Create knowledge base failed");
   return response.json();
 }
 
@@ -50,9 +42,7 @@ export async function updateKnowledgeBase(knowledgeBaseId, payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
-  if (!response.ok) {
-    throw new Error(`Update knowledge base failed: ${response.status}`);
-  }
+  await assertOk(response, "Update knowledge base failed");
   return response.json();
 }
 
@@ -60,9 +50,7 @@ export async function deleteKnowledgeBase(knowledgeBaseId) {
   const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}`, {
     method: "DELETE"
   });
-  if (!response.ok) {
-    throw new Error(`Delete knowledge base failed: ${response.status}`);
-  }
+  await assertOk(response, "Delete knowledge base failed");
   return response.json();
 }
 
@@ -73,9 +61,7 @@ export async function uploadKnowledgeSource(knowledgeBaseId, files) {
     method: "POST",
     body
   });
-  if (!response.ok) {
-    throw new Error(`Upload source failed: ${response.status}`);
-  }
+  await assertOk(response, "Upload source failed");
   return response.json();
 }
 
@@ -85,9 +71,7 @@ export async function ingestWebsiteSource(knowledgeBaseId, url) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url })
   });
-  if (!response.ok) {
-    throw new Error(`Website ingestion failed: ${response.status}`);
-  }
+  await assertOk(response, "Website ingestion failed");
   return response.json();
 }
 
@@ -95,17 +79,25 @@ export async function reindexKnowledgeBase(knowledgeBaseId) {
   const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/reindex`, {
     method: "POST"
   });
-  if (!response.ok) {
-    throw new Error(`Reindex failed: ${response.status}`);
-  }
+  await assertOk(response, "Reindex failed");
   return response.json();
 }
 
 export async function listKnowledgeDocuments(knowledgeBaseId) {
   const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/documents`);
-  if (!response.ok) {
-    throw new Error(`Documents request failed: ${response.status}`);
-  }
+  await assertOk(response, "Documents request failed");
+  return response.json();
+}
+
+export async function listKnowledgeChunks(knowledgeBaseId, limit = 1000) {
+  const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/chunks?limit=${limit}`);
+  await assertOk(response, "Chunks request failed");
+  return response.json();
+}
+
+export async function getKnowledgeProcessingTrace(knowledgeBaseId) {
+  const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/processing-trace`);
+  await assertOk(response, "Processing trace request failed");
   return response.json();
 }
 
@@ -115,9 +107,7 @@ export async function createKnowledgeDocument(knowledgeBaseId, payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
-  if (!response.ok) {
-    throw new Error(`Create document failed: ${response.status}`);
-  }
+  await assertOk(response, "Create document failed");
   return response.json();
 }
 
@@ -127,9 +117,7 @@ export async function updateKnowledgeDocument(knowledgeBaseId, documentId, paylo
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
-  if (!response.ok) {
-    throw new Error(`Update document failed: ${response.status}`);
-  }
+  await assertOk(response, "Update document failed");
   return response.json();
 }
 
@@ -137,8 +125,27 @@ export async function deleteKnowledgeDocument(knowledgeBaseId, documentId) {
   const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/documents/${documentId}`, {
     method: "DELETE"
   });
-  if (!response.ok) {
-    throw new Error(`Delete document failed: ${response.status}`);
-  }
+  await assertOk(response, "Delete document failed");
   return response.json();
+}
+
+async function assertOk(response, fallbackMessage) {
+  if (response.ok) return;
+  const detail = await responseDetail(response);
+  throw new Error(`${fallbackMessage}: ${response.status}${detail ? ` - ${detail}` : ""}`);
+}
+
+async function responseDetail(response) {
+  const contentType = response.headers.get("content-type") || "";
+  try {
+    if (contentType.includes("application/json")) {
+      const payload = await response.json();
+      if (typeof payload.detail === "string") return payload.detail;
+      if (Array.isArray(payload.detail)) return payload.detail.map((item) => item.msg || JSON.stringify(item)).join("; ");
+      return payload.message || payload.error || "";
+    }
+    return await response.text();
+  } catch {
+    return "";
+  }
 }

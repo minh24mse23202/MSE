@@ -9,7 +9,14 @@ from pydantic import BaseModel, Field
 from aragbiz.config import load_config
 from aragbiz.factory import build_knowledge_service, build_sample_pipeline
 from aragbiz.feedback import append_feedback
-from aragbiz.knowledge import IngestionSummary, KnowledgeBaseRecord, KnowledgeProcessingError, StoredKnowledgeChunk, StoredKnowledgeDocument
+from aragbiz.knowledge import (
+    IngestionSummary,
+    KnowledgeBaseRecord,
+    KnowledgeProcessingError,
+    ProcessingTraceStep,
+    StoredKnowledgeChunk,
+    StoredKnowledgeDocument,
+)
 
 config = load_config()
 pipeline = build_sample_pipeline(config)
@@ -52,9 +59,18 @@ class FeedbackRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class KnowledgeBaseConfigurationRequest(BaseModel):
+    chunking_strategy: str = "sliding_window_overlap"
+    chunk_size: int = Field(800, ge=1)
+    chunk_overlap: int = Field(120, ge=0)
+    embedding_provider: str = "Local"
+    embedding_model: str = "hash-embedding-384"
+
+
 class KnowledgeBaseCreateRequest(BaseModel):
     name: str = Field(..., min_length=1)
     description: str = ""
+    configuration: Optional[KnowledgeBaseConfigurationRequest] = None
 
 
 class WebsiteSourceRequest(BaseModel):
@@ -99,6 +115,18 @@ class KnowledgeChunkResponse(BaseModel):
     text: str
     token_count: int
     metadata: Dict[str, Any]
+    embedding_model: str
+    embedding_dimension: int
+    has_embedding: bool
+
+
+class ProcessingTraceResponse(BaseModel):
+    step: str
+    status: str
+    detail: str
+    metadata: Dict[str, Any]
+    started_at: str
+    finished_at: str
 
 
 class IngestionResponse(BaseModel):
@@ -160,8 +188,15 @@ def list_knowledge_bases() -> List[KnowledgeBaseResponse]:
 
 @app.post("/knowledge-bases", response_model=KnowledgeBaseResponse)
 def create_knowledge_base(request: KnowledgeBaseCreateRequest) -> KnowledgeBaseResponse:
-    record = knowledge_service.create_knowledge_base(request.name, request.description)
-    return _knowledge_base_response(record)
+    try:
+        record = knowledge_service.create_knowledge_base(
+            request.name,
+            request.description,
+            configuration=_configuration_payload(request.configuration),
+        )
+        return _knowledge_base_response(record)
+    except KnowledgeProcessingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/knowledge-bases/{knowledge_base_id}", response_model=KnowledgeBaseResponse)
@@ -180,10 +215,13 @@ def update_knowledge_base(knowledge_base_id: str, request: KnowledgeBaseCreateRe
                 knowledge_base_id,
                 name=request.name,
                 description=request.description,
+                configuration=_configuration_payload(request.configuration),
             )
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except KnowledgeProcessingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.delete("/knowledge-bases/{knowledge_base_id}")
@@ -233,6 +271,8 @@ def reindex_knowledge_base(knowledge_base_id: str) -> IngestionResponse:
         return _ingestion_response(knowledge_service.reindex(knowledge_base_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except KnowledgeProcessingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/knowledge-bases/{knowledge_base_id}/documents", response_model=List[KnowledgeDocumentResponse])
@@ -306,6 +346,15 @@ def list_knowledge_chunks(knowledge_base_id: str, limit: int = 100) -> List[Know
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/knowledge-bases/{knowledge_base_id}/processing-trace", response_model=List[ProcessingTraceResponse])
+def get_processing_trace(knowledge_base_id: str) -> List[ProcessingTraceResponse]:
+    try:
+        knowledge_service.get_knowledge_base(knowledge_base_id)
+        return [_trace_response(step) for step in knowledge_service.processing_trace(knowledge_base_id)]
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 def _knowledge_base_response(record: KnowledgeBaseRecord) -> KnowledgeBaseResponse:
     return KnowledgeBaseResponse(
         id=record.id,
@@ -343,6 +392,20 @@ def _chunk_response(chunk: StoredKnowledgeChunk) -> KnowledgeChunkResponse:
         text=chunk.text,
         token_count=chunk.token_count,
         metadata=chunk.metadata,
+        embedding_model=chunk.embedding_model,
+        embedding_dimension=chunk.embedding_dimension,
+        has_embedding=chunk.has_embedding,
+    )
+
+
+def _trace_response(step: ProcessingTraceStep) -> ProcessingTraceResponse:
+    return ProcessingTraceResponse(
+        step=step.step,
+        status=step.status,
+        detail=step.detail,
+        metadata=step.metadata,
+        started_at=step.started_at,
+        finished_at=step.finished_at,
     )
 
 
@@ -377,3 +440,9 @@ def _merge_summaries(knowledge_base_id: str, summaries: List[IngestionSummary]) 
         chunks_added=sum(summary.chunks_added for summary in summaries),
         error=next((summary.error for summary in summaries if summary.error), None),
     )
+
+
+def _configuration_payload(configuration: Optional[KnowledgeBaseConfigurationRequest]) -> Optional[Dict[str, Any]]:
+    if configuration is None:
+        return None
+    return configuration.model_dump() if hasattr(configuration, "model_dump") else configuration.dict()
