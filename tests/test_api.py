@@ -14,14 +14,29 @@ from aragbiz.knowledge_store import JsonKnowledgeRepository
 app = api_main.app
 
 
-def test_answer_endpoint_returns_route_metadata():
+def test_answer_endpoint_returns_direct_route_metadata():
     client = TestClient(app)
-    response = client.post("/answer", json={"question": "Can I start accepting payments while Wix Payments is under verification?"})
+    response = client.post(
+        "/answer",
+        json={
+            "question": "Can I start accepting payments while Wix Payments is under verification?",
+            "mode": "direct",
+        },
+    )
     assert response.status_code == 200
     payload = response.json()
     assert payload["answer"]
-    assert payload["contexts"]
-    assert payload["metadata"]["complexity_label"] in {"simple", "moderate", "complex"}
+    assert payload["contexts"] == []
+    assert payload["metadata"]["route_level"] == "l1_direct"
+    assert payload["metadata"]["retrieval_used"] is False
+    assert payload["metadata"]["trace_steps"]
+
+
+def test_answer_endpoint_rejects_adaptive_without_knowledge_base():
+    client = TestClient(app)
+    response = client.post("/answer", json={"question": "How do I handle invoice mismatch?"})
+    assert response.status_code == 400
+    assert "Select a knowledge base" in response.json()["detail"]
 
 
 def test_knowledge_base_endpoints_ingest_upload(monkeypatch, tmp_path):
@@ -166,9 +181,23 @@ def test_knowledge_document_crud_and_answer_selection(monkeypatch, tmp_path):
     assert updated.status_code == 200
     assert updated.json()["title"] == "Runbook v2"
 
-    answer = client.post("/answer", json={"question": "How do I handle invoice mismatch?", "knowledge_base_id": kb["id"]}).json()
+    answer_response = client.post(
+        "/answer",
+        json={
+            "question": "How do I handle invoice mismatch?",
+            "knowledge_base_id": kb["id"],
+            "mode": "simple_rag",
+            "retrieval_mode": "bm25",
+            "top_k": 2,
+        },
+    )
+    assert answer_response.status_code == 200
+    answer = answer_response.json()
     assert answer["metadata"]["knowledge_base_id"] == kb["id"]
     assert answer["metadata"]["knowledge_base_name"] == "Selected KB"
+    assert answer["metadata"]["route_level"] == "l2_simple_rag"
+    assert answer["metadata"]["retrieval_mode"] == "bm25"
+    assert answer["contexts"]
 
     deleted = client.delete(f"/knowledge-bases/{kb['id']}/documents/{document['id']}")
     assert deleted.status_code == 200

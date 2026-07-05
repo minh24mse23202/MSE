@@ -13,13 +13,35 @@ This repository contains a phased capstone implementation for an Adaptive RAG sy
 - `tests/`: unit and integration tests.
 - `docs/`: methodology, phase notes, evaluation outputs, and report materials.
 
+## Runtime Requirement
+
+Use Python 3.11 for local development and demos. The project metadata intentionally rejects Python 3.9/3.10 to keep the FastAPI, Transformers, Torch, and pgVector stack stable.
+
+Check your launcher before creating the environment:
+
+```powershell
+py -3.11 --version
+```
+
 ## Quick Start
 
 ```powershell
-python -m venv .venv
+py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev,api,app]"
+python -m pip install -U pip
+python -m pip install -e ".[dev,api,app,ml]"
 python -m pytest
+```
+
+
+### PyTorch DLL repair
+
+If MiniLM re-indexing fails on Windows with `c10.dll` or `[WinError 1114]`, reinstall the stable CPU PyTorch wheel, then reinstall the project extras and restart the API:
+
+```powershell
+python -m pip install --force-reinstall "torch>=2.2,<2.6" --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -e ".[dev,api,app,ml]"
+python -m uvicorn api.main:app --reload
 ```
 
 Start local PostgreSQL + pgVector for the Knowledge & data processing layer:
@@ -31,7 +53,7 @@ docker compose up -d postgres
 Run the API:
 
 ```powershell
-uvicorn api.main:app --reload
+python -m uvicorn api.main:app --reload
 ```
 
 Run the chatbot UI:
@@ -96,7 +118,7 @@ python scripts/train_query_classifier.py
 Train the Hugging Face DistilBERT classifier in Colab or a GPU environment:
 
 ```powershell
-python -m pip install -e ".[ml]"
+python -m pip install -e ".[dev,api,app,ml]"
 $env:PYTHONPATH='src'
 python scripts/train_hf_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
 ```
@@ -104,7 +126,7 @@ python scripts/train_hf_query_classifier.py --extra-dataset data/processed/wixqa
 Train and compare a T5-small classifier:
 
 ```powershell
-python -m pip install -e ".[ml]"
+python -m pip install -e ".[dev,api,app,ml]"
 $env:PYTHONPATH='src'
 python scripts/train_t5_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
 python scripts/compare_query_classifiers.py --limit 50

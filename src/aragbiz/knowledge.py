@@ -214,6 +214,14 @@ class KnowledgeRepository(Protocol):
     def list_chunks(self, knowledge_base_id: str, limit: int = 100) -> List[StoredKnowledgeChunk]:
         """Return chunks for a knowledge base."""
 
+    def search_chunks_by_embedding(
+        self,
+        knowledge_base_id: str,
+        embedding: List[float],
+        limit: int = 10,
+    ) -> List[tuple[StoredKnowledgeChunk, float]]:
+        """Return chunks ranked by vector similarity."""
+
     def list_ingestion_runs(self, knowledge_base_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Return recent ingestion runs for a knowledge base."""
 
@@ -300,6 +308,13 @@ class KnowledgeService:
     def list_chunks(self, knowledge_base_id: str, limit: int = 100) -> List[StoredKnowledgeChunk]:
         self.repository.initialize()
         return self.repository.list_chunks(knowledge_base_id, limit=limit)
+
+    def embed_query(self, knowledge_base_id: str, query: str) -> tuple[List[float], str]:
+        self.repository.initialize()
+        configuration = self._knowledge_base_configuration(knowledge_base_id)
+        embedder = self._embedder_for_configuration(configuration)
+        embeddings = embedder.embed([query])
+        return (embeddings[0] if embeddings else [], embedder.model_name)
 
     def processing_trace(self, knowledge_base_id: str) -> List[ProcessingTraceStep]:
         self.repository.initialize()
@@ -830,8 +845,9 @@ def build_embedder(model_name: str, dimension: int, use_sentence_transformers: b
 def _sentence_transformer_runtime_error(model_name: str, exc: Exception) -> str:
     return (
         f"Unable to initialize transformer embedding model {model_name!r}: {exc}. "
-        "Use hash-embedding-384 or repair the ML dependencies with "
-        "python -m pip install -e \".[ml]\"."
+        "Use hash-embedding-384 or repair the Windows CPU PyTorch dependency with "
+        "python -m pip install --force-reinstall \"torch>=2.2,<2.6\" --index-url https://download.pytorch.org/whl/cpu "
+        "then python -m pip install -e \".[dev,api,app,ml]\"."
     )
 
 

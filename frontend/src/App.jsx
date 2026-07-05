@@ -1,4 +1,39 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import {
+  Activity,
+  BarChart3,
+  Bot,
+  BrainCircuit,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  CircleUserRound,
+  ClipboardList,
+  Copy,
+  Database,
+  FileText,
+  Filter,
+  GitBranch,
+  Globe,
+  HardDrive,
+  Home,
+  Layers,
+  LogIn,
+  MessageSquarePlus,
+  Paperclip,
+  Pencil,
+  Plus,
+  RefreshCw,
+  RotateCw,
+  Save,
+  Search,
+  SendHorizontal,
+  ThumbsDown,
+  ThumbsUp,
+  Trash2,
+  UserPlus,
+  X
+} from "lucide-react";
 import {
   askQuestion,
   createKnowledgeBase,
@@ -24,14 +59,19 @@ import {
 } from "./data.js";
 
 const navItems = [
-  { id: "main", label: "Main" },
-  { id: "knowledge", label: "Knowledge Bases" },
-  { id: "evaluation", label: "Evaluation" },
-  { id: "analytics", label: "Analytics" }
+  { id: "main", label: "Main", icon: Home },
+  { id: "knowledge", label: "Knowledge Bases", icon: Database },
+  { id: "evaluation", label: "Evaluation", icon: ClipboardList },
+  { id: "analytics", label: "Analytics", icon: BarChart3 }
 ];
 
 const classifiers = ["DistilBERT", "T5-small", "Naive Bayes", "Heuristic"];
-const routes = ["Adaptive", "L1 Direct", "L2 Simple RAG", "L3 Complex RAG"];
+const routes = [
+  { value: "Adaptive", label: "Adaptive" },
+  { value: "L1 Direct", label: "L1 Direct Generation" },
+  { value: "L2 Simple RAG", label: "L2 Simple RAG" },
+  { value: "L3 Complex RAG", label: "L3 Complex RAG (coming soon)", disabled: true }
+];
 const chunkingStrategies = [
   { value: "fixed_size", label: "Fixed-size Chunking" },
   { value: "sliding_window_overlap", label: "Sliding window / overlap chunking" },
@@ -80,6 +120,19 @@ const defaultKnowledgeConfiguration = {
 };
 const SPLASH_SEEN_KEY = "aragbiz:splash-seen";
 const SPLASH_DURATION_MS = 1900;
+const MAIN_LAYOUT_STORAGE_KEY = "aragbiz:main-layout";
+const MAIN_LAYOUT_LIMITS = {
+  history: { min: 220, max: 360 },
+  config: { min: 320, max: 520 },
+  chatMin: 520,
+  collapsed: 56
+};
+const DEFAULT_MAIN_LAYOUT = {
+  historyWidth: 250,
+  configWidth: 420,
+  historyCollapsed: false,
+  configCollapsed: false
+};
 
 export default function App() {
   const [screen, setScreen] = useState(() => (hasSeenSplash() ? "login" : "splash"));
@@ -177,9 +230,9 @@ function AuthScreen({ mode, onSubmit, onSwitch }) {
           Password
           <input defaultValue="adaptive-rag" type="password" />
         </label>
-        <button className="primary-action" onClick={onSubmit}>Login</button>
+        <button className="primary-action" onClick={onSubmit}><IconLabel icon={LogIn} size={20}>Login</IconLabel></button>
         <button className="text-action" onClick={onSwitch}>
-          Need an account? Sign up
+          <IconLabel icon={UserPlus}>Need an account? Sign up</IconLabel>
         </button>
       </section>
     </main>
@@ -219,7 +272,7 @@ function SignupScreen({ onSubmit, onSwitch }) {
             <span>I'm not a robot</span>
           </label>
           <div className="captcha-brand">
-            <span>reload</span>
+            <span><IconOnly icon={RefreshCw} size={16} /></span>
             <small>reCAPTCHA</small>
           </div>
         </div>
@@ -229,9 +282,9 @@ function SignupScreen({ onSubmit, onSwitch }) {
             I agree to use Adaptive RAG Studio as an AI‑powered system. I will verify answers since AI can make mistakes.
           </span>
         </label>
-        <button className="primary-action signup-submit" onClick={onSubmit}>Agree and start</button>
+        <button className="primary-action signup-submit" onClick={onSubmit}><IconLabel icon={UserPlus} size={20}>Agree and start</IconLabel></button>
         <button className="text-action signup-login-link" onClick={onSwitch}>
-          Already have an account? Log in
+          <IconLabel icon={LogIn}>Already have an account? Log in</IconLabel>
         </button>
       </section>
     </main>
@@ -243,7 +296,7 @@ function Shell({ activeScreen, onNavigate, children }) {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-mark">AR</span>
+          <span className="logo-dot" />
           <div>
             <strong>Adaptive RAG</strong>
             <small>Workflow QA Studio</small>
@@ -256,12 +309,12 @@ function Shell({ activeScreen, onNavigate, children }) {
               className={activeScreen === item.id ? "active" : ""}
               onClick={() => onNavigate(item.id)}
             >
-              {item.label}
+              <IconLabel icon={item.icon} size={18}>{item.label}</IconLabel>
             </button>
           ))}
         </nav>
         <div className="topbar-actions">
-          <span className="user-chip">Researcher</span>
+          <span className="user-chip"><IconLabel icon={CircleUserRound}>Researcher</IconLabel></span>
         </div>
       </header>
       <main className="workspace">{children}</main>
@@ -270,12 +323,14 @@ function Shell({ activeScreen, onNavigate, children }) {
 }
 
 function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
+  const mainGridRef = useRef(null);
   const [messages, setMessages] = useState(seedMessages);
   const [question, setQuestion] = useState("Can I start accepting payments while Wix Payments is under verification?");
   const [isLoading, setIsLoading] = useState(false);
   const [feedbackStatus, setFeedbackStatus] = useState("");
   const [popup, setPopup] = useState(null);
   const [knowledgeBaseOptions, setKnowledgeBaseOptions] = useState([]);
+  const [layout, setLayout] = useState(loadMainLayout);
   const [config, setConfig] = useState({
     classifier: "DistilBERT",
     route: "Adaptive",
@@ -299,15 +354,30 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
     };
   }, []);
 
+  useEffect(() => {
+    saveMainLayout(layout);
+  }, [layout]);
+
   async function sendQuestion() {
     const trimmed = question.trim();
     if (!trimmed) return;
+    const mode = answerModeFromRoute(config.route);
+    const requiresKnowledgeBase = mode === "adaptive" || mode === "simple_rag";
+    if (requiresKnowledgeBase && !selectedKnowledgeBaseId) {
+      setFeedbackStatus("Select a knowledge base before using Adaptive or L2 Simple RAG.");
+      return;
+    }
     const userMessage = { id: createId(), role: "user", content: trimmed };
     setMessages((current) => [...current, userMessage]);
     setQuestion("");
     setIsLoading(true);
     try {
-      const response = await askQuestion(trimmed, selectedKnowledgeBaseId);
+      const response = await askQuestion(trimmed, {
+        knowledgeBaseId: selectedKnowledgeBaseId,
+        mode,
+        retrievalMode: retrievalModeValue(config.retrievalMode),
+        topK: config.topK
+      });
       setMessages((current) => [
         ...current,
         {
@@ -326,9 +396,9 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
           id: createId(),
           question: trimmed,
           role: "assistant",
-          content: "The API is not reachable. Start FastAPI on port 8000, then retry.",
+          content: `Answer request failed: ${error.message}`,
           contexts: [],
-          metadata: { error: error.message, complexity_label: "unknown" }
+          metadata: { error: error.message, complexity_label: "unknown", trace_steps: [] }
         }
       ]);
     } finally {
@@ -351,9 +421,72 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
     }
   }
 
+  function togglePanel(panel) {
+    setLayout((current) => ({
+      ...current,
+      [`${panel}Collapsed`]: !current[`${panel}Collapsed`]
+    }));
+  }
+
+  function beginPanelResize(panel, event) {
+    if ((panel === "history" && layout.historyCollapsed) || (panel === "config" && layout.configCollapsed)) return;
+    const grid = mainGridRef.current;
+    if (!grid || window.matchMedia("(max-width: 1180px)").matches) return;
+    event.preventDefault();
+    const bounds = grid.getBoundingClientRect();
+    const startX = event.clientX;
+    const startLayout = { ...layout };
+    const historyBase = startLayout.historyCollapsed ? MAIN_LAYOUT_LIMITS.collapsed : startLayout.historyWidth;
+    const configBase = startLayout.configCollapsed ? MAIN_LAYOUT_LIMITS.collapsed : startLayout.configWidth;
+    const maxHistory = Math.max(
+      MAIN_LAYOUT_LIMITS.history.min,
+      Math.min(MAIN_LAYOUT_LIMITS.history.max, bounds.width - configBase - MAIN_LAYOUT_LIMITS.chatMin - 16)
+    );
+    const maxConfig = Math.max(
+      MAIN_LAYOUT_LIMITS.config.min,
+      Math.min(MAIN_LAYOUT_LIMITS.config.max, bounds.width - historyBase - MAIN_LAYOUT_LIMITS.chatMin - 16)
+    );
+
+    function handleMove(moveEvent) {
+      const delta = moveEvent.clientX - startX;
+      setLayout((current) => {
+        if (panel === "history") {
+          return {
+            ...current,
+            historyWidth: clampNumber(startLayout.historyWidth + delta, startLayout.historyWidth, MAIN_LAYOUT_LIMITS.history.min, maxHistory)
+          };
+        }
+        return {
+          ...current,
+          configWidth: clampNumber(startLayout.configWidth - delta, startLayout.configWidth, MAIN_LAYOUT_LIMITS.config.min, maxConfig)
+        };
+      });
+    }
+
+    function handleUp() {
+      document.body.classList.remove("is-resizing-panels");
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+    }
+
+    document.body.classList.add("is-resizing-panels");
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+  }
+
+  const selectedKnowledgeBase = knowledgeBaseOptions.find((item) => item.id === selectedKnowledgeBaseId);
+  const lastAnswer = [...messages].reverse().find((message) => message.role === "assistant" && message.metadata);
+  const historyWidth = layout.historyCollapsed ? MAIN_LAYOUT_LIMITS.collapsed : layout.historyWidth;
+  const configWidth = layout.configCollapsed ? MAIN_LAYOUT_LIMITS.collapsed : layout.configWidth;
+
   return (
-    <section className="main-grid">
-      <ConversationHistory />
+    <section
+      ref={mainGridRef}
+      className={`main-grid ${layout.historyCollapsed ? "history-collapsed" : ""} ${layout.configCollapsed ? "config-collapsed" : ""}`}
+      style={{ "--history-width": `${historyWidth}px`, "--config-width": `${configWidth}px` }}
+    >
+      <ConversationHistory collapsed={layout.historyCollapsed} onToggle={() => togglePanel("history")} />
+      <PanelResizeHandle side="left" label="Resize chat history" onPointerDown={(event) => beginPanelResize("history", event)} />
       <ChatPanel
         messages={messages}
         question={question}
@@ -365,11 +498,17 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
         knowledgeBases={knowledgeBaseOptions}
         selectedKnowledgeBaseId={selectedKnowledgeBaseId}
         onSelectKnowledgeBase={onSelectKnowledgeBase}
+        selectedRoute={config.route}
+        requiresKnowledgeBase={answerModeFromRoute(config.route) !== "direct"}
       />
+      <PanelResizeHandle side="right" label="Resize configuration" onPointerDown={(event) => beginPanelResize("config", event)} />
       <RagConfiguration
         config={config}
         setConfig={setConfig}
-        selectedKnowledgeBase={knowledgeBaseOptions.find((item) => item.id === selectedKnowledgeBaseId)}
+        selectedKnowledgeBase={selectedKnowledgeBase}
+        lastAnswerMetadata={lastAnswer?.metadata}
+        collapsed={layout.configCollapsed}
+        onToggle={() => togglePanel("config")}
       />
       {feedbackStatus && <div className="toast">{feedbackStatus}</div>}
       {popup && <TraceModal popup={popup} onClose={() => setPopup(null)} />}
@@ -377,11 +516,29 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
   );
 }
 
-function ConversationHistory() {
+function PanelResizeHandle({ side, label, onPointerDown }) {
+  return <div className={`panel-resize-handle ${side}`} role="separator" aria-label={label} onPointerDown={onPointerDown} />;
+}
+function ConversationHistory({ collapsed, onToggle }) {
+  if (collapsed) {
+    return (
+      <aside className="history-panel panel-rail history-rail">
+        <button className="panel-rail-button" type="button" onClick={onToggle} aria-label="Expand chat history">
+          <span>History</span>
+        </button>
+      </aside>
+    );
+  }
   return (
     <aside className="history-panel">
-      <button className="back-link" type="button">Back to Brains</button>
-      <button className="new-chat-action" type="button">New chat</button>
+      <header className="panel-titlebar">
+        <div>
+          <p className="eyebrow">Notebook</p>
+          <h2>Chat history</h2>
+        </div>
+        <button className="panel-collapse-button" type="button" onClick={onToggle} aria-label="Collapse chat history"><IconOnly icon={ChevronLeft} /></button>
+      </header>
+      <button className="new-chat-action" type="button"><IconLabel icon={MessageSquarePlus}>New chat</IconLabel></button>
       <p className="history-period">June</p>
       <div className="conversation-list">
         {conversations.map((conversation) => (
@@ -401,7 +558,6 @@ function ConversationHistory() {
     </aside>
   );
 }
-
 function ChatPanel({
   messages,
   question,
@@ -412,12 +568,14 @@ function ChatPanel({
   onFeedback,
   knowledgeBases,
   selectedKnowledgeBaseId,
-  onSelectKnowledgeBase
+  onSelectKnowledgeBase,
+  selectedRoute,
+  requiresKnowledgeBase
 }) {
   return (
     <section className="chat-panel">
       <header className="chat-titlebar">
-        <div className="brain-mark">AI</div>
+        <div className="brain-mark"><BrainCircuit size={18} aria-hidden="true" /></div>
         <div>
           <h1>Business Workflow Question Answering</h1>
           <p>Business Workflow Question Answering AI Chatbot</p>
@@ -426,17 +584,17 @@ function ChatPanel({
       <div className="message-list">
         {messages.map((message) => (
           <article key={message.id} className={`message ${message.role}`}>
-            {message.role === "assistant" && <span className="avatar">AR</span>}
+            {message.role === "assistant" && <span className="avatar"><Bot size={16} aria-hidden="true" /></span>}
             <div>
               <p>{message.content}</p>
             </div>
             {message.role === "assistant" && (
               <div className="message-actions">
-                <button onClick={() => onOpenPopup({ type: "source", message })}>Sources</button>
-                <button type="button">Copy</button>
-                <button onClick={() => onOpenPopup({ type: "trace", message })}>Trace</button>
-                <button onClick={() => onFeedback(message, "up")}>Useful</button>
-                <button onClick={() => onFeedback(message, "down")}>Needs work</button>
+                <button onClick={() => onOpenPopup({ type: "source", message })}><IconLabel icon={Layers}>Sources</IconLabel></button>
+                <button type="button"><IconLabel icon={Copy}>Copy</IconLabel></button>
+                <button onClick={() => onOpenPopup({ type: "trace", message })}><IconLabel icon={GitBranch}>Trace</IconLabel></button>
+                <button onClick={() => onFeedback(message, "up")}><IconLabel icon={ThumbsUp}>Useful</IconLabel></button>
+                <button onClick={() => onFeedback(message, "down")}><IconLabel icon={ThumbsDown}>Needs work</IconLabel></button>
                 <span>{message.metadata?.complexity_label || "pending"}</span>
               </div>
             )}
@@ -474,60 +632,41 @@ function ChatPanel({
               </option>
             ))}
           </select>
-          <strong>RAG mode</strong>
-          <button className="send-action" onClick={onSend}>Send</button>
+          <strong>{selectedRoute}</strong>
+          <button className="send-action" onClick={onSend} disabled={isLoading || (requiresKnowledgeBase && !selectedKnowledgeBaseId)} aria-label="Send message"><SendHorizontal size={20} aria-hidden="true" /></button>
         </div>
       </div>
+      {requiresKnowledgeBase && !selectedKnowledgeBaseId && (
+        <p className="ai-disclaimer">Select a knowledge base to run Adaptive or L2 Simple RAG.</p>
+      )}
       <p className="ai-disclaimer">This is an AI-powered system. Please verify answers since AI can make mistakes.</p>
     </section>
   );
 }
 
-function RagConfiguration({ config, setConfig, selectedKnowledgeBase }) {
+function RagConfiguration({ config, setConfig, selectedKnowledgeBase, lastAnswerMetadata, collapsed, onToggle }) {
+  if (collapsed) {
+    return (
+      <aside className="config-panel panel-rail config-rail">
+        <button className="panel-rail-button" type="button" onClick={onToggle} aria-label="Expand configuration">
+          <span>Config</span>
+        </button>
+      </aside>
+    );
+  }
   return (
     <aside className="config-panel">
       <div className="config-topbar">
-        <h2>Configuration</h2>
         <div>
-          <button type="button">Data security</button>
-          <button type="button">Share</button>
-          <button type="button" disabled>Save changes</button>
+          <p className="eyebrow">Runtime</p>
+          <h2>Configuration</h2>
         </div>
+        <button className="panel-collapse-button" type="button" onClick={onToggle} aria-label="Collapse configuration"><IconOnly icon={ChevronRight} /></button>
       </div>
-      <section className="config-section">
+      <CurrentRouteSummary config={config} selectedKnowledgeBase={selectedKnowledgeBase} metadata={lastAnswerMetadata} />
+      <section className="config-section runtime-section">
         <header>
-          <h3>General</h3>
-          <button type="button">Collapse</button>
-        </header>
-        <label>
-          Name
-          <small>Choose a name that clearly represents the purpose of your brain.</small>
-          <input defaultValue="Business Workflow Question Answering" />
-        </label>
-        <label>
-          Description
-          <small>Describe your brain and share basic information that explains its capabilities.</small>
-          <textarea defaultValue="Business Workflow Question Answering AI Chatbot" />
-        </label>
-        <label>
-          Functional area
-          <small>Select the area and domain in which your brain will be used.</small>
-          <div className="tag-cloud">
-            {["Human resources", "Information Coordination Organisation", "Quality Management", "General Functions", "Logistics"].map((tag) => (
-              <span key={tag}>{tag}</span>
-            ))}
-          </div>
-        </label>
-        <div className="icon-grid" aria-label="Brain icon choices">
-          {["AI", "KB", "QA", "TR", "RT", "EV", "HD", "TM", "AN"].map((icon, index) => (
-            <button key={icon} className={index === 0 ? "selected" : ""} type="button">{icon}</button>
-          ))}
-        </div>
-      </section>
-      <section className="config-section">
-        <header>
-          <h3>Inputs</h3>
-          <button type="button">Collapse</button>
+          <h3>Adaptive RAG inputs</h3>
         </header>
         <SelectField
           label="Classifier"
@@ -574,99 +713,215 @@ function RagConfiguration({ config, setConfig, selectedKnowledgeBase }) {
           />
           Citation validator
         </label>
-        <div className="route-card">
-          <strong>Selected knowledge base</strong>
-          <span>{selectedKnowledgeBase ? `${selectedKnowledgeBase.name} (${selectedKnowledgeBase.document_count} docs, ${selectedKnowledgeBase.chunk_count} chunks)` : "No knowledge base selected"}</span>
-        </div>
       </section>
     </aside>
   );
 }
 
+function CurrentRouteSummary({ config, selectedKnowledgeBase, metadata }) {
+  const routeLabel = metadata?.route_label || config.route;
+  const routeLevel = metadata?.route_level || answerModeFromRoute(config.route);
+  return (
+    <section className="route-summary-card">
+      <header>
+        <div>
+          <p className="eyebrow">Current route</p>
+          <h3>{routeLabel}</h3>
+        </div>
+        <span className={`status-pill ${metadata?.retrieval_used ? "status-completed" : ""}`}>
+          {metadata?.retrieval_used ? "Retrieval on" : "No retrieval"}
+        </span>
+      </header>
+      <dl className="route-summary-list">
+        <div>
+          <dt>Mode</dt>
+          <dd>{routeLevel}</dd>
+        </div>
+        <div>
+          <dt>Knowledge base</dt>
+          <dd>{selectedKnowledgeBase ? selectedKnowledgeBase.name : "Not selected"}</dd>
+        </div>
+        <div>
+          <dt>Documents / chunks</dt>
+          <dd>{selectedKnowledgeBase ? `${selectedKnowledgeBase.document_count} / ${selectedKnowledgeBase.chunk_count}` : "-"}</dd>
+        </div>
+        <div>
+          <dt>Complexity</dt>
+          <dd>{metadata?.complexity_label || "Waiting for answer"}</dd>
+        </div>
+        <div>
+          <dt>Retrieval</dt>
+          <dd>{metadata?.retrieval_mode || retrievalModeValue(config.retrievalMode)}</dd>
+        </div>
+        <div>
+          <dt>Latency</dt>
+          <dd>{metadata?.latency_ms ? `${metadata.latency_ms} ms` : "-"}</dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
 function TraceModal({ popup, onClose }) {
   const { type, message } = popup;
   const contexts = message.contexts || [];
-  const sourceContexts = contexts.length > 0 ? contexts : [
-    {
-      id: "wix-uac-001",
-      rank: 1,
-      score: 0.87,
-      text: "UAT is performed before go-live to validate the migrated application and confirm readiness for production. Standard duration is approximately two weeks with possible extension."
-    },
-    {
-      id: "wix-uac-002",
-      rank: 2,
-      score: 0.82,
-      text: "For specific contacts, batch sequence, and timelines, application teams should check the migration dashboard and the WorkON support documentation."
+  const traceSteps = Array.isArray(message.metadata?.trace_steps) ? message.metadata.trace_steps : [];
+  const [sourceQuery, setSourceQuery] = useState("");
+  const [selectedSourceId, setSelectedSourceId] = useState(contexts[0]?.id || "");
+  const [traceQuery, setTraceQuery] = useState("");
+  const [selectedTraceIndex, setSelectedTraceIndex] = useState(0);
+
+  useEffect(() => {
+    setSourceQuery("");
+    setSelectedSourceId(contexts[0]?.id || "");
+    setTraceQuery("");
+    setSelectedTraceIndex(0);
+  }, [message.id, type]);
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Clipboard can be unavailable outside secure contexts; ignore silently.
     }
-  ];
-  const traceSteps = [
-    ["Prompt builder", "0ms", "System role, scope, response policy, and citation rules were assembled."],
-    ["Chat input", `${message.metadata?.latency_ms || 396}ms`, message.question || "User question captured from the chat composer."],
-    ["Query complexity classifier", "42ms", `Predicted ${message.metadata?.complexity_label || "moderate"} complexity.`],
-    ["Hybrid retrieval", "310ms", `Mode ${message.metadata?.retrieval_mode || "hybrid"} with top K ${message.metadata?.top_k || sourceContexts.length}.`],
-    ["Generator", "1.8s", "Generated grounded answer using retrieved workflow passages."]
-  ];
+  }
+
+  const filteredContexts = contexts.filter((context) => {
+    const haystack = [
+      context.text,
+      context.metadata?.title,
+      context.metadata?.document_id,
+      context.metadata?.embedding_model,
+      context.mode
+    ].filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(sourceQuery.trim().toLowerCase());
+  });
+  const selectedSource = filteredContexts.find((context) => context.id === selectedSourceId) || filteredContexts[0];
+  const traceItems = traceSteps.map((step, index) => ({ step, index }));
+  const filteredTraceItems = traceItems.filter(({ step }) => {
+    const haystack = [step.step, step.status, step.detail, JSON.stringify(step.metadata || {})].join(" ").toLowerCase();
+    return haystack.includes(traceQuery.trim().toLowerCase());
+  });
+  const selectedTraceItem = filteredTraceItems.find((item) => item.index === selectedTraceIndex) || filteredTraceItems[0];
+  const selectedTrace = selectedTraceItem?.step;
+
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <section className={`modal ${type === "source" ? "source-modal" : "trace-modal"}`} role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
         <header className="modal-header">
           <div>
-            <h2>{type === "source" ? "Source Documents" : "Trace report"}</h2>
-            <p>{type === "source" ? "Review the passages used to ground this answer." : "A detailed report of the chat pipeline execution and outcomes."}</p>
+            <h2><IconLabel icon={type === "source" ? Layers : GitBranch} size={20}>{type === "source" ? "Source Documents" : "Trace report"}</IconLabel></h2>
+            <p>{type === "source" ? "Review the retrieved chunks used to ground this answer." : "Inspect route, retrieval, and generation steps for this answer."}</p>
           </div>
-          <button className="icon-button modal-close" aria-label="Close modal" onClick={onClose}>x</button>
+          <button className="icon-button modal-close" aria-label="Close modal" onClick={onClose}><IconOnly icon={X} /></button>
         </header>
         {type === "source" ? (
-          <div className="source-modal-grid">
-            <div className="source-sidebar">
-              {sourceContexts.map((context, index) => (
-                <button key={context.id} className={`source-result ${index === 0 ? "selected" : ""}`} type="button">
-                  <span>File</span>
-                  <strong>Business Workflow QA source {context.rank}</strong>
-                  <small>{index % 2 === 0 ? "Semantic Search" : "Full Text Search"}</small>
-                  <em>{Math.round(Number(context.score || 0.8) * 100)}% match</em>
-                </button>
-              ))}
+          contexts.length === 0 ? (
+            <div className="empty-state source-empty-state">
+              <strong>No source chunks</strong>
+              <p>{message.metadata?.route_label || "This route"} did not retrieve knowledge-base context.</p>
+              <small>L1 Direct Generation intentionally returns no sources until a direct generator provider is configured.</small>
             </div>
-            <article className="source-preview">
-              <a href="#top">Business Workflow Question Answering Source.docx</a>
-              <small>Search type: Semantic Search</small>
-              <p>
-                Title: Business Workflow Question Answering Source.docx<br />
-                Content: Workflow support documents provide detailed process information, role responsibilities, timeline guidance, and escalation notes.
-              </p>
-              {sourceContexts.map((context) => (
-                <p key={context.id}>{context.text}</p>
-              ))}
-            </article>
-          </div>
+          ) : (
+            <div className="source-modal-grid">
+              <aside className="source-sidebar">
+                <label className="source-search">
+                  <span><IconLabel icon={Search}>Search sources</IconLabel></span>
+                  <input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} placeholder="Filter by title, text, model..." />
+                </label>
+                <div className="source-count-row">
+                  <span>{filteredContexts.length} of {contexts.length} chunks</span>
+                  <button type="button" onClick={() => setSourceQuery("")}><IconLabel icon={X}>Clear</IconLabel></button>
+                </div>
+                {filteredContexts.map((context) => (
+                  <button
+                    key={context.id}
+                    className={`source-result ${context.id === selectedSource?.id ? "selected" : ""}`}
+                    type="button"
+                    onClick={() => setSelectedSourceId(context.id)}
+                  >
+                    <span>{context.metadata?.source_type || "Chunk"}</span>
+                    <strong>{context.metadata?.title || `Knowledge chunk ${context.rank}`}</strong>
+                    <small>{context.mode || message.metadata?.retrieval_mode || "retrieval"} · chunk {context.metadata?.chunk_index ?? context.rank}</small>
+                    <em>{Math.round(Number(context.score || 0) * 100)}% match</em>
+                  </button>
+                ))}
+              </aside>
+              <article className="source-preview">
+                {selectedSource ? (
+                  <>
+                    <header className="source-preview-header">
+                      <div>
+                        <p className="eyebrow">Selected chunk</p>
+                        <h3>{selectedSource.metadata?.title || "Knowledge-base source"}</h3>
+                      </div>
+                      <button className="secondary-action compact-action" type="button" onClick={() => copyText(selectedSource.text)}><IconLabel icon={Copy}>Copy text</IconLabel></button>
+                    </header>
+                    <div className="metadata-chip-row">
+                      <span>Rank {selectedSource.rank}</span>
+                      <span>{Math.round(Number(selectedSource.score || 0) * 100)}% match</span>
+                      <span>{selectedSource.mode || message.metadata?.retrieval_mode || "retrieval"}</span>
+                      <span>Chunk {selectedSource.metadata?.chunk_index ?? "-"}</span>
+                      <span>{selectedSource.metadata?.embedding_model || "No embedding model"}</span>
+                    </div>
+                    <dl className="source-facts">
+                      <div><dt>Document ID</dt><dd>{selectedSource.metadata?.document_id || "-"}</dd></div>
+                      <div><dt>Source ID</dt><dd>{selectedSource.metadata?.source_id || "-"}</dd></div>
+                      <div><dt>Token count</dt><dd>{selectedSource.metadata?.token_count || selectedSource.metadata?.chunk_size || "-"}</dd></div>
+                      <div><dt>Knowledge base</dt><dd>{selectedSource.metadata?.knowledge_base_id || message.metadata?.knowledge_base_name || "-"}</dd></div>
+                    </dl>
+                    <div className="source-text-preview">{selectedSource.text}</div>
+                  </>
+                ) : (
+                  <div className="empty-state"><strong>No matching chunks</strong><p>Try a broader source filter.</p></div>
+                )}
+              </article>
+            </div>
+          )
         ) : (
           <div className="trace-layout">
             <aside className="trace-steps">
-              <h3>Steps Overview</h3>
-              {traceSteps.map(([name], index) => (
-                <button key={name} className={index === 0 ? "active" : ""} type="button">{index + 1}. {name}</button>
+              <h3><IconLabel icon={GitBranch}>Steps Overview</IconLabel></h3>
+              <label className="trace-side-search">
+                <input value={traceQuery} onChange={(event) => setTraceQuery(event.target.value)} placeholder="Search trace" />
+              </label>
+              {filteredTraceItems.length === 0 ? (
+                <p className="muted-text">No trace steps match.</p>
+              ) : filteredTraceItems.map(({ step, index }) => (
+                <button key={`${step.step}-${index}`} className={index === selectedTraceItem?.index ? "active" : ""} type="button" onClick={() => setSelectedTraceIndex(index)}>
+                  <span>{index + 1}. {step.step}</span>
+                  <em>{step.status}</em>
+                </button>
               ))}
             </aside>
             <div className="trace-content">
-              <label className="trace-search">
-                <input placeholder="Search in trace report" />
-              </label>
-              {traceSteps.map(([name, duration, body]) => (
-                <article key={name} className="trace-step-card">
+              <TraceSummary metadata={message.metadata || {}} />
+              {selectedTrace ? (
+                <article className="trace-step-detail">
                   <header>
-                    <h3>{name} <span>{duration}</span></h3>
-                    <button type="button">Copy</button>
+                    <div>
+                      <p className="eyebrow">Selected step</p>
+                      <h3>{selectedTrace.step}</h3>
+                    </div>
+                    <span className="status-pill">{selectedTrace.status}</span>
                   </header>
-                  <pre>{`NodeId: ${createId()}
-NodeName: ${name}
-NodeType: ${name.includes("retrieval") ? "Retriever" : "Pipeline step"}
-Timestamp: 2026-06-27T09:00:00.000Z
-
-${body}`}</pre>
+                  <p>{selectedTrace.detail}</p>
+                  <div className="trace-metadata-grid">
+                    {Object.entries(selectedTrace.metadata || {}).map(([key, value]) => (
+                      <div key={key}>
+                        <dt>{key}</dt>
+                        <dd>{formatMetadataValue(value)}</dd>
+                      </div>
+                    ))}
+                    {Object.keys(selectedTrace.metadata || {}).length === 0 && <p className="muted-text">No metadata for this step.</p>}
+                  </div>
+                  <details className="raw-json-panel">
+                    <summary>Raw step JSON</summary>
+                    <pre>{JSON.stringify(selectedTrace, null, 2)}</pre>
+                  </details>
                 </article>
-              ))}
+              ) : (
+                <div className="empty-state"><strong>No trace metadata returned</strong><p>Ask a new question to generate trace steps.</p></div>
+              )}
             </div>
           </div>
         )}
@@ -675,6 +930,18 @@ ${body}`}</pre>
   );
 }
 
+function TraceSummary({ metadata }) {
+  return (
+    <section className="trace-summary-card">
+      <div><dt>Route</dt><dd>{metadata.route_label || metadata.route_level || "-"}</dd></div>
+      <div><dt>Complexity</dt><dd>{metadata.complexity_label || "-"}</dd></div>
+      <div><dt>Retrieval</dt><dd>{metadata.retrieval_mode || "none"}</dd></div>
+      <div><dt>Top K</dt><dd>{metadata.top_k ?? "-"}</dd></div>
+      <div><dt>Latency</dt><dd>{metadata.latency_ms ? `${metadata.latency_ms} ms` : "-"}</dd></div>
+      <div><dt>Knowledge base</dt><dd>{metadata.knowledge_base_name || "-"}</dd></div>
+    </section>
+  );
+}
 function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
   const [items, setItems] = useState([]);
   const [documents, setDocuments] = useState([]);
@@ -793,8 +1060,8 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
     <section className="page-stack">
       <PanelHeader eyebrow="Knowledge base storage" title="Knowledge Bases" />
       <div className="toolbar">
-        <button className="primary-action" onClick={() => setKnowledgeBaseModal({ mode: "create" })}>Add knowledge base</button>
-        <button className="secondary-action" onClick={refreshKnowledgeBases}>Refresh</button>
+        <button className="primary-action" onClick={() => setKnowledgeBaseModal({ mode: "create" })}><IconLabel icon={Plus} size={20}>Add knowledge base</IconLabel></button>
+        <button className="secondary-action" onClick={refreshKnowledgeBases}><IconLabel icon={RefreshCw}>Refresh</IconLabel></button>
       </div>
       {error && <div className="alert">Knowledge API unavailable: {error}</div>}
       {actionStatus && <div className="inline-status">{actionStatus}</div>}
@@ -859,14 +1126,14 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
           </div>
           {selectedKnowledgeBase && (
             <div className="document-manager-actions">
-              <button className="secondary-action" onClick={() => setKnowledgeBaseModal({ mode: "edit", knowledgeBase: selectedKnowledgeBase })}>
-                Modify KB
+              <button className="primary-action" onClick={() => setKnowledgeBaseModal({ mode: "edit", knowledgeBase: selectedKnowledgeBase })}>
+                <IconLabel icon={Pencil}>Update knowledge base</IconLabel>
               </button>
               <button className="secondary-action" onClick={() => handleReindex(selectedKnowledgeBase.id)}>
-                Re-index
+                <IconLabel icon={RotateCw}>Re-index</IconLabel>
               </button>
               <button className="secondary-action danger-action" onClick={handleDeleteKnowledgeBase}>
-                Delete KB
+                <IconLabel icon={Trash2}>Delete knowledge base</IconLabel>
               </button>
             </div>
           )}
@@ -882,7 +1149,7 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
                 aria-selected={detailTab === "documents"}
                 onClick={() => setDetailTab("documents")}
               >
-                Documents
+                <IconLabel icon={FileText}>Documents</IconLabel>
               </button>
               <button
                 className={detailTab === "trace" ? "active" : ""}
@@ -891,7 +1158,7 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
                 aria-selected={detailTab === "trace"}
                 onClick={() => setDetailTab("trace")}
               >
-                Processing trace
+                <IconLabel icon={GitBranch}>Processing trace</IconLabel>
               </button>
             </div>
             {detailTab === "documents" ? (
@@ -914,7 +1181,7 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
                           handleDeleteDocument(document.id);
                         }}
                       >
-                        Delete document
+                        <IconLabel icon={Trash2}>Delete document</IconLabel>
                       </button>
                     </summary>
                     <div className="document-accordion-body">
@@ -985,7 +1252,7 @@ function DocumentChunkList({ chunks = [] }) {
                   <small>{chunk.token_count} tokens - {chunk.text.length} chars</small>
                 </div>
                 <span className={`status-pill ${chunk.has_embedding ? "status-indexed" : "status-waiting"}`}>
-                  {chunk.has_embedding ? "embedded" : "not embedded"}
+                  <IconLabel icon={chunk.has_embedding ? CheckCircle2 : Activity}>{chunk.has_embedding ? "embedded" : "not embedded"}</IconLabel>
                 </span>
               </header>
               <dl className="chunk-facts">
@@ -1024,7 +1291,7 @@ function ProcessingTracePanel({ steps = [] }) {
           <p className="eyebrow">Processing trace</p>
           <h3>Knowledge and data processing pipeline</h3>
         </div>
-        <span>{steps.length} steps</span>
+        <span><IconLabel icon={Activity}>{steps.length} steps</IconLabel></span>
       </div>
       {steps.length === 0 ? (
         <p className="muted-text">No processing trace available yet.</p>
@@ -1113,10 +1380,10 @@ function AddKnowledgeBaseModal({
       <section className="modal kb-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
         <header className="modal-header">
           <div>
-            <h2>{isEdit ? "Modify knowledge base" : "Add knowledge base"}</h2>
+            <h2>{isEdit ? "Update knowledge base" : "Add knowledge base"}</h2>
             <p>{isEdit ? "Update name, description, add more documents, or delete existing documents." : "Enter details and select multiple files or a public website source."}</p>
           </div>
-          <button className="icon-button modal-close" aria-label="Close modal" onClick={onClose}>x</button>
+          <button className="icon-button modal-close" aria-label="Close modal" onClick={onClose}><IconOnly icon={X} /></button>
         </header>
         <form className="kb-form" onSubmit={submit}>
           <label>
@@ -1217,14 +1484,14 @@ function AddKnowledgeBaseModal({
           </section>
           <div className="source-selector">
             <button type="button" className={sourceType === "upload" ? "selected" : ""} onClick={() => setSourceType("upload")}>
-              {isEdit ? "Add local files" : "Local device"}
+              <IconLabel icon={HardDrive}>{isEdit ? "Add local files" : "Local device"}</IconLabel>
             </button>
             <button type="button" className={sourceType === "website" ? "selected" : ""} onClick={() => setSourceType("website")}>
-              {isEdit ? "Add website" : "Public website"}
+              <IconLabel icon={Globe}>{isEdit ? "Add website" : "Public website"}</IconLabel>
             </button>
-            <button type="button" disabled>Google Drive soon</button>
-            <button type="button" disabled>OneDrive soon</button>
-            <button type="button" disabled>Databases soon</button>
+            <button type="button" disabled><IconLabel icon={Database}>Google Drive soon</IconLabel></button>
+            <button type="button" disabled><IconLabel icon={Database}>OneDrive soon</IconLabel></button>
+            <button type="button" disabled><IconLabel icon={Database}>Databases soon</IconLabel></button>
           </div>
           {sourceType === "upload" ? (
             <label>
@@ -1254,9 +1521,9 @@ function AddKnowledgeBaseModal({
           </div>
           {status && <p className="inline-status">{status}</p>}
           <div className="modal-actions">
-            <button type="button" className="secondary-action" onClick={onClose}>Cancel</button>
+            <button type="button" className="secondary-action" onClick={onClose}><IconLabel icon={X}>Cancel</IconLabel></button>
             <button type="submit" className="primary-action" disabled={isSubmitting}>
-              {isSubmitting ? "Processing..." : isEdit ? "Save knowledge base" : "Create and index"}
+              <IconLabel icon={isSubmitting ? RefreshCw : Save}>{isSubmitting ? "Processing..." : isEdit ? "Save knowledge base" : "Create knowledge base"}</IconLabel>
             </button>
           </div>
         </form>
@@ -1290,7 +1557,7 @@ function EvaluationScreen({ onOpenDetail }) {
                 <Metric label="Faithfulness" value={run.faithfulness} />
                 <Metric label="Latency" value={run.latency} />
               </dl>
-              <button className="secondary-action" onClick={onOpenDetail}>Open RAGXplain detail</button>
+              <button className="secondary-action" onClick={onOpenDetail}><IconLabel icon={GitBranch}>Open RAGXplain detail</IconLabel></button>
             </article>
           ))}
         </div>
@@ -1322,8 +1589,8 @@ function AnalyticsScreen() {
     <section className="page-stack">
       <PanelHeader eyebrow="Usage Analytics" title="Analytics" />
       <div className="tabs">
-        <button className={tab === "tokens" ? "active" : ""} onClick={() => setTab("tokens")}>Token statistics</button>
-        <button className={tab === "feedback" ? "active" : ""} onClick={() => setTab("feedback")}>Detailed Statistics & Feedbacks</button>
+        <button className={tab === "tokens" ? "active" : ""} onClick={() => setTab("tokens")}><IconLabel icon={BarChart3}>Token statistics</IconLabel></button>
+        <button className={tab === "feedback" ? "active" : ""} onClick={() => setTab("feedback")}><IconLabel icon={ThumbsUp}>Detailed Statistics & Feedbacks</IconLabel></button>
       </div>
       {tab === "tokens" ? (
         <div className="metrics-grid">
@@ -1363,6 +1630,19 @@ function AnalyticsScreen() {
   );
 }
 
+function IconLabel({ icon: Icon, children, size = 16 }) {
+  return (
+    <span className="icon-label">
+      <Icon className="button-icon" size={size} aria-hidden="true" strokeWidth={2} />
+      <span>{children}</span>
+    </span>
+  );
+}
+
+function IconOnly({ icon: Icon, size = 18 }) {
+  return <Icon className="button-icon" size={size} aria-hidden="true" strokeWidth={2} />;
+}
+
 function PanelHeader({ eyebrow, title }) {
   return (
     <header className="panel-header">
@@ -1373,12 +1653,15 @@ function PanelHeader({ eyebrow, title }) {
 }
 
 function SelectField({ label, value, options, onChange }) {
+  const normalizedOptions = options.map((option) => (
+    typeof option === "string" ? { value: option, label: option } : option
+  ));
   return (
     <label>
       {label}
       <select value={value} onChange={(event) => onChange(event.target.value)}>
-        {options.map((option) => (
-          <option key={option}>{option}</option>
+        {normalizedOptions.map((option) => (
+          <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>
         ))}
       </select>
     </label>
@@ -1392,6 +1675,40 @@ function Metric({ label, value }) {
       <dd>{value}</dd>
     </div>
   );
+}
+
+function answerModeFromRoute(route) {
+  if (route === "L1 Direct") return "direct";
+  if (route === "L2 Simple RAG") return "simple_rag";
+  return "adaptive";
+}
+
+function retrievalModeValue(value) {
+  if (value === "BM25") return "bm25";
+  if (value === "Dense") return "dense";
+  return "hybrid";
+}
+
+function loadMainLayout() {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(MAIN_LAYOUT_STORAGE_KEY) || "{}");
+    return {
+      historyWidth: clampNumber(raw.historyWidth, DEFAULT_MAIN_LAYOUT.historyWidth, MAIN_LAYOUT_LIMITS.history.min, MAIN_LAYOUT_LIMITS.history.max),
+      configWidth: clampNumber(raw.configWidth, DEFAULT_MAIN_LAYOUT.configWidth, MAIN_LAYOUT_LIMITS.config.min, MAIN_LAYOUT_LIMITS.config.max),
+      historyCollapsed: Boolean(raw.historyCollapsed),
+      configCollapsed: Boolean(raw.configCollapsed)
+    };
+  } catch {
+    return DEFAULT_MAIN_LAYOUT;
+  }
+}
+
+function saveMainLayout(layout) {
+  try {
+    window.localStorage.setItem(MAIN_LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+  } catch {
+    // Storage can be unavailable in private or hardened browser modes.
+  }
 }
 
 function formatDateTime(value) {

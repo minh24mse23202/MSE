@@ -151,7 +151,13 @@ class HuggingFaceQueryClassifier:
             except ImportError as exc:
                 raise ImportError(
                     "HuggingFaceQueryClassifier requires the optional ML dependencies. "
-                    "Install them with: python -m pip install -e \".[ml]\""
+                    "Install them with: python -m pip install -e \".[dev,api,app,ml]\""
+                ) from exc
+            except Exception as exc:
+                raise ImportError(
+                    "HuggingFaceQueryClassifier could not initialize the optional ML runtime. "
+                    "If this is a Windows PyTorch DLL error, reinstall CPU PyTorch with: "
+                    "python -m pip install --force-reinstall \"torch>=2.2,<2.6\" --index-url https://download.pytorch.org/whl/cpu"
                 ) from exc
             tokenizer = AutoTokenizer.from_pretrained(str(self.model_dir))
             model = AutoModelForSequenceClassification.from_pretrained(str(self.model_dir))

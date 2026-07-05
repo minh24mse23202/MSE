@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -245,6 +246,27 @@ class JsonKnowledgeRepository:
         ]
         chunks.sort(key=lambda chunk: (chunk.document_id, chunk.chunk_index))
         return chunks[:limit]
+
+    def search_chunks_by_embedding(
+        self,
+        knowledge_base_id: str,
+        embedding: List[float],
+        limit: int = 10,
+    ) -> List[tuple[StoredKnowledgeChunk, float]]:
+        state = self._read()
+        matches: List[tuple[StoredKnowledgeChunk, float]] = []
+        for chunk_id, payload in state["chunks"].items():
+            if payload["knowledge_base_id"] != knowledge_base_id:
+                continue
+            embedding_payload = state["chunk_embeddings"].get(chunk_id)
+            if not embedding_payload:
+                continue
+            stored_embedding = _coerce_vector(embedding_payload.get("embedding", []))
+            if not stored_embedding:
+                continue
+            matches.append((_chunk_from_dict(payload, embedding_payload), _cosine_similarity(embedding, stored_embedding)))
+        matches.sort(key=lambda item: item[1], reverse=True)
+        return matches[:limit]
 
     def list_ingestion_runs(self, knowledge_base_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         state = self._read()
@@ -703,6 +725,33 @@ class PostgresKnowledgeRepository:
             ).mappings()
             return [_chunk_from_row(row) for row in rows]
 
+    def search_chunks_by_embedding(
+        self,
+        knowledge_base_id: str,
+        embedding: List[float],
+        limit: int = 10,
+    ) -> List[tuple[StoredKnowledgeChunk, float]]:
+        from sqlalchemy import text
+
+        with self.engine.begin() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT c.*,
+                           ce.embedding_model,
+                           ce.embedding::text AS embedding_text,
+                           1 - (ce.embedding <=> CAST(:embedding AS vector)) AS score
+                    FROM chunks c
+                    JOIN chunk_embeddings ce ON ce.chunk_id = c.id
+                    WHERE c.knowledge_base_id = :id
+                    ORDER BY ce.embedding <=> CAST(:embedding AS vector)
+                    LIMIT :limit
+                    """
+                ),
+                {"id": knowledge_base_id, "embedding": _vector_literal(embedding), "limit": limit},
+            ).mappings()
+            return [(_chunk_from_row(row), float(row.get("score") or 0.0)) for row in rows]
+
     def list_ingestion_runs(self, knowledge_base_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         from sqlalchemy import text
 
@@ -907,3 +956,23 @@ def _vector_dimension(value: str) -> int:
     if not stripped:
         return 0
     return stripped.count(",") + 1
+
+
+def _coerce_vector(value: Any) -> List[float]:
+    if isinstance(value, list):
+        return [float(item) for item in value]
+    if isinstance(value, str):
+        stripped = value.strip().strip("[]")
+        if not stripped:
+            return []
+        return [float(part.strip()) for part in stripped.split(",") if part.strip()]
+    return []
+
+
+def _cosine_similarity(left: List[float], right: List[float]) -> float:
+    numerator = sum(a * b for a, b in zip(left, right))
+    left_norm = math.sqrt(sum(a * a for a in left))
+    right_norm = math.sqrt(sum(b * b for b in right))
+    if left_norm == 0 or right_norm == 0:
+        return 0.0
+    return numerator / (left_norm * right_norm)

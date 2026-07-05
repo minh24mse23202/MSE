@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions, AnsweringError
 from aragbiz.config import load_config
 from aragbiz.factory import build_knowledge_service, build_sample_pipeline
 from aragbiz.feedback import append_feedback
+from aragbiz.schemas import RetrievalMode
 from aragbiz.knowledge import (
     IngestionSummary,
     KnowledgeBaseRecord,
@@ -34,12 +36,16 @@ app.add_middleware(
 class AnswerRequest(BaseModel):
     question: str = Field(..., min_length=1)
     knowledge_base_id: Optional[str] = None
+    mode: Literal["adaptive", "direct", "simple_rag"] = "adaptive"
+    retrieval_mode: RetrievalMode = "hybrid"
+    top_k: int = Field(4, ge=1, le=50)
 
 
 class ContextResponse(BaseModel):
     id: str
     score: float
     rank: int
+    mode: str
     text: str
     metadata: Dict[str, Any]
 
@@ -146,17 +152,27 @@ def health() -> Dict[str, str]:
 
 @app.post("/answer", response_model=AnswerResponse)
 def answer(request: AnswerRequest) -> AnswerResponse:
-    knowledge_base_metadata: Dict[str, Any] = {}
-    if request.knowledge_base_id:
-        try:
-            selected_kb = knowledge_service.get_knowledge_base(request.knowledge_base_id)
-            knowledge_base_metadata = {
-                "knowledge_base_id": selected_kb.id,
-                "knowledge_base_name": selected_kb.name,
-            }
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-    result = pipeline.answer(request.question)
+    service = AdaptiveRAGAnswerService(
+        router=pipeline.router,
+        generator=pipeline.generator,
+        knowledge_service=knowledge_service,
+        bm25_weight=config.bm25_weight,
+        dense_weight=config.dense_weight,
+    )
+    try:
+        result = service.answer(
+            request.question,
+            AnswerOptions(
+                mode=request.mode,
+                knowledge_base_id=request.knowledge_base_id,
+                retrieval_mode=request.retrieval_mode,
+                top_k=request.top_k,
+            ),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (AnsweringError, KnowledgeProcessingError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return AnswerResponse(
         question=result.question,
         answer=result.answer,
@@ -165,12 +181,13 @@ def answer(request: AnswerRequest) -> AnswerResponse:
                 id=context.document.id,
                 score=context.score,
                 rank=context.rank,
+                mode=context.mode,
                 text=context.document.text,
                 metadata=context.document.metadata,
             )
             for context in result.contexts
         ],
-        metadata={**result.metadata, **knowledge_base_metadata},
+        metadata=result.metadata,
     )
 
 

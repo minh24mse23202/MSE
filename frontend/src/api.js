@@ -1,10 +1,16 @@
 const API_BASE_URL = import.meta.env.VITE_ARAGBIZ_API_URL || "http://127.0.0.1:8000";
 
-export async function askQuestion(question, knowledgeBaseId = "") {
+export async function askQuestion(question, options = {}) {
   const response = await fetch(`${API_BASE_URL}/answer`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, knowledge_base_id: knowledgeBaseId || null })
+    body: JSON.stringify({
+      question,
+      knowledge_base_id: options.knowledgeBaseId || null,
+      mode: options.mode || "adaptive",
+      retrieval_mode: options.retrievalMode || "hybrid",
+      top_k: options.topK || 4
+    })
   });
   await assertOk(response, "Answer request failed");
   return response.json();

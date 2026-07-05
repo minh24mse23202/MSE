@@ -1,6 +1,6 @@
 # Phase 2: Model Specialization
 
-The first specialized model is a lightweight supervised query complexity classifier. It trains on QAC records and predicts one of:
+Use Python 3.11 for Phase 2 local training commands. The first specialized model is a lightweight supervised query complexity classifier. It trains on QAC records and predicts one of:
 
 - `simple`
 - `moderate`
@@ -17,7 +17,7 @@ python scripts/train_query_classifier.py --extra-dataset data/processed/wixqa_sy
 Train the DistilBERT classifier in Colab or another GPU environment:
 
 ```powershell
-python -m pip install -e ".[ml]"
+python -m pip install -e ".[dev,api,app,ml]"
 $env:PYTHONPATH='src'
 python scripts/train_hf_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
 ```
@@ -25,7 +25,7 @@ python scripts/train_hf_query_classifier.py --extra-dataset data/processed/wixqa
 Train the T5-small seq2seq classifier:
 
 ```powershell
-python -m pip install -e ".[ml]"
+python -m pip install -e ".[dev,api,app,ml]"
 $env:PYTHONPATH='src'
 python scripts/train_t5_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
 ```

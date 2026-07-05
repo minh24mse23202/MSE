@@ -123,7 +123,7 @@ def test_sentence_transformer_runtime_errors_are_processing_errors(monkeypatch):
     real_import = builtins.__import__
 
     def broken_import(name, *args, **kwargs):
-        if name == "transformers":
+        if name == "torch":
             raise TypeError("broken optional dependency")
         return real_import(name, *args, **kwargs)
 
