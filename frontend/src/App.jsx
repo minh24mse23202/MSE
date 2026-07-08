@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Activity,
   BarChart3,
+  BookOpen,
   Bot,
   BrainCircuit,
   CheckCircle2,
@@ -22,6 +23,8 @@ import {
   MessageSquarePlus,
   Paperclip,
   Pencil,
+  Pin,
+  PinOff,
   Plus,
   RefreshCw,
   RotateCw,
@@ -37,21 +40,24 @@ import {
 import {
   askQuestion,
   createKnowledgeBase,
+  deleteChatConversation,
   deleteKnowledgeBase,
   deleteKnowledgeDocument,
   getKnowledgeProcessingTrace,
   ingestWebsiteSource,
+  listChatConversations,
+  listChatMessages,
   listKnowledgeChunks,
   listKnowledgeDocuments,
   listKnowledgeBases,
   reindexKnowledgeBase,
   submitFeedback,
+  updateChatConversation,
   updateKnowledgeBase,
   uploadKnowledgeSource
 } from "./api.js";
 import {
   architectureLayers,
-  conversations,
   evaluationRuns,
   feedbackRows,
   seedMessages,
@@ -70,8 +76,53 @@ const routes = [
   { value: "Adaptive", label: "Adaptive" },
   { value: "L1 Direct", label: "L1 Direct Generation" },
   { value: "L2 Simple RAG", label: "L2 Simple RAG" },
-  { value: "L3 Complex RAG", label: "L3 Complex RAG (coming soon)", disabled: true }
+  { value: "L3 Complex RAG", label: "L3 Complex RAG" }
 ];
+const generatorProviderOptions = [
+  { value: "Local", label: "Local" },
+  { value: "OpenAI", label: "OpenAI (coming soon)", disabled: true },
+  { value: "Hugging Face", label: "Hugging Face hosted (coming soon)", disabled: true },
+  { value: "Cohere", label: "Cohere (coming soon)", disabled: true },
+  { value: "AWS Bedrock", label: "AWS Bedrock (coming soon)", disabled: true }
+];
+const generatorProviders = generatorProviderOptions.map((option) => option.value);
+const generatorModelsByProvider = {
+  Local: ["extractive", "google/flan-t5-small"],
+  OpenAI: ["gpt-4.1-mini", "gpt-4.1", "o4-mini"],
+  "Hugging Face": ["mistralai/Mistral-7B-Instruct-v0.3", "meta-llama/Llama-3.2-3B-Instruct"],
+  Cohere: ["command-r", "command-r-plus"],
+  "AWS Bedrock": ["anthropic.claude-3-haiku", "amazon.nova-lite", "meta.llama3-8b-instruct"]
+};
+const generatorModelOptionsByProvider = {
+  Local: [
+    { value: "extractive", label: "extractive (supported)" },
+    { value: "google/flan-t5-small", label: "google/flan-t5-small (local optional)" }
+  ],
+  OpenAI: generatorModelsByProvider.OpenAI.map((model) => ({ value: model, label: `${model} (coming soon)`, disabled: true })),
+  "Hugging Face": generatorModelsByProvider["Hugging Face"].map((model) => ({ value: model, label: `${model} (coming soon)`, disabled: true })),
+  Cohere: generatorModelsByProvider.Cohere.map((model) => ({ value: model, label: `${model} (coming soon)`, disabled: true })),
+  "AWS Bedrock": generatorModelsByProvider["AWS Bedrock"].map((model) => ({ value: model, label: `${model} (coming soon)`, disabled: true }))
+};
+const responseStructures = [
+  "Concise answer with bullets and cited workflow context",
+  "Step-by-step workflow guidance",
+  "Executive summary then details",
+  "Detailed answer with assumptions and risks",
+  "JSON-style structured response"
+];
+const chatbotTones = ["Professional", "Friendly", "Formal", "Technical", "Coaching"];
+const defaultChatConfigurationDraft = {
+  chatConfigurationId: "",
+  configurationName: "Balanced workflow assistant",
+  configurationDescription: "Default configuration for concise business workflow answers.",
+  generatorProvider: "Local",
+  generatorModel: "extractive",
+  responseStructure: "Concise answer with bullets and cited workflow context",
+  tone: "Professional",
+  humorLevel: 0,
+  systemPrompt: "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
+  predefinedPrompt: "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used."
+};
 const chunkingStrategies = [
   { value: "fixed_size", label: "Fixed-size Chunking" },
   { value: "sliding_window_overlap", label: "Sliding window / overlap chunking" },
@@ -279,7 +330,7 @@ function SignupScreen({ onSubmit, onSwitch }) {
         <label className="signup-consent">
           <input type="checkbox" />
           <span>
-            I agree to use Adaptive RAG Studio as an AI‑powered system. I will verify answers since AI can make mistakes.
+            I agree to use Adaptive RAG Studio as an AI窶叢owered system. I will verify answers since AI can make mistakes.
           </span>
         </label>
         <button className="primary-action signup-submit" onClick={onSubmit}><IconLabel icon={UserPlus} size={20}>Agree and start</IconLabel></button>
@@ -325,11 +376,18 @@ function Shell({ activeScreen, onNavigate, children }) {
 function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
   const mainGridRef = useRef(null);
   const [messages, setMessages] = useState(seedMessages);
-  const [question, setQuestion] = useState("Can I start accepting payments while Wix Payments is under verification?");
+  const [question, setQuestion] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [feedbackStatus, setFeedbackStatus] = useState("");
   const [popup, setPopup] = useState(null);
   const [knowledgeBaseOptions, setKnowledgeBaseOptions] = useState([]);
+  const [activeConversationId, setActiveConversationId] = useState("");
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [recentConversations, setRecentConversations] = useState([]);
+  const [libraryConversations, setLibraryConversations] = useState([]);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [chatConfigurations, setChatConfigurations] = useState([]);
+  const [configurationStatus, setConfigurationStatus] = useState("");
   const [layout, setLayout] = useState(loadMainLayout);
   const [config, setConfig] = useState({
     classifier: "DistilBERT",
@@ -337,7 +395,8 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
     retrievalMode: "Hybrid",
     topK: 6,
     reranker: true,
-    citations: true
+    citations: true,
+    ...defaultChatConfigurationDraft
   });
 
   useEffect(() => {
@@ -355,16 +414,163 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
   }, []);
 
   useEffect(() => {
+    refreshChatConfigurations();
+  }, []);
+
+  useEffect(() => {
     saveMainLayout(layout);
   }, [layout]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      refreshConversationLists(historyQuery);
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [historyQuery]);
+
+  async function refreshConversationLists(query = historyQuery) {
+    setIsHistoryLoading(true);
+    try {
+      const [recents, library] = await Promise.all([
+        listChatConversations({ query, section: "recents" }),
+        listChatConversations({ query, section: "library" })
+      ]);
+      setRecentConversations(recents);
+      setLibraryConversations(library);
+    } catch (error) {
+      setFeedbackStatus(`Chat history unavailable: ${error.message}`);
+      setRecentConversations([]);
+      setLibraryConversations([]);
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  }
+
+  async function refreshChatConfigurations(preferredId = config.chatConfigurationId) {
+    try {
+      const items = await listChatConfigurations();
+      setChatConfigurations(items);
+      const selected = items.find((item) => item.id === preferredId) || items[0];
+      if (selected && !preferredId) {
+        setConfig((current) => applyChatConfigurationToDraft(current, selected));
+      }
+      return items;
+    } catch (error) {
+      setConfigurationStatus(`Configuration presets unavailable: ${error.message}`);
+      setChatConfigurations([]);
+      return [];
+    }
+  }
+
+  function selectChatConfiguration(configurationId) {
+    const selected = chatConfigurations.find((item) => item.id === configurationId);
+    if (!selected) {
+      setConfig((current) => ({ ...current, chatConfigurationId: "" }));
+      return;
+    }
+    setConfig((current) => applyChatConfigurationToDraft(current, selected));
+    setConfigurationStatus(`Loaded "${selected.name}"`);
+  }
+
+  async function saveChatConfigurationAsNew() {
+    try {
+      const created = await createChatConfiguration(chatConfigurationPayloadFromDraft(config));
+      const items = await refreshChatConfigurations(created.id);
+      setChatConfigurations(items);
+      setConfig((current) => applyChatConfigurationToDraft(current, created));
+      setConfigurationStatus(`Saved "${created.name}"`);
+    } catch (error) {
+      setConfigurationStatus(`Save configuration failed: ${error.message}`);
+    }
+  }
+
+  async function updateSelectedChatConfiguration() {
+    if (!config.chatConfigurationId) {
+      await saveChatConfigurationAsNew();
+      return;
+    }
+    try {
+      const updated = await updateChatConfiguration(config.chatConfigurationId, chatConfigurationPayloadFromDraft(config));
+      const items = await refreshChatConfigurations(updated.id);
+      setChatConfigurations(items);
+      setConfig((current) => applyChatConfigurationToDraft(current, updated));
+      setConfigurationStatus(`Updated "${updated.name}"`);
+    } catch (error) {
+      setConfigurationStatus(`Update configuration failed: ${error.message}`);
+    }
+  }
+
+  function resetChatConfigurationDraft() {
+    const selected = chatConfigurations.find((item) => item.id === config.chatConfigurationId) || chatConfigurations[0];
+    setConfig((current) => selected ? applyChatConfigurationToDraft(current, selected) : { ...current, ...defaultChatConfigurationDraft });
+    setConfigurationStatus("Configuration draft reset");
+  }
+
+  async function startNewChat() {
+    setActiveConversationId("");
+    setMessages([]);
+    setQuestion("");
+    setPopup(null);
+  }
+
+  async function selectConversation(conversation) {
+    setActiveConversationId(conversation.id);
+    if (conversation.knowledge_base_id) onSelectKnowledgeBase(conversation.knowledge_base_id);
+    setConfig((current) => {
+      let next = {
+        ...current,
+        route: routeLabelFromMode(conversation.route_mode),
+        retrievalMode: retrievalModeLabel(conversation.retrieval_mode),
+        topK: conversation.top_k || current.topK
+      };
+      const savedConfiguration = chatConfigurations.find((item) => item.id === conversation.chat_configuration_id);
+      if (savedConfiguration) {
+        next = applyChatConfigurationToDraft(next, savedConfiguration);
+      } else if (conversation.metadata?.chat_configuration) {
+        next = applyChatConfigurationSnapshotToDraft(next, conversation.metadata.chat_configuration, conversation.chat_configuration_id || "");
+      }
+      return next;
+    });
+    try {
+      const records = await listChatMessages(conversation.id);
+      setMessages(messagesFromChatRecords(records));
+    } catch (error) {
+      setFeedbackStatus(`Conversation load failed: ${error.message}`);
+    }
+  }
+
+  async function togglePinnedConversation(conversation) {
+    try {
+      await updateChatConversation(conversation.id, { pinned: !conversation.pinned });
+      await refreshConversationLists();
+    } catch (error) {
+      setFeedbackStatus(`Pin update failed: ${error.message}`);
+    }
+  }
+
+  async function removeConversation(conversation) {
+    const confirmed = window.confirm(`Delete "${conversation.title}"?`);
+    if (!confirmed) return;
+    try {
+      await deleteChatConversation(conversation.id);
+      if (activeConversationId === conversation.id) await startNewChat();
+      await refreshConversationLists();
+    } catch (error) {
+      setFeedbackStatus(`Delete chat failed: ${error.message}`);
+    }
+  }
 
   async function sendQuestion() {
     const trimmed = question.trim();
     if (!trimmed) return;
     const mode = answerModeFromRoute(config.route);
-    const requiresKnowledgeBase = mode === "adaptive" || mode === "simple_rag";
+    const requiresKnowledgeBase = mode !== "direct";
     if (requiresKnowledgeBase && !selectedKnowledgeBaseId) {
-      setFeedbackStatus("Select a knowledge base before using Adaptive or L2 Simple RAG.");
+      setFeedbackStatus("Select a knowledge base before using Adaptive, L2 Simple RAG, or L3 Complex RAG.");
+      return;
+    }
+    if (!isValidChatConfigurationDraft(config)) {
+      setFeedbackStatus("Select or save a chatbot configuration before sending.");
       return;
     }
     const userMessage = { id: createId(), role: "user", content: trimmed };
@@ -373,11 +579,17 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
     setIsLoading(true);
     try {
       const response = await askQuestion(trimmed, {
+        conversationId: activeConversationId,
         knowledgeBaseId: selectedKnowledgeBaseId,
         mode,
         retrievalMode: retrievalModeValue(config.retrievalMode),
-        topK: config.topK
+        topK: config.topK,
+        chatConfigurationId: config.chatConfigurationId || null,
+        chatConfiguration: chatConfigurationPayloadFromDraft(config)
       });
+      if (response.conversation_id && response.conversation_id !== activeConversationId) {
+        setActiveConversationId(response.conversation_id);
+      }
       setMessages((current) => [
         ...current,
         {
@@ -389,6 +601,7 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
           metadata: response.metadata
         }
       ]);
+      await refreshConversationLists();
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -485,7 +698,20 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
       className={`main-grid ${layout.historyCollapsed ? "history-collapsed" : ""} ${layout.configCollapsed ? "config-collapsed" : ""}`}
       style={{ "--history-width": `${historyWidth}px`, "--config-width": `${configWidth}px` }}
     >
-      <ConversationHistory collapsed={layout.historyCollapsed} onToggle={() => togglePanel("history")} />
+      <ConversationHistory
+        collapsed={layout.historyCollapsed}
+        onToggle={() => togglePanel("history")}
+        onNewChat={startNewChat}
+        searchQuery={historyQuery}
+        onSearchChange={setHistoryQuery}
+        libraryConversations={libraryConversations}
+        recentConversations={recentConversations}
+        activeConversationId={activeConversationId}
+        isLoading={isHistoryLoading}
+        onSelectConversation={selectConversation}
+        onTogglePinned={togglePinnedConversation}
+        onDeleteConversation={removeConversation}
+      />
       <PanelResizeHandle side="left" label="Resize chat history" onPointerDown={(event) => beginPanelResize("history", event)} />
       <ChatPanel
         messages={messages}
@@ -507,6 +733,12 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
         setConfig={setConfig}
         selectedKnowledgeBase={selectedKnowledgeBase}
         lastAnswerMetadata={lastAnswer?.metadata}
+        chatConfigurations={chatConfigurations}
+        configurationStatus={configurationStatus}
+        onSelectChatConfiguration={selectChatConfiguration}
+        onSaveConfiguration={saveChatConfigurationAsNew}
+        onUpdateConfiguration={updateSelectedChatConfiguration}
+        onResetConfiguration={resetChatConfigurationDraft}
         collapsed={layout.configCollapsed}
         onToggle={() => togglePanel("config")}
       />
@@ -519,7 +751,20 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
 function PanelResizeHandle({ side, label, onPointerDown }) {
   return <div className={`panel-resize-handle ${side}`} role="separator" aria-label={label} onPointerDown={onPointerDown} />;
 }
-function ConversationHistory({ collapsed, onToggle }) {
+function ConversationHistory({
+  collapsed,
+  onToggle,
+  onNewChat,
+  searchQuery,
+  onSearchChange,
+  libraryConversations,
+  recentConversations,
+  activeConversationId,
+  isLoading,
+  onSelectConversation,
+  onTogglePinned,
+  onDeleteConversation
+}) {
   if (collapsed) {
     return (
       <aside className="history-panel panel-rail history-rail">
@@ -538,24 +783,84 @@ function ConversationHistory({ collapsed, onToggle }) {
         </div>
         <button className="panel-collapse-button" type="button" onClick={onToggle} aria-label="Collapse chat history"><IconOnly icon={ChevronLeft} /></button>
       </header>
-      <button className="new-chat-action" type="button"><IconLabel icon={MessageSquarePlus}>New chat</IconLabel></button>
-      <p className="history-period">June</p>
+      <button className="new-chat-action" type="button" onClick={onNewChat}><IconLabel icon={MessageSquarePlus}>New chat</IconLabel></button>
+      <label className="history-search">
+        <IconOnly icon={Search} size={16} />
+        <input
+          value={searchQuery}
+          onChange={(event) => onSearchChange(event.target.value)}
+          placeholder="Search chats"
+          aria-label="Search chats"
+        />
+      </label>
+      <ConversationSection
+        title="Library"
+        icon={BookOpen}
+        conversations={libraryConversations}
+        emptyText={searchQuery ? "No pinned chats match." : "Pinned chats appear here."}
+        activeConversationId={activeConversationId}
+        onSelectConversation={onSelectConversation}
+        onTogglePinned={onTogglePinned}
+        onDeleteConversation={onDeleteConversation}
+      />
+      <ConversationSection
+        title="Recents"
+        icon={RotateCw}
+        conversations={recentConversations}
+        emptyText={isLoading ? "Loading chats..." : searchQuery ? "No recent chats match." : "Start a new chat to build history."}
+        activeConversationId={activeConversationId}
+        onSelectConversation={onSelectConversation}
+        onTogglePinned={onTogglePinned}
+        onDeleteConversation={onDeleteConversation}
+      />
+    </aside>
+  );
+}
+
+function ConversationSection({
+  title,
+  icon,
+  conversations,
+  emptyText,
+  activeConversationId,
+  onSelectConversation,
+  onTogglePinned,
+  onDeleteConversation
+}) {
+  return (
+    <section className="conversation-section">
+      <h3><IconLabel icon={icon}>{title}</IconLabel></h3>
       <div className="conversation-list">
-        {conversations.map((conversation) => (
-          <button
+        {conversations.length === 0 ? (
+          <p className="history-empty">{emptyText}</p>
+        ) : conversations.map((conversation) => (
+          <article
             key={conversation.id}
-            className={`conversation-item ${conversation.status === "active" ? "active" : ""}`}
-            type="button"
+            className={`conversation-item ${conversation.id === activeConversationId ? "active" : ""}`}
           >
-            <span>
-              <strong>{conversation.title}</strong>
-              <small>{conversation.route}</small>
-            </span>
-            <em>{conversation.updatedAt}</em>
-          </button>
+            <button className="conversation-main" type="button" onClick={() => onSelectConversation(conversation)}>
+              <span>
+                <strong>{conversation.title}</strong>
+                <small>{conversation.route_mode || "adaptive"} - {conversation.retrieval_mode || "hybrid"}</small>
+              </span>
+              <em>{formatShortDate(conversation.updated_at)}</em>
+            </button>
+            <div className="conversation-actions">
+              <button
+                type="button"
+                aria-label={conversation.pinned ? "Unpin chat" : "Pin chat"}
+                onClick={() => onTogglePinned(conversation)}
+              >
+                <IconOnly icon={conversation.pinned ? PinOff : Pin} size={14} />
+              </button>
+              <button type="button" aria-label="Delete chat" onClick={() => onDeleteConversation(conversation)}>
+                <IconOnly icon={Trash2} size={14} />
+              </button>
+            </div>
+          </article>
         ))}
       </div>
-    </aside>
+    </section>
   );
 }
 function ChatPanel({
@@ -616,8 +921,8 @@ function ChatPanel({
           }}
         />
         <div className="composer-tools">
-          <span>Attach</span>
-          <span>Filter</span>
+          <span><IconLabel icon={Paperclip}>Attach</IconLabel></span>
+          <span><IconLabel icon={Filter}>Filter</IconLabel></span>
           <span>0%</span>
           <select
             className="composer-select"
@@ -644,7 +949,21 @@ function ChatPanel({
   );
 }
 
-function RagConfiguration({ config, setConfig, selectedKnowledgeBase, lastAnswerMetadata, collapsed, onToggle }) {
+function RagConfiguration({
+  config,
+  setConfig,
+  selectedKnowledgeBase,
+  lastAnswerMetadata,
+  chatConfigurations = [],
+  configurationStatus = "",
+  onSelectChatConfiguration = () => {},
+  onSaveConfiguration = () => {},
+  onUpdateConfiguration = () => {},
+  onResetConfiguration = () => {},
+  collapsed,
+  onToggle
+}) {
+  const providerModels = generatorModelOptionsByProvider[config.generatorProvider] || generatorModelOptionsByProvider.Local;
   if (collapsed) {
     return (
       <aside className="config-panel panel-rail config-rail">
@@ -714,10 +1033,102 @@ function RagConfiguration({ config, setConfig, selectedKnowledgeBase, lastAnswer
           Citation validator
         </label>
       </section>
+      <section className="config-section runtime-section">
+        <header>
+          <div>
+            <h3>Generator target & prompts</h3>
+            <small>Supported local models execute at runtime. External providers are visible for roadmap clarity.</small>
+          </div>
+        </header>
+        <SelectField
+          label="Saved configuration"
+          value={config.chatConfigurationId}
+          options={[{ value: "", label: "Draft configuration" }, ...chatConfigurations.map((item) => ({ value: item.id, label: item.name }))]}
+          onChange={onSelectChatConfiguration}
+        />
+        <label>
+          Configuration name
+          <input
+            value={config.configurationName}
+            onChange={(event) => setConfig({ ...config, configurationName: event.target.value, chatConfigurationId: "" })}
+            placeholder="Workflow support assistant"
+          />
+        </label>
+        <label>
+          Description
+          <input
+            value={config.configurationDescription}
+            onChange={(event) => setConfig({ ...config, configurationDescription: event.target.value })}
+            placeholder="Short purpose for this preset"
+          />
+        </label>
+        <div className="config-two-column">
+          <SelectField
+            label="Generator provider"
+            value={config.generatorProvider}
+            options={generatorProviderOptions}
+            onChange={(generatorProvider) => setConfig({
+              ...config,
+              generatorProvider,
+              generatorModel: (generatorModelsByProvider[generatorProvider] || generatorModelsByProvider.Local)[0]
+            })}
+          />
+          <SelectField
+            label="Generator model"
+            value={config.generatorModel}
+            options={providerModels}
+            onChange={(generatorModel) => setConfig({ ...config, generatorModel })}
+          />
+        </div>
+        <SelectField
+          label="Response structure"
+          value={config.responseStructure}
+          options={responseStructures}
+          onChange={(responseStructure) => setConfig({ ...config, responseStructure })}
+        />
+        <div className="config-two-column">
+          <SelectField
+            label="Tone"
+            value={config.tone}
+            options={chatbotTones}
+            onChange={(tone) => setConfig({ ...config, tone })}
+          />
+          <label>
+            Humor level
+            <input
+              type="range"
+              min="0"
+              max="5"
+              value={config.humorLevel}
+              onChange={(event) => setConfig({ ...config, humorLevel: Number(event.target.value) })}
+            />
+            <strong>{config.humorLevel}/5</strong>
+          </label>
+        </div>
+        <label>
+          System prompt
+          <textarea
+            value={config.systemPrompt}
+            onChange={(event) => setConfig({ ...config, systemPrompt: event.target.value })}
+          />
+        </label>
+        <label>
+          Predefined prompt instructions
+          <textarea
+            value={config.predefinedPrompt}
+            onChange={(event) => setConfig({ ...config, predefinedPrompt: event.target.value })}
+          />
+        </label>
+        <div className="config-actions-row">
+          <button className="secondary-action" type="button" onClick={onResetConfiguration}><IconLabel icon={RefreshCw}>Reset</IconLabel></button>
+          <button className="secondary-action" type="button" onClick={onSaveConfiguration}><IconLabel icon={Plus}>Save as new</IconLabel></button>
+          <button className="primary-action" type="button" onClick={onUpdateConfiguration}><IconLabel icon={Save}>Update selected</IconLabel></button>
+        </div>
+        {configurationStatus && <p className="config-status-note">{configurationStatus}</p>}
+      </section>
     </aside>
   );
 }
-
 function CurrentRouteSummary({ config, selectedKnowledgeBase, metadata }) {
   const routeLabel = metadata?.route_label || config.route;
   const routeLevel = metadata?.route_level || answerModeFromRoute(config.route);
@@ -744,6 +1155,10 @@ function CurrentRouteSummary({ config, selectedKnowledgeBase, metadata }) {
         <div>
           <dt>Documents / chunks</dt>
           <dd>{selectedKnowledgeBase ? `${selectedKnowledgeBase.document_count} / ${selectedKnowledgeBase.chunk_count}` : "-"}</dd>
+        </div>
+        <div>
+          <dt>Query embedding</dt>
+          <dd>{selectedKnowledgeBase?.embedding_model || "Select a KB"}</dd>
         </div>
         <div>
           <dt>Complexity</dt>
@@ -791,6 +1206,8 @@ function TraceModal({ popup, onClose }) {
       context.metadata?.title,
       context.metadata?.document_id,
       context.metadata?.embedding_model,
+      context.metadata?.source_subquery,
+      context.metadata?.retrieval_step,
       context.mode
     ].filter(Boolean).join(" ").toLowerCase();
     return haystack.includes(sourceQuery.trim().toLowerCase());
@@ -819,7 +1236,7 @@ function TraceModal({ popup, onClose }) {
             <div className="empty-state source-empty-state">
               <strong>No source chunks</strong>
               <p>{message.metadata?.route_label || "This route"} did not retrieve knowledge-base context.</p>
-              <small>L1 Direct Generation intentionally returns no sources until a direct generator provider is configured.</small>
+              <small>L1 Direct Generation does not retrieve knowledge-base context, so there are no source chunks for that route.</small>
             </div>
           ) : (
             <div className="source-modal-grid">
@@ -841,7 +1258,8 @@ function TraceModal({ popup, onClose }) {
                   >
                     <span>{context.metadata?.source_type || "Chunk"}</span>
                     <strong>{context.metadata?.title || `Knowledge chunk ${context.rank}`}</strong>
-                    <small>{context.mode || message.metadata?.retrieval_mode || "retrieval"} · chunk {context.metadata?.chunk_index ?? context.rank}</small>
+                    <small>{context.mode || message.metadata?.retrieval_mode || "retrieval"} - chunk {context.metadata?.chunk_index ?? context.rank}</small>
+                    {context.metadata?.source_subquery && <small>Step {context.metadata?.subquery_index}: {context.metadata.source_subquery}</small>}
                     <em>{Math.round(Number(context.score || 0) * 100)}% match</em>
                   </button>
                 ))}
@@ -861,6 +1279,8 @@ function TraceModal({ popup, onClose }) {
                       <span>{Math.round(Number(selectedSource.score || 0) * 100)}% match</span>
                       <span>{selectedSource.mode || message.metadata?.retrieval_mode || "retrieval"}</span>
                       <span>Chunk {selectedSource.metadata?.chunk_index ?? "-"}</span>
+                      {selectedSource.metadata?.aggregated_rank != null && <span>Aggregated rank {selectedSource.metadata.aggregated_rank}</span>}
+                      {selectedSource.metadata?.retrieval_step && <span>{selectedSource.metadata.retrieval_step}</span>}
                       <span>{selectedSource.metadata?.embedding_model || "No embedding model"}</span>
                     </div>
                     <dl className="source-facts">
@@ -868,6 +1288,9 @@ function TraceModal({ popup, onClose }) {
                       <div><dt>Source ID</dt><dd>{selectedSource.metadata?.source_id || "-"}</dd></div>
                       <div><dt>Token count</dt><dd>{selectedSource.metadata?.token_count || selectedSource.metadata?.chunk_size || "-"}</dd></div>
                       <div><dt>Knowledge base</dt><dd>{selectedSource.metadata?.knowledge_base_id || message.metadata?.knowledge_base_name || "-"}</dd></div>
+                      <div><dt>Source subquery</dt><dd>{selectedSource.metadata?.source_subquery || "-"}</dd></div>
+                      <div><dt>Original rank</dt><dd>{selectedSource.metadata?.original_rank ?? "-"}</dd></div>
+                      <div><dt>Subquery coverage</dt><dd>{selectedSource.metadata?.subquery_coverage ?? "-"}</dd></div>
                     </dl>
                     <div className="source-text-preview">{selectedSource.text}</div>
                   </>
@@ -937,6 +1360,8 @@ function TraceSummary({ metadata }) {
       <div><dt>Complexity</dt><dd>{metadata.complexity_label || "-"}</dd></div>
       <div><dt>Retrieval</dt><dd>{metadata.retrieval_mode || "none"}</dd></div>
       <div><dt>Top K</dt><dd>{metadata.top_k ?? "-"}</dd></div>
+      <div><dt>Multi-step</dt><dd>{metadata.multi_step ? "Yes" : "No"}</dd></div>
+      <div><dt>Subqueries</dt><dd>{metadata.decomposed_queries?.length || 0}</dd></div>
       <div><dt>Latency</dt><dd>{metadata.latency_ms ? `${metadata.latency_ms} ms` : "-"}</dd></div>
       <div><dt>Knowledge base</dt><dd>{metadata.knowledge_base_name || "-"}</dd></div>
     </section>
@@ -1680,6 +2105,7 @@ function Metric({ label, value }) {
 function answerModeFromRoute(route) {
   if (route === "L1 Direct") return "direct";
   if (route === "L2 Simple RAG") return "simple_rag";
+  if (route === "L3 Complex RAG") return "complex_rag";
   return "adaptive";
 }
 
@@ -1687,6 +2113,117 @@ function retrievalModeValue(value) {
   if (value === "BM25") return "bm25";
   if (value === "Dense") return "dense";
   return "hybrid";
+}
+
+function retrievalModeLabel(value) {
+  if (value === "bm25") return "BM25";
+  if (value === "dense") return "Dense";
+  return "Hybrid";
+}
+
+function routeLabelFromMode(mode) {
+  if (mode === "direct") return "L1 Direct";
+  if (mode === "simple_rag") return "L2 Simple RAG";
+  if (mode === "complex_rag") return "L3 Complex RAG";
+  return "Adaptive";
+}
+
+function messagesFromChatRecords(records = []) {
+  let previousUserQuestion = "";
+  return records.map((record) => {
+    if (record.role === "user") {
+      previousUserQuestion = record.content;
+      return {
+        id: record.id,
+        role: "user",
+        content: record.content,
+        contexts: [],
+        metadata: record.metadata || {}
+      };
+    }
+    return {
+      id: record.id,
+      role: "assistant",
+      question: record.metadata?.question || previousUserQuestion,
+      content: record.content,
+      contexts: record.contexts || [],
+      metadata: record.metadata || {}
+    };
+  });
+}
+
+function applyChatConfigurationToDraft(current, record) {
+  return applyChatConfigurationSnapshotToDraft(current, chatConfigurationSnapshotFromRecord(record), record.id);
+}
+
+function applyChatConfigurationSnapshotToDraft(current, snapshot = {}, configurationId = "") {
+  const provider = generatorProviders.includes(snapshot.generator_provider) ? snapshot.generator_provider : defaultChatConfigurationDraft.generatorProvider;
+  const models = generatorModelsByProvider[provider] || generatorModelsByProvider.Local;
+  const model = models.includes(snapshot.generator_model) ? snapshot.generator_model : models[0];
+  return {
+    ...current,
+    chatConfigurationId: configurationId || snapshot.id || "",
+    configurationName: snapshot.name || defaultChatConfigurationDraft.configurationName,
+    configurationDescription: snapshot.description || "",
+    generatorProvider: provider,
+    generatorModel: model,
+    responseStructure: responseStructures.includes(snapshot.response_structure) ? snapshot.response_structure : defaultChatConfigurationDraft.responseStructure,
+    tone: chatbotTones.includes(snapshot.tone) ? snapshot.tone : defaultChatConfigurationDraft.tone,
+    humorLevel: clampNumber(snapshot.humor_level, defaultChatConfigurationDraft.humorLevel, 0, 5),
+    systemPrompt: snapshot.system_prompt || "",
+    predefinedPrompt: snapshot.predefined_prompt || ""
+  };
+}
+
+function chatConfigurationSnapshotFromRecord(record = {}) {
+  return {
+    id: record.id || "",
+    name: record.name,
+    description: record.description,
+    generator_provider: record.generator_provider,
+    generator_model: record.generator_model,
+    response_structure: record.response_structure,
+    tone: record.tone,
+    humor_level: record.humor_level,
+    system_prompt: record.system_prompt,
+    predefined_prompt: record.predefined_prompt,
+    metadata: record.metadata || {}
+  };
+}
+
+function chatConfigurationPayloadFromDraft(config) {
+  return {
+    name: config.configurationName || defaultChatConfigurationDraft.configurationName,
+    description: config.configurationDescription || "",
+    generator_provider: config.generatorProvider || defaultChatConfigurationDraft.generatorProvider,
+    generator_model: config.generatorModel || defaultChatConfigurationDraft.generatorModel,
+    response_structure: config.responseStructure || defaultChatConfigurationDraft.responseStructure,
+    tone: config.tone || defaultChatConfigurationDraft.tone,
+    humor_level: clampNumber(config.humorLevel, defaultChatConfigurationDraft.humorLevel, 0, 5),
+    system_prompt: config.systemPrompt || "",
+    predefined_prompt: config.predefinedPrompt || "",
+    metadata: { runtime: "configuration-only", actual_generator: "extractive" }
+  };
+}
+
+function isValidChatConfigurationDraft(config) {
+  return Boolean(
+    (config.chatConfigurationId || config.configurationName?.trim()) &&
+    config.generatorProvider &&
+    config.generatorModel &&
+    config.responseStructure &&
+    config.tone
+  );
+}
+function formatShortDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 function loadMainLayout() {

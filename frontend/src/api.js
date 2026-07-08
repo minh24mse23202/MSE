@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_ARAGBIZ_API_URL || "http://127.0.0.1:8000";
+﻿const API_BASE_URL = import.meta.env.VITE_ARAGBIZ_API_URL || "http://127.0.0.1:8000";
 
 export async function askQuestion(question, options = {}) {
   const response = await fetch(`${API_BASE_URL}/answer`, {
@@ -6,6 +6,7 @@ export async function askQuestion(question, options = {}) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       question,
+      conversation_id: options.conversationId || null,
       knowledge_base_id: options.knowledgeBaseId || null,
       mode: options.mode || "adaptive",
       retrieval_mode: options.retrievalMode || "hybrid",
@@ -16,6 +17,83 @@ export async function askQuestion(question, options = {}) {
   return response.json();
 }
 
+export async function listChatConversations({ query = "", section = "" } = {}) {
+  const params = new URLSearchParams();
+  if (query) params.set("query", query);
+  if (section) params.set("section", section);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(`${API_BASE_URL}/chat/conversations${suffix}`);
+  await assertOk(response, "Chat conversations request failed");
+  return response.json();
+}
+
+export async function createChatConversation(payload = {}) {
+  const response = await fetch(`${API_BASE_URL}/chat/conversations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  await assertOk(response, "Create chat conversation failed");
+  return response.json();
+}
+
+export async function updateChatConversation(conversationId, payload) {
+  const response = await fetch(`${API_BASE_URL}/chat/conversations/${conversationId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  await assertOk(response, "Update chat conversation failed");
+  return response.json();
+}
+
+export async function deleteChatConversation(conversationId) {
+  const response = await fetch(`${API_BASE_URL}/chat/conversations/${conversationId}`, {
+    method: "DELETE"
+  });
+  await assertOk(response, "Delete chat conversation failed");
+  return response.json();
+}
+
+export async function listChatMessages(conversationId) {
+  const response = await fetch(`${API_BASE_URL}/chat/conversations/${conversationId}/messages`);
+  await assertOk(response, "Chat messages request failed");
+  return response.json();
+}
+
+export async function listChatConfigurations() {
+  const response = await fetch(`${API_BASE_URL}/chat/configurations`);
+  await assertOk(response, "Chat configurations request failed");
+  return response.json();
+}
+
+export async function createChatConfiguration(payload) {
+  const response = await fetch(`${API_BASE_URL}/chat/configurations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  await assertOk(response, "Create chat configuration failed");
+  return response.json();
+}
+
+export async function updateChatConfiguration(configurationId, payload) {
+  const response = await fetch(`${API_BASE_URL}/chat/configurations/${configurationId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  await assertOk(response, "Update chat configuration failed");
+  return response.json();
+}
+
+export async function deleteChatConfiguration(configurationId) {
+  const response = await fetch(`${API_BASE_URL}/chat/configurations/${configurationId}`, {
+    method: "DELETE"
+  });
+  await assertOk(response, "Delete chat configuration failed");
+  return response.json();
+}
 export async function submitFeedback(payload) {
   const response = await fetch(`${API_BASE_URL}/feedback`, {
     method: "POST",

@@ -25,6 +25,7 @@ class AppConfig:
     knowledge_backend: str = "postgres"
     knowledge_database_url: str = "postgresql+psycopg://aragbiz:aragbiz@localhost:5432/aragbiz"
     knowledge_json_store: str = "data/knowledge/knowledge_store.json"
+    chat_json_store: str = "data/knowledge/chat_store.json"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dimension: int = 384
     use_sentence_transformers: bool = False
@@ -64,6 +65,10 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
         knowledge_json_store=os.getenv(
             "ARAGBIZ_KNOWLEDGE_STORE",
             raw.get("knowledge", {}).get("json_store", AppConfig.knowledge_json_store),
+        ),
+        chat_json_store=os.getenv(
+            "ARAGBIZ_CHAT_STORE",
+            raw.get("chat", {}).get("json_store", AppConfig.chat_json_store),
         ),
         embedding_model=raw.get("knowledge", {}).get("embedding_model", AppConfig.embedding_model),
         embedding_dimension=int(raw.get("knowledge", {}).get("embedding_dimension", AppConfig.embedding_dimension)),

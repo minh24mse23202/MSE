@@ -8,7 +8,8 @@ from pydantic import BaseModel, Field
 
 from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions, AnsweringError
 from aragbiz.config import load_config
-from aragbiz.factory import build_knowledge_service, build_sample_pipeline
+from aragbiz.chat import ChatConfigurationRecord, ChatConversationRecord, ChatMessageRecord, ChatSection
+from aragbiz.factory import build_chat_service, build_knowledge_service, build_sample_pipeline
 from aragbiz.feedback import append_feedback
 from aragbiz.schemas import RetrievalMode
 from aragbiz.knowledge import (
@@ -23,6 +24,7 @@ from aragbiz.knowledge import (
 config = load_config()
 pipeline = build_sample_pipeline(config)
 knowledge_service = build_knowledge_service(config)
+chat_service = build_chat_service(config)
 app = FastAPI(title="Adaptive RAG Business Workflow QA", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -33,10 +35,39 @@ app.add_middleware(
 )
 
 
+class ChatConfigurationRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+    description: str = ""
+    generator_provider: str = "Local"
+    generator_model: str = "extractive"
+    response_structure: str = "Concise answer with supporting details"
+    tone: str = "Professional"
+    humor_level: int = Field(0, ge=0, le=5)
+    system_prompt: str = ""
+    predefined_prompt: str = ""
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatConfigurationPatchRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    generator_provider: Optional[str] = None
+    generator_model: Optional[str] = None
+    response_structure: Optional[str] = None
+    tone: Optional[str] = None
+    humor_level: Optional[int] = Field(None, ge=0, le=5)
+    system_prompt: Optional[str] = None
+    predefined_prompt: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
 class AnswerRequest(BaseModel):
     question: str = Field(..., min_length=1)
+    conversation_id: Optional[str] = None
     knowledge_base_id: Optional[str] = None
-    mode: Literal["adaptive", "direct", "simple_rag"] = "adaptive"
+    chat_configuration_id: Optional[str] = None
+    chat_configuration: Optional[ChatConfigurationRequest] = None
+    mode: Literal["adaptive", "direct", "simple_rag", "complex_rag"] = "adaptive"
     retrieval_mode: RetrievalMode = "hybrid"
     top_k: int = Field(4, ge=1, le=50)
 
@@ -51,6 +82,7 @@ class ContextResponse(BaseModel):
 
 
 class AnswerResponse(BaseModel):
+    conversation_id: Optional[str] = None
     question: str
     answer: str
     contexts: List[ContextResponse]
@@ -63,6 +95,62 @@ class FeedbackRequest(BaseModel):
     rating: str
     comment: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatConversationCreateRequest(BaseModel):
+    title: str = "New chat"
+    knowledge_base_id: Optional[str] = None
+    chat_configuration_id: Optional[str] = None
+    route_mode: str = "adaptive"
+    retrieval_mode: str = "hybrid"
+    top_k: int = Field(4, ge=1, le=50)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatConversationPatchRequest(BaseModel):
+    title: Optional[str] = None
+    pinned: Optional[bool] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class ChatConfigurationResponse(BaseModel):
+    id: str
+    name: str
+    description: str
+    generator_provider: str
+    generator_model: str
+    response_structure: str
+    tone: str
+    humor_level: int
+    system_prompt: str
+    predefined_prompt: str
+    metadata: Dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class ChatConversationResponse(BaseModel):
+    id: str
+    title: str
+    pinned: bool
+    knowledge_base_id: Optional[str]
+    chat_configuration_id: Optional[str]
+    route_mode: str
+    retrieval_mode: str
+    top_k: int
+    metadata: Dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class ChatMessageResponse(BaseModel):
+    id: str
+    conversation_id: str
+    role: str
+    content: str
+    contexts: List[Dict[str, Any]]
+    metadata: Dict[str, Any]
+    created_at: str
 
 
 class KnowledgeBaseConfigurationRequest(BaseModel):
@@ -160,6 +248,9 @@ def answer(request: AnswerRequest) -> AnswerResponse:
         dense_weight=config.dense_weight,
     )
     try:
+        if request.conversation_id:
+            chat_service.get_conversation(request.conversation_id)
+        chat_configuration_id, chat_configuration = _resolve_answer_chat_configuration(request)
         result = service.answer(
             request.question,
             AnswerOptions(
@@ -167,26 +258,52 @@ def answer(request: AnswerRequest) -> AnswerResponse:
                 knowledge_base_id=request.knowledge_base_id,
                 retrieval_mode=request.retrieval_mode,
                 top_k=request.top_k,
+                chat_configuration=chat_configuration,
             ),
+        )
+        result.metadata["chat_configuration_id"] = chat_configuration_id
+        result.metadata["chat_configuration"] = chat_configuration
+        conversation = chat_service.ensure_conversation_for_question(
+            request.conversation_id,
+            request.question,
+            knowledge_base_id=request.knowledge_base_id,
+            route_mode=request.mode,
+            retrieval_mode=request.retrieval_mode,
+            top_k=request.top_k,
+            chat_configuration_id=chat_configuration_id,
+            chat_configuration=chat_configuration,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (AnsweringError, KnowledgeProcessingError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return AnswerResponse(
+    contexts = [
+        ContextResponse(
+            id=context.document.id,
+            score=context.score,
+            rank=context.rank,
+            mode=context.mode,
+            text=context.document.text,
+            metadata=context.document.metadata,
+        )
+        for context in result.contexts
+    ]
+    context_payloads = [
+        context.model_dump() if hasattr(context, "model_dump") else context.dict()
+        for context in contexts
+    ]
+    chat_service.append_answer_exchange(
+        conversation.id,
         question=result.question,
         answer=result.answer,
-        contexts=[
-            ContextResponse(
-                id=context.document.id,
-                score=context.score,
-                rank=context.rank,
-                mode=context.mode,
-                text=context.document.text,
-                metadata=context.document.metadata,
-            )
-            for context in result.contexts
-        ],
+        contexts=context_payloads,
+        metadata=result.metadata,
+    )
+    return AnswerResponse(
+        conversation_id=conversation.id,
+        question=result.question,
+        answer=result.answer,
+        contexts=contexts,
         metadata=result.metadata,
     )
 
@@ -196,6 +313,99 @@ def feedback(request: FeedbackRequest) -> Dict[str, str]:
     payload = request.model_dump() if hasattr(request, "model_dump") else request.dict()
     append_feedback(config.feedback_store, payload)
     return {"status": "recorded"}
+
+
+@app.get("/chat/configurations", response_model=List[ChatConfigurationResponse])
+def list_chat_configurations() -> List[ChatConfigurationResponse]:
+    return [_chat_configuration_response(record) for record in chat_service.list_configurations()]
+
+
+@app.post("/chat/configurations", response_model=ChatConfigurationResponse)
+def create_chat_configuration(request: ChatConfigurationRequest) -> ChatConfigurationResponse:
+    return _chat_configuration_response(chat_service.create_configuration(**_chat_configuration_payload(request)))
+
+
+@app.get("/chat/configurations/{configuration_id}", response_model=ChatConfigurationResponse)
+def get_chat_configuration(configuration_id: str) -> ChatConfigurationResponse:
+    try:
+        return _chat_configuration_response(chat_service.get_configuration(configuration_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.patch("/chat/configurations/{configuration_id}", response_model=ChatConfigurationResponse)
+def update_chat_configuration(configuration_id: str, request: ChatConfigurationPatchRequest) -> ChatConfigurationResponse:
+    payload = request.model_dump(exclude_unset=True) if hasattr(request, "model_dump") else request.dict(exclude_unset=True)
+    try:
+        return _chat_configuration_response(chat_service.update_configuration(configuration_id, **payload))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/chat/configurations/{configuration_id}")
+def delete_chat_configuration(configuration_id: str) -> Dict[str, str]:
+    try:
+        chat_service.delete_configuration(configuration_id)
+        return {"status": "deleted"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+@app.get("/chat/conversations", response_model=List[ChatConversationResponse])
+def list_chat_conversations(query: str = "", section: Optional[ChatSection] = None) -> List[ChatConversationResponse]:
+    return [_chat_conversation_response(record) for record in chat_service.list_conversations(query=query, section=section)]
+
+
+@app.post("/chat/conversations", response_model=ChatConversationResponse)
+def create_chat_conversation(request: ChatConversationCreateRequest) -> ChatConversationResponse:
+    return _chat_conversation_response(
+        chat_service.create_conversation(
+            request.title,
+            knowledge_base_id=request.knowledge_base_id,
+            route_mode=request.route_mode,
+            retrieval_mode=request.retrieval_mode,
+            top_k=request.top_k,
+            metadata=request.metadata,
+        )
+    )
+
+
+@app.get("/chat/conversations/{conversation_id}", response_model=ChatConversationResponse)
+def get_chat_conversation(conversation_id: str) -> ChatConversationResponse:
+    try:
+        return _chat_conversation_response(chat_service.get_conversation(conversation_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.patch("/chat/conversations/{conversation_id}", response_model=ChatConversationResponse)
+def update_chat_conversation(conversation_id: str, request: ChatConversationPatchRequest) -> ChatConversationResponse:
+    try:
+        return _chat_conversation_response(
+            chat_service.update_conversation(
+                conversation_id,
+                title=request.title,
+                pinned=request.pinned,
+                metadata=request.metadata,
+            )
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/chat/conversations/{conversation_id}")
+def delete_chat_conversation(conversation_id: str) -> Dict[str, str]:
+    try:
+        chat_service.delete_conversation(conversation_id)
+        return {"status": "deleted"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/chat/conversations/{conversation_id}/messages", response_model=List[ChatMessageResponse])
+def list_chat_messages(conversation_id: str) -> List[ChatMessageResponse]:
+    try:
+        return [_chat_message_response(record) for record in chat_service.list_messages(conversation_id)]
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/knowledge-bases", response_model=List[KnowledgeBaseResponse])
@@ -372,6 +582,60 @@ def get_processing_trace(knowledge_base_id: str) -> List[ProcessingTraceResponse
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+def _resolve_answer_chat_configuration(request: AnswerRequest) -> tuple[Optional[str], Dict[str, Any]]:
+    if request.chat_configuration_id:
+        record = chat_service.get_configuration(request.chat_configuration_id)
+        if request.chat_configuration is not None:
+            payload = _chat_configuration_payload(request.chat_configuration)
+            payload["id"] = record.id
+            return record.id, payload
+        return record.id, _chat_configuration_snapshot(record)
+    if request.chat_configuration is not None:
+        return None, _chat_configuration_payload(request.chat_configuration)
+    default_record = chat_service.default_configuration()
+    return default_record.id, _chat_configuration_snapshot(default_record)
+
+
+
+def _chat_configuration_payload(configuration: ChatConfigurationRequest) -> Dict[str, Any]:
+    payload = configuration.model_dump() if hasattr(configuration, "model_dump") else configuration.dict()
+    payload["humor_level"] = max(0, min(int(payload.get("humor_level", 0)), 5))
+    return payload
+
+
+def _chat_configuration_snapshot(record: ChatConfigurationRecord) -> Dict[str, Any]:
+    return {
+        "id": record.id,
+        "name": record.name,
+        "description": record.description,
+        "generator_provider": record.generator_provider,
+        "generator_model": record.generator_model,
+        "response_structure": record.response_structure,
+        "tone": record.tone,
+        "humor_level": record.humor_level,
+        "system_prompt": record.system_prompt,
+        "predefined_prompt": record.predefined_prompt,
+        "metadata": record.metadata,
+    }
+
+
+def _chat_configuration_response(record: ChatConfigurationRecord) -> ChatConfigurationResponse:
+    return ChatConfigurationResponse(
+        id=record.id,
+        name=record.name,
+        description=record.description,
+        generator_provider=record.generator_provider,
+        generator_model=record.generator_model,
+        response_structure=record.response_structure,
+        tone=record.tone,
+        humor_level=record.humor_level,
+        system_prompt=record.system_prompt,
+        predefined_prompt=record.predefined_prompt,
+        metadata=record.metadata,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
 def _knowledge_base_response(record: KnowledgeBaseRecord) -> KnowledgeBaseResponse:
     return KnowledgeBaseResponse(
         id=record.id,
@@ -385,6 +649,34 @@ def _knowledge_base_response(record: KnowledgeBaseRecord) -> KnowledgeBaseRespon
         updated_at=record.updated_at,
         metadata=record.metadata,
         error=record.error,
+    )
+
+
+def _chat_conversation_response(record: ChatConversationRecord) -> ChatConversationResponse:
+    return ChatConversationResponse(
+        id=record.id,
+        title=record.title,
+        pinned=record.pinned,
+        knowledge_base_id=record.knowledge_base_id,
+        chat_configuration_id=record.chat_configuration_id,
+        route_mode=record.route_mode,
+        retrieval_mode=record.retrieval_mode,
+        top_k=record.top_k,
+        metadata=record.metadata,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _chat_message_response(record: ChatMessageRecord) -> ChatMessageResponse:
+    return ChatMessageResponse(
+        id=record.id,
+        conversation_id=record.conversation_id,
+        role=record.role,
+        content=record.content,
+        contexts=record.contexts,
+        metadata=record.metadata,
+        created_at=record.created_at,
     )
 
 

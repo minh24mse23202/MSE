@@ -1,9 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import time
 from typing import List
 
-from aragbiz.generation import Generator
+from aragbiz.generation import GenerationRequest, Generator, PromptBuilder
 from aragbiz.retrieval import Retriever
 from aragbiz.routing import AdaptiveRouter
 from aragbiz.schemas import AnswerResult, RetrievedContext
@@ -21,7 +21,19 @@ class RAGPipeline:
         contexts = self.retriever.search(query, top_k=strategy.top_k, mode=strategy.retrieval_mode)
         if strategy.multi_step:
             contexts = self._multi_step_expand(query, contexts, strategy.top_k)
-        answer = self.generator.generate(query, contexts)
+        prompt = PromptBuilder().build(query, contexts, route_level="legacy_pipeline")
+        generation = self.generator.generate(
+            GenerationRequest(
+                query=query,
+                contexts=contexts,
+                chat_configuration={},
+                prompt=prompt.prompt,
+                prompt_preview=prompt.prompt_preview,
+                input_chars=prompt.input_chars,
+                route_level="legacy_pipeline",
+            )
+        )
+        answer = generation.answer
         elapsed_ms = round((time.perf_counter() - start) * 1000, 3)
         return AnswerResult(
             question=query,

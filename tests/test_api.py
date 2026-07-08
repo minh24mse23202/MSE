@@ -8,10 +8,18 @@ fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 import api.main as api_main
+from aragbiz.chat import ChatService, JsonChatRepository
 from aragbiz.knowledge import HashEmbeddingModel, KnowledgeService, OverlapChunker, SentenceTransformerEmbeddingModel
 from aragbiz.knowledge_store import JsonKnowledgeRepository
 
 app = api_main.app
+
+
+@pytest.fixture(autouse=True)
+def isolated_chat_service(monkeypatch, tmp_path):
+    service = ChatService(JsonChatRepository(str(tmp_path / "chat.json")))
+    monkeypatch.setattr(api_main, "chat_service", service)
+    return service
 
 
 def test_answer_endpoint_returns_direct_route_metadata():
@@ -26,10 +34,14 @@ def test_answer_endpoint_returns_direct_route_metadata():
     assert response.status_code == 200
     payload = response.json()
     assert payload["answer"]
+    assert payload["conversation_id"]
     assert payload["contexts"] == []
     assert payload["metadata"]["route_level"] == "l1_direct"
     assert payload["metadata"]["retrieval_used"] is False
     assert payload["metadata"]["trace_steps"]
+    messages = client.get(f"/chat/conversations/{payload['conversation_id']}/messages").json()
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert messages[1]["metadata"]["question"] == payload["question"]
 
 
 def test_answer_endpoint_rejects_adaptive_without_knowledge_base():
@@ -37,6 +49,142 @@ def test_answer_endpoint_rejects_adaptive_without_knowledge_base():
     response = client.post("/answer", json={"question": "How do I handle invoice mismatch?"})
     assert response.status_code == 400
     assert "Select a knowledge base" in response.json()["detail"]
+
+
+def test_answer_endpoint_rejects_complex_without_knowledge_base():
+    client = TestClient(app)
+    response = client.post(
+        "/answer",
+        json={
+            "question": "After payment verification, how should invoice mismatches be handled and who approves follow-up?",
+            "mode": "complex_rag",
+        },
+    )
+    assert response.status_code == 400
+    assert "L3 Complex RAG" in response.json()["detail"]
+
+
+def test_chat_conversation_crud_and_library_sections():
+    client = TestClient(app)
+    created = client.post("/chat/conversations", json={"title": "Invoice approval workflow"}).json()
+    assert created["title"] == "Invoice approval workflow"
+    assert created["pinned"] is False
+
+    recents = client.get("/chat/conversations?section=recents").json()
+    assert [item["id"] for item in recents] == [created["id"]]
+    assert client.get("/chat/conversations?query=invoice").json()[0]["id"] == created["id"]
+
+    pinned = client.patch(f"/chat/conversations/{created['id']}", json={"pinned": True}).json()
+    assert pinned["pinned"] is True
+    assert client.get("/chat/conversations?section=recents").json() == []
+    assert client.get("/chat/conversations?section=library").json()[0]["id"] == created["id"]
+
+    deleted = client.delete(f"/chat/conversations/{created['id']}")
+    assert deleted.status_code == 200
+    assert client.get("/chat/conversations").json() == []
+
+
+def test_chat_configuration_crud_and_answer_snapshot():
+    client = TestClient(app)
+    defaults = client.get("/chat/configurations").json()
+    assert defaults
+    assert defaults[0]["generator_model"] == "extractive"
+
+    created_response = client.post(
+        "/chat/configurations",
+        json={
+            "name": "Formal finance assistant",
+            "description": "Finance workflow tone",
+            "generator_provider": "Local",
+            "generator_model": "extractive",
+            "response_structure": "Step-by-step workflow guidance",
+            "tone": "Formal",
+            "humor_level": 1,
+            "system_prompt": "Answer as a finance workflow assistant.",
+            "predefined_prompt": "Use numbered steps.",
+        },
+    )
+    assert created_response.status_code == 200
+    created = created_response.json()
+    assert created["name"] == "Formal finance assistant"
+
+    updated = client.patch(
+        f"/chat/configurations/{created['id']}",
+        json={"tone": "Technical", "humor_level": 0},
+    ).json()
+    assert updated["tone"] == "Technical"
+    assert updated["humor_level"] == 0
+
+    answer_response = client.post(
+        "/answer",
+        json={
+            "question": "Can I start accepting payments while Wix Payments is under verification?",
+            "mode": "direct",
+            "chat_configuration_id": created["id"],
+        },
+    )
+    assert answer_response.status_code == 200
+    answer = answer_response.json()
+    assert answer["metadata"]["chat_configuration_id"] == created["id"]
+    assert answer["metadata"]["chat_configuration"]["tone"] == "Technical"
+    assert answer["metadata"]["configured_generator"]["model"] == "extractive"
+    assert answer["metadata"]["actual_generator"] == {"provider": "Local", "model": "extractive"}
+    assert answer["metadata"]["generation_status"] == "completed"
+    assert any(step["step"] == "Prompt builder" for step in answer["metadata"]["trace_steps"])
+    assert any(step["step"] == "Generator execution" for step in answer["metadata"]["trace_steps"])
+
+    conversation = client.get(f"/chat/conversations/{answer['conversation_id']}").json()
+    assert conversation["chat_configuration_id"] == created["id"]
+    assert conversation["metadata"]["chat_configuration"]["generator_model"] == "extractive"
+
+    unsupported = client.post(
+        "/chat/configurations",
+        json={
+            "name": "OpenAI draft",
+            "generator_provider": "OpenAI",
+            "generator_model": "gpt-4.1-mini",
+        },
+    ).json()
+    unsupported_answer = client.post(
+        "/answer",
+        json={
+            "question": "Can I start accepting payments while Wix Payments is under verification?",
+            "mode": "direct",
+            "chat_configuration_id": unsupported["id"],
+        },
+    )
+    assert unsupported_answer.status_code == 400
+    assert "not implemented" in unsupported_answer.json()["detail"]
+
+    deleted = client.delete(f"/chat/configurations/{created['id']}")
+    assert deleted.status_code == 200
+    missing = client.post(
+        "/answer",
+        json={
+            "question": "Can I start accepting payments while Wix Payments is under verification?",
+            "mode": "direct",
+            "chat_configuration_id": created["id"],
+        },
+    )
+    assert missing.status_code == 404
+
+def test_answer_appends_to_existing_conversation():
+    client = TestClient(app)
+    conversation = client.post("/chat/conversations", json={"title": "Existing chat"}).json()
+    response = client.post(
+        "/answer",
+        json={
+            "conversation_id": conversation["id"],
+            "question": "Can I start accepting payments while Wix Payments is under verification?",
+            "mode": "direct",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["conversation_id"] == conversation["id"]
+    messages = client.get(f"/chat/conversations/{conversation['id']}/messages").json()
+    assert len(messages) == 2
+    assert messages[0]["content"].startswith("Can I start accepting")
 
 
 def test_knowledge_base_endpoints_ingest_upload(monkeypatch, tmp_path):
@@ -198,6 +346,28 @@ def test_knowledge_document_crud_and_answer_selection(monkeypatch, tmp_path):
     assert answer["metadata"]["route_level"] == "l2_simple_rag"
     assert answer["metadata"]["retrieval_mode"] == "bm25"
     assert answer["contexts"]
+
+    complex_question = "After invoice mismatch detection, what follow-up steps are needed and who owns approvals?"
+    complex_response = client.post(
+        "/answer",
+        json={
+            "question": complex_question,
+            "knowledge_base_id": kb["id"],
+            "mode": "complex_rag",
+            "retrieval_mode": "bm25",
+            "top_k": 2,
+        },
+    )
+    assert complex_response.status_code == 200
+    complex_answer = complex_response.json()
+    assert complex_answer["metadata"]["route_level"] == "l3_complex_rag"
+    assert complex_answer["metadata"]["multi_step"] is True
+    assert complex_answer["metadata"]["decomposed_queries"][-1] == complex_question
+    assert complex_answer["metadata"]["retrieval_steps"]
+    assert complex_answer["metadata"]["aggregation_summary"]["selected_context_count"] == len(complex_answer["contexts"])
+    assert complex_answer["contexts"]
+    assert complex_answer["contexts"][0]["metadata"]["source_subquery"]
+    assert complex_answer["contexts"][0]["metadata"]["aggregated_rank"] == 1
 
     deleted = client.delete(f"/knowledge-bases/{kb['id']}/documents/{document['id']}")
     assert deleted.status_code == 200

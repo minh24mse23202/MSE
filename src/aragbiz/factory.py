@@ -10,6 +10,7 @@ from aragbiz.classifier import (
     QueryClassifier,
     T5QueryClassifier,
 )
+from aragbiz.chat import ChatService, JsonChatRepository, PostgresChatRepository
 from aragbiz.config import AppConfig, load_config
 from aragbiz.data import load_documents_jsonl, load_qac_jsonl, records_to_documents
 from aragbiz.generation import ExtractiveGenerator
@@ -85,6 +86,18 @@ def build_knowledge_service(config: Optional[AppConfig] = None) -> KnowledgeServ
             use_sentence_transformers=config.use_sentence_transformers,
         ),
     )
+
+
+def build_chat_service(config: Optional[AppConfig] = None) -> ChatService:
+    config = config or load_config()
+    if config.knowledge_backend.lower() == "json":
+        repository = JsonChatRepository(config.chat_json_store)
+    else:
+        try:
+            repository = PostgresChatRepository(config.knowledge_database_url)
+        except Exception:
+            repository = JsonChatRepository(config.chat_json_store)
+    return ChatService(repository=repository)
 
 
 def _is_t5_artifact(model_path: Path) -> bool:
