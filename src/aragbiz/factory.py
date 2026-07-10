@@ -10,9 +10,11 @@ from aragbiz.classifier import (
     QueryClassifier,
     T5QueryClassifier,
 )
+from aragbiz.answering import AdaptiveRAGAnswerService
 from aragbiz.chat import ChatService, JsonChatRepository, PostgresChatRepository
 from aragbiz.config import AppConfig, load_config
 from aragbiz.data import load_documents_jsonl, load_qac_jsonl, records_to_documents
+from aragbiz.evaluation import EvaluationService, JsonEvaluationRepository, PostgresEvaluationRepository
 from aragbiz.generation import ExtractiveGenerator
 from aragbiz.knowledge import KnowledgeService, OverlapChunker, build_embedder
 from aragbiz.knowledge_store import JsonKnowledgeRepository, PostgresKnowledgeRepository
@@ -98,6 +100,36 @@ def build_chat_service(config: Optional[AppConfig] = None) -> ChatService:
         except Exception:
             repository = JsonChatRepository(config.chat_json_store)
     return ChatService(repository=repository)
+
+
+def build_evaluation_service(
+    config: Optional[AppConfig] = None,
+    *,
+    knowledge_service: Optional[KnowledgeService] = None,
+    pipeline: Optional[RAGPipeline] = None,
+) -> EvaluationService:
+    config = config or load_config()
+    knowledge_service = knowledge_service or build_knowledge_service(config)
+    pipeline = pipeline or build_sample_pipeline(config)
+    if config.knowledge_backend.lower() == "json":
+        repository = JsonEvaluationRepository(config.evaluation_json_store)
+    else:
+        try:
+            repository = PostgresEvaluationRepository(config.knowledge_database_url)
+        except Exception:
+            repository = JsonEvaluationRepository(config.evaluation_json_store)
+    answer_service = AdaptiveRAGAnswerService(
+        router=pipeline.router,
+        generator=pipeline.generator,
+        knowledge_service=knowledge_service,
+        bm25_weight=config.bm25_weight,
+        dense_weight=config.dense_weight,
+    )
+    return EvaluationService(
+        repository=repository,
+        answer_service=answer_service,
+        dataset_path=existing_dataset_path(config),
+    )
 
 
 def _is_t5_artifact(model_path: Path) -> bool:

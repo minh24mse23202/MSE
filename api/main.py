@@ -9,7 +9,8 @@ from pydantic import BaseModel, Field
 from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions, AnsweringError
 from aragbiz.config import load_config
 from aragbiz.chat import ChatConfigurationRecord, ChatConversationRecord, ChatMessageRecord, ChatSection
-from aragbiz.factory import build_chat_service, build_knowledge_service, build_sample_pipeline
+from aragbiz.evaluation import EvaluationCaseRecord, EvaluationRunConfig, EvaluationRunRecord
+from aragbiz.factory import build_chat_service, build_evaluation_service, build_knowledge_service, build_sample_pipeline
 from aragbiz.feedback import append_feedback
 from aragbiz.schemas import RetrievalMode
 from aragbiz.knowledge import (
@@ -25,6 +26,7 @@ config = load_config()
 pipeline = build_sample_pipeline(config)
 knowledge_service = build_knowledge_service(config)
 chat_service = build_chat_service(config)
+evaluation_service = build_evaluation_service(config, knowledge_service=knowledge_service, pipeline=pipeline)
 app = FastAPI(title="Adaptive RAG Business Workflow QA", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -150,6 +152,56 @@ class ChatMessageResponse(BaseModel):
     content: str
     contexts: List[Dict[str, Any]]
     metadata: Dict[str, Any]
+    created_at: str
+
+
+class EvaluationRunRequest(BaseModel):
+    name: str = "Adaptive vs Static L2 evaluation"
+    knowledge_base_id: str = ""
+    chat_configuration_id: Optional[str] = None
+    chat_configuration: Optional[ChatConfigurationRequest] = None
+    retrieval_mode: RetrievalMode = "hybrid"
+    top_k: int = Field(4, ge=1, le=50)
+    limit: int = Field(20, ge=0, le=100)
+    compare_baseline: bool = True
+
+
+class EvaluationRunResponse(BaseModel):
+    id: str
+    name: str
+    dataset_name: str
+    status: str
+    knowledge_base_id: str
+    knowledge_base_name: str
+    chat_configuration_id: Optional[str]
+    retrieval_mode: str
+    top_k: int
+    limit: int
+    compare_baseline: bool
+    metrics: Dict[str, Any]
+    baseline_metrics: Dict[str, Any]
+    route_distribution: Dict[str, int]
+    baseline_route_distribution: Dict[str, int]
+    metadata: Dict[str, Any]
+    error: Optional[str]
+    created_at: str
+    finished_at: str
+
+
+class EvaluationCaseResponse(BaseModel):
+    id: str
+    run_id: str
+    record_id: str
+    question: str
+    expected_answer: str
+    complexity_label: str
+    adaptive_answer: str
+    static_answer: str
+    adaptive_contexts: List[Dict[str, Any]]
+    static_contexts: List[Dict[str, Any]]
+    adaptive_metadata: Dict[str, Any]
+    static_metadata: Dict[str, Any]
+    metrics: Dict[str, Any]
     created_at: str
 
 
@@ -408,6 +460,59 @@ def list_chat_messages(conversation_id: str) -> List[ChatMessageResponse]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/evaluation/runs", response_model=List[EvaluationRunResponse])
+def list_evaluation_runs() -> List[EvaluationRunResponse]:
+    return [_evaluation_run_response(record) for record in evaluation_service.list_runs()]
+
+
+@app.post("/evaluation/runs", response_model=EvaluationRunResponse)
+def create_evaluation_run(request: EvaluationRunRequest) -> EvaluationRunResponse:
+    try:
+        chat_configuration_id, chat_configuration = _resolve_chat_configuration(request.chat_configuration_id, request.chat_configuration)
+        run = evaluation_service.run(
+            EvaluationRunConfig(
+                name=request.name,
+                knowledge_base_id=request.knowledge_base_id,
+                chat_configuration_id=chat_configuration_id,
+                chat_configuration=chat_configuration,
+                retrieval_mode=request.retrieval_mode,
+                top_k=request.top_k,
+                limit=request.limit,
+                compare_baseline=request.compare_baseline,
+            )
+        )
+        return _evaluation_run_response(run)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (AnsweringError, KnowledgeProcessingError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/evaluation/runs/{run_id}", response_model=EvaluationRunResponse)
+def get_evaluation_run(run_id: str) -> EvaluationRunResponse:
+    try:
+        return _evaluation_run_response(evaluation_service.get_run(run_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/evaluation/runs/{run_id}/cases", response_model=List[EvaluationCaseResponse])
+def list_evaluation_cases(run_id: str) -> List[EvaluationCaseResponse]:
+    try:
+        return [_evaluation_case_response(record) for record in evaluation_service.list_cases(run_id)]
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/evaluation/runs/{run_id}")
+def delete_evaluation_run(run_id: str) -> Dict[str, str]:
+    try:
+        evaluation_service.delete_run(run_id)
+        return {"status": "deleted"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/knowledge-bases", response_model=List[KnowledgeBaseResponse])
 def list_knowledge_bases() -> List[KnowledgeBaseResponse]:
     return [_knowledge_base_response(record) for record in knowledge_service.list_knowledge_bases()]
@@ -583,18 +688,24 @@ def get_processing_trace(knowledge_base_id: str) -> List[ProcessingTraceResponse
 
 
 def _resolve_answer_chat_configuration(request: AnswerRequest) -> tuple[Optional[str], Dict[str, Any]]:
-    if request.chat_configuration_id:
-        record = chat_service.get_configuration(request.chat_configuration_id)
-        if request.chat_configuration is not None:
-            payload = _chat_configuration_payload(request.chat_configuration)
+    return _resolve_chat_configuration(request.chat_configuration_id, request.chat_configuration)
+
+
+def _resolve_chat_configuration(
+    chat_configuration_id: Optional[str],
+    chat_configuration: Optional[ChatConfigurationRequest],
+) -> tuple[Optional[str], Dict[str, Any]]:
+    if chat_configuration_id:
+        record = chat_service.get_configuration(chat_configuration_id)
+        if chat_configuration is not None:
+            payload = _chat_configuration_payload(chat_configuration)
             payload["id"] = record.id
             return record.id, payload
         return record.id, _chat_configuration_snapshot(record)
-    if request.chat_configuration is not None:
-        return None, _chat_configuration_payload(request.chat_configuration)
+    if chat_configuration is not None:
+        return None, _chat_configuration_payload(chat_configuration)
     default_record = chat_service.default_configuration()
     return default_record.id, _chat_configuration_snapshot(default_record)
-
 
 
 def _chat_configuration_payload(configuration: ChatConfigurationRequest) -> Dict[str, Any]:
@@ -635,6 +746,49 @@ def _chat_configuration_response(record: ChatConfigurationRecord) -> ChatConfigu
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
+
+def _evaluation_run_response(record: EvaluationRunRecord) -> EvaluationRunResponse:
+    return EvaluationRunResponse(
+        id=record.id,
+        name=record.name,
+        dataset_name=record.dataset_name,
+        status=record.status,
+        knowledge_base_id=record.knowledge_base_id,
+        knowledge_base_name=record.knowledge_base_name,
+        chat_configuration_id=record.chat_configuration_id,
+        retrieval_mode=record.retrieval_mode,
+        top_k=record.top_k,
+        limit=record.limit,
+        compare_baseline=record.compare_baseline,
+        metrics=record.metrics,
+        baseline_metrics=record.baseline_metrics,
+        route_distribution=record.route_distribution,
+        baseline_route_distribution=record.baseline_route_distribution,
+        metadata=record.metadata,
+        error=record.error,
+        created_at=record.created_at,
+        finished_at=record.finished_at,
+    )
+
+
+def _evaluation_case_response(record: EvaluationCaseRecord) -> EvaluationCaseResponse:
+    return EvaluationCaseResponse(
+        id=record.id,
+        run_id=record.run_id,
+        record_id=record.record_id,
+        question=record.question,
+        expected_answer=record.expected_answer,
+        complexity_label=record.complexity_label,
+        adaptive_answer=record.adaptive_answer,
+        static_answer=record.static_answer,
+        adaptive_contexts=record.adaptive_contexts,
+        static_contexts=record.static_contexts,
+        adaptive_metadata=record.adaptive_metadata,
+        static_metadata=record.static_metadata,
+        metrics=record.metrics,
+        created_at=record.created_at,
+    )
+
 
 def _knowledge_base_response(record: KnowledgeBaseRecord) -> KnowledgeBaseResponse:
     return KnowledgeBaseResponse(

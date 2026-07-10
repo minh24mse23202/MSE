@@ -10,7 +10,9 @@ export async function askQuestion(question, options = {}) {
       knowledge_base_id: options.knowledgeBaseId || null,
       mode: options.mode || "adaptive",
       retrieval_mode: options.retrievalMode || "hybrid",
-      top_k: options.topK || 4
+      top_k: options.topK || 4,
+      chat_configuration_id: options.chatConfigurationId || null,
+      chat_configuration: options.chatConfiguration || null
     })
   });
   await assertOk(response, "Answer request failed");
@@ -92,6 +94,42 @@ export async function deleteChatConfiguration(configurationId) {
     method: "DELETE"
   });
   await assertOk(response, "Delete chat configuration failed");
+  return response.json();
+}
+
+export async function listEvaluationRuns() {
+  const response = await fetch(`${API_BASE_URL}/evaluation/runs`);
+  await assertOk(response, "Evaluation runs request failed");
+  return response.json();
+}
+
+export async function createEvaluationRun(payload) {
+  const response = await fetch(`${API_BASE_URL}/evaluation/runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  await assertOk(response, "Create evaluation run failed");
+  return response.json();
+}
+
+export async function getEvaluationRun(runId) {
+  const response = await fetch(`${API_BASE_URL}/evaluation/runs/${runId}`);
+  await assertOk(response, "Evaluation run request failed");
+  return response.json();
+}
+
+export async function listEvaluationCases(runId) {
+  const response = await fetch(`${API_BASE_URL}/evaluation/runs/${runId}/cases`);
+  await assertOk(response, "Evaluation cases request failed");
+  return response.json();
+}
+
+export async function deleteEvaluationRun(runId) {
+  const response = await fetch(`${API_BASE_URL}/evaluation/runs/${runId}`, {
+    method: "DELETE"
+  });
+  await assertOk(response, "Delete evaluation run failed");
   return response.json();
 }
 export async function submitFeedback(payload) {

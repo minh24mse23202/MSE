@@ -1996,6 +1996,93 @@ th {
   color: #188038;
 }
 
+.evaluation-control-panel,
+.evaluation-results-panel,
+.evaluation-detail-page {
+  min-width: 0;
+}
+
+.evaluation-form {
+  margin-top: 14px;
+}
+
+.evaluation-check-row {
+  align-self: end;
+  min-height: 44px;
+}
+
+.evaluation-kb-summary {
+  margin: 0;
+}
+
+.evaluation-run-list {
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.run-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(113, 144, 176, 0.16);
+}
+
+.run-card-select {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.evaluation-run-detail {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.evaluation-metrics-grid {
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+}
+
+.evaluation-case-table {
+  max-height: 430px;
+  overflow: auto;
+}
+
+.evaluation-case-table td:first-child {
+  max-width: 380px;
+  white-space: normal;
+}
+
+.evaluation-case-summary h2 {
+  margin: 4px 0 16px;
+  font-size: 22px;
+}
+
+.evaluation-answer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.evaluation-answer-grid p,
+.evaluation-detail-page .run-card p {
+  margin: 0;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
 @keyframes splash-progress {
   0% {
     transform: translateX(-110%);

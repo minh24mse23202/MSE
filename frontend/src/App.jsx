@@ -39,26 +39,32 @@ import {
 } from "lucide-react";
 import {
   askQuestion,
+  createChatConfiguration,
+  createEvaluationRun,
   createKnowledgeBase,
   deleteChatConversation,
+  deleteEvaluationRun,
   deleteKnowledgeBase,
   deleteKnowledgeDocument,
   getKnowledgeProcessingTrace,
   ingestWebsiteSource,
+  listChatConfigurations,
   listChatConversations,
   listChatMessages,
+  listEvaluationCases,
+  listEvaluationRuns,
   listKnowledgeChunks,
   listKnowledgeDocuments,
   listKnowledgeBases,
   reindexKnowledgeBase,
   submitFeedback,
+  updateChatConfiguration,
   updateChatConversation,
   updateKnowledgeBase,
   uploadKnowledgeSource
 } from "./api.js";
 import {
   architectureLayers,
-  evaluationRuns,
   feedbackRows,
   seedMessages,
   tokenStats
@@ -189,6 +195,7 @@ export default function App() {
   const [screen, setScreen] = useState(() => (hasSeenSplash() ? "login" : "splash"));
   const [signedIn, setSignedIn] = useState(false);
   const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState("");
+  const [selectedEvaluationDetail, setSelectedEvaluationDetail] = useState(null);
 
   useEffect(() => {
     if (screen !== "splash") return undefined;
@@ -230,8 +237,22 @@ export default function App() {
           onSelectKnowledgeBase={setSelectedKnowledgeBaseId}
         />
       )}
-      {screen === "evaluation" && <EvaluationScreen onOpenDetail={() => setScreen("evaluation-detail")} />}
-      {screen === "evaluation-detail" && <EvaluationDetailScreen />}
+      {screen === "evaluation" && (
+        <EvaluationScreen
+          selectedKnowledgeBaseId={selectedKnowledgeBaseId}
+          onSelectKnowledgeBase={setSelectedKnowledgeBaseId}
+          onOpenDetail={(run, evaluationCase) => {
+            setSelectedEvaluationDetail({ run, evaluationCase });
+            setScreen("evaluation-detail");
+          }}
+        />
+      )}
+      {screen === "evaluation-detail" && (
+        <EvaluationDetailScreen
+          detail={selectedEvaluationDetail}
+          onBack={() => setScreen("evaluation")}
+        />
+      )}
       {screen === "analytics" && <AnalyticsScreen />}
     </Shell>
   );
@@ -1957,53 +1978,329 @@ function AddKnowledgeBaseModal({
   );
 }
 
-function EvaluationScreen({ onOpenDetail }) {
+function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOpenDetail }) {
+  const [knowledgeBases, setKnowledgeBases] = useState([]);
+  const [chatConfigurations, setChatConfigurations] = useState([]);
+  const [runs, setRuns] = useState([]);
+  const [cases, setCases] = useState([]);
+  const [selectedRunId, setSelectedRunId] = useState("");
+  const [form, setForm] = useState({
+    knowledgeBaseId: selectedKnowledgeBaseId || "",
+    chatConfigurationId: "",
+    retrievalMode: "hybrid",
+    topK: 4,
+    limit: 20,
+    compareBaseline: true
+  });
+  const [status, setStatus] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRunning, setIsRunning] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadEvaluationData() {
+      setIsLoading(true);
+      try {
+        const [nextKnowledgeBases, nextConfigurations, nextRuns] = await Promise.all([
+          listKnowledgeBases(),
+          listChatConfigurations(),
+          listEvaluationRuns()
+        ]);
+        if (cancelled) return;
+        setKnowledgeBases(nextKnowledgeBases);
+        setChatConfigurations(nextConfigurations);
+        setRuns(nextRuns);
+        setForm((current) => ({
+          ...current,
+          knowledgeBaseId: current.knowledgeBaseId || selectedKnowledgeBaseId || nextKnowledgeBases[0]?.id || "",
+          chatConfigurationId: current.chatConfigurationId || nextConfigurations[0]?.id || ""
+        }));
+        setSelectedRunId((current) => current || nextRuns[0]?.id || "");
+      } catch (error) {
+        if (!cancelled) setStatus(`Evaluation data load failed: ${error.message}`);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+    loadEvaluationData();
+    return () => { cancelled = true; };
+  }, [selectedKnowledgeBaseId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadCases() {
+      if (!selectedRunId) {
+        setCases([]);
+        return;
+      }
+      try {
+        const nextCases = await listEvaluationCases(selectedRunId);
+        if (!cancelled) setCases(nextCases);
+      } catch (error) {
+        if (!cancelled) setStatus(`Evaluation case load failed: ${error.message}`);
+      }
+    }
+    loadCases();
+    return () => { cancelled = true; };
+  }, [selectedRunId]);
+
+  const selectedKnowledgeBase = knowledgeBases.find((item) => item.id === form.knowledgeBaseId);
+  const selectedRun = runs.find((run) => run.id === selectedRunId);
+
+  async function refreshRuns(nextSelectedRunId = selectedRunId) {
+    const nextRuns = await listEvaluationRuns();
+    setRuns(nextRuns);
+    setSelectedRunId(nextSelectedRunId || nextRuns[0]?.id || "");
+  }
+
+  async function startEvaluation() {
+    if (!form.knowledgeBaseId) {
+      setStatus("Select a knowledge base before running evaluation.");
+      return;
+    }
+    setIsRunning(true);
+    setStatus("Running evaluation...");
+    try {
+      const run = await createEvaluationRun({
+        name: `Adaptive vs Static L2 - ${new Date().toLocaleString()}`,
+        knowledge_base_id: form.knowledgeBaseId,
+        chat_configuration_id: form.chatConfigurationId || null,
+        retrieval_mode: form.retrievalMode,
+        top_k: Number(form.topK),
+        limit: Number(form.limit),
+        compare_baseline: form.compareBaseline
+      });
+      onSelectKnowledgeBase(form.knowledgeBaseId);
+      await refreshRuns(run.id);
+      setStatus(`Evaluation completed: ${run.metadata?.record_count || run.limit} case(s).`);
+    } catch (error) {
+      setStatus(`Evaluation failed: ${error.message}`);
+    } finally {
+      setIsRunning(false);
+    }
+  }
+
+  async function removeSelectedRun() {
+    if (!selectedRun) return;
+    const confirmed = window.confirm(`Delete evaluation run "${selectedRun.name}"?`);
+    if (!confirmed) return;
+    try {
+      await deleteEvaluationRun(selectedRun.id);
+      setCases([]);
+      await refreshRuns("");
+      setStatus("Evaluation run deleted.");
+    } catch (error) {
+      setStatus(`Delete evaluation run failed: ${error.message}`);
+    }
+  }
+
   return (
     <section className="evaluation-grid">
-      <section className="panel">
-        <PanelHeader eyebrow="Panel" title="Dataset" />
-        <Metric label="Dataset" value="WixQA expert-written" />
-        <Metric label="Records" value="200" />
-        <Metric label="KB documents" value="6,221" />
-        <Metric label="Complexity labels" value="simple / moderate / complex" />
-      </section>
-      <section className="panel">
-        <PanelHeader eyebrow="Panel" title="Evaluation" />
-        <div className="run-list">
-          {evaluationRuns.map((run) => (
-            <article key={run.id} className="run-card">
-              <div>
-                <strong>{run.dataset}</strong>
-                <small>{run.classifier} - {run.status}</small>
-              </div>
-              <dl>
-                <Metric label="Routing" value={run.routingAccuracy} />
-                <Metric label="Context" value={run.contextRelevance} />
-                <Metric label="Faithfulness" value={run.faithfulness} />
-                <Metric label="Latency" value={run.latency} />
-              </dl>
-              <button className="secondary-action" onClick={onOpenDetail}><IconLabel icon={GitBranch}>Open RAGXplain detail</IconLabel></button>
-            </article>
-          ))}
+      <section className="panel evaluation-control-panel">
+        <PanelHeader eyebrow="Dataset" title="Benchmark setup" />
+        <Metric label="Dataset" value="WixQA / processed QAC" />
+        <Metric label="Default limit" value="20 cases" />
+        <Metric label="Max sync run" value="100 cases" />
+        <Metric label="Labels" value="simple / moderate / complex" />
+        <div className="config-section runtime-section evaluation-form">
+          <SelectField
+            label="Knowledge base"
+            value={form.knowledgeBaseId}
+            options={[{ value: "", label: "Select Knowledge Base" }, ...knowledgeBases.map((item) => ({ value: item.id, label: item.name }))]}
+            onChange={(knowledgeBaseId) => {
+              setForm({ ...form, knowledgeBaseId });
+              onSelectKnowledgeBase(knowledgeBaseId);
+            }}
+          />
+          <SelectField
+            label="Chat configuration"
+            value={form.chatConfigurationId}
+            options={[{ value: "", label: "Default configuration" }, ...chatConfigurations.map((item) => ({ value: item.id, label: item.name }))]}
+            onChange={(chatConfigurationId) => setForm({ ...form, chatConfigurationId })}
+          />
+          <div className="config-two-column">
+            <SelectField
+              label="Retrieval mode"
+              value={form.retrievalMode}
+              options={[{ value: "hybrid", label: "Hybrid" }, { value: "bm25", label: "BM25" }, { value: "dense", label: "Dense" }]}
+              onChange={(retrievalMode) => setForm({ ...form, retrievalMode })}
+            />
+            <label>
+              Top K
+              <input type="number" min="1" max="50" value={form.topK} onChange={(event) => setForm({ ...form, topK: Number(event.target.value) })} />
+            </label>
+          </div>
+          <div className="config-two-column">
+            <label>
+              Dataset limit
+              <input type="number" min="0" max="100" value={form.limit} onChange={(event) => setForm({ ...form, limit: Number(event.target.value) })} />
+            </label>
+            <label className="check-row evaluation-check-row">
+              <input
+                type="checkbox"
+                checked={form.compareBaseline}
+                onChange={(event) => setForm({ ...form, compareBaseline: event.target.checked })}
+              />
+              Compare static L2
+            </label>
+          </div>
+          {selectedKnowledgeBase && (
+            <dl className="source-facts evaluation-kb-summary">
+              <div><dt>Status</dt><dd>{selectedKnowledgeBase.status}</dd></div>
+              <div><dt>Documents</dt><dd>{selectedKnowledgeBase.document_count}</dd></div>
+              <div><dt>Chunks</dt><dd>{selectedKnowledgeBase.chunk_count}</dd></div>
+              <div><dt>Embedding</dt><dd>{selectedKnowledgeBase.embedding_model || "-"}</dd></div>
+            </dl>
+          )}
+          <button className="primary-action" type="button" onClick={startEvaluation} disabled={isRunning || isLoading}>
+            <IconLabel icon={isRunning ? RefreshCw : ClipboardList}>{isRunning ? "Running..." : "Run evaluation"}</IconLabel>
+          </button>
+          {status && <p className="muted-text compact-muted">{status}</p>}
         </div>
+      </section>
+      <section className="panel evaluation-results-panel">
+        <PanelHeader eyebrow="Evaluation" title="Runs & results" />
+        {runs.length === 0 ? (
+          <div className="empty-state"><strong>No evaluation runs yet</strong><p>Run a bounded benchmark to compare Adaptive RAG with static L2 Simple RAG.</p></div>
+        ) : (
+          <div className="run-list evaluation-run-list">
+            {runs.map((run) => (
+              <article key={run.id} className={`run-card ${run.id === selectedRunId ? "selected" : ""}`}>
+                <button type="button" className="run-card-select" onClick={() => setSelectedRunId(run.id)}>
+                  <div>
+                    <strong>{run.name}</strong>
+                    <small>{run.dataset_name} - {run.status} - {run.metadata?.record_count ?? run.limit} cases</small>
+                  </div>
+                  <dl>
+                    <Metric label="Routing" value={formatPercentMetric(run.metrics?.routing_accuracy)} />
+                    <Metric label="Context" value={formatPercentMetric(run.metrics?.context_relevance)} />
+                    <Metric label="Faithfulness" value={formatPercentMetric(run.metrics?.faithfulness_proxy)} />
+                    <Metric label="Latency" value={`${formatNumber(run.metrics?.average_latency_ms)} ms`} />
+                  </dl>
+                </button>
+              </article>
+            ))}
+          </div>
+        )}
+        {selectedRun && (
+          <div className="evaluation-run-detail">
+            <div className="action-row">
+              <button className="secondary-action" type="button" onClick={() => onOpenDetail(selectedRun, cases[0])} disabled={cases.length === 0}>
+                <IconLabel icon={GitBranch}>Open first RAGXplain case</IconLabel>
+              </button>
+              <button className="secondary-action danger-action" type="button" onClick={removeSelectedRun}>
+                <IconLabel icon={Trash2}>Delete run</IconLabel>
+              </button>
+            </div>
+            <div className="metrics-grid evaluation-metrics-grid">
+              <article className="metric-card"><small>Adaptive routes</small><strong>{formatDistribution(selectedRun.route_distribution)}</strong><span>L1/L2/L3 distribution</span></article>
+              <article className="metric-card"><small>Static baseline</small><strong>{formatPercentMetric(selectedRun.baseline_metrics?.answer_overlap)}</strong><span>Answer overlap</span></article>
+              <article className="metric-card"><small>Runtime proxy</small><strong>{formatNumber(selectedRun.metrics?.runtime_proxy_units)}</strong><span>chars / 1k</span></article>
+              <article className="metric-card"><small>Retrieved contexts</small><strong>{formatNumber(selectedRun.metrics?.average_retrieved_contexts)}</strong><span>average per case</span></article>
+            </div>
+            <div className="table-panel evaluation-case-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Question</th>
+                    <th>Label</th>
+                    <th>Adaptive route</th>
+                    <th>Context</th>
+                    <th>Overlap</th>
+                    <th>Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cases.map((evaluationCase) => (
+                    <tr key={evaluationCase.id}>
+                      <td>{evaluationCase.question}</td>
+                      <td>{evaluationCase.complexity_label}</td>
+                      <td>{evaluationCase.adaptive_metadata?.route_label || evaluationCase.adaptive_metadata?.route_level || "-"}</td>
+                      <td>{formatPercentMetric(evaluationCase.metrics?.adaptive?.context_relevance)}</td>
+                      <td>{formatPercentMetric(evaluationCase.metrics?.adaptive?.answer_overlap)}</td>
+                      <td><button className="secondary-action compact-action" type="button" onClick={() => onOpenDetail(selectedRun, evaluationCase)}><IconLabel icon={GitBranch}>Trace</IconLabel></button></td>
+                    </tr>
+                  ))}
+                  {cases.length === 0 && (
+                    <tr><td colSpan="6">{selectedRunId ? "Loading cases..." : "Select a run."}</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </section>
     </section>
   );
 }
 
-function EvaluationDetailScreen() {
+function EvaluationDetailScreen({ detail, onBack }) {
+  const evaluationCase = detail?.evaluationCase;
+  const run = detail?.run;
+  const traceSteps = Array.isArray(evaluationCase?.adaptive_metadata?.trace_steps) ? evaluationCase.adaptive_metadata.trace_steps : [];
+  if (!evaluationCase) {
+    return (
+      <section className="page-stack">
+        <PanelHeader eyebrow="Evaluation Detail" title="RAGXplain" />
+        <div className="empty-state"><strong>No evaluation case selected</strong><p>Open a case from the Evaluation screen to inspect its route, sources and trace.</p></div>
+        <button className="secondary-action" type="button" onClick={onBack}><IconLabel icon={ChevronLeft}>Back to Evaluation</IconLabel></button>
+      </section>
+    );
+  }
   return (
-    <section className="page-stack">
-      <PanelHeader eyebrow="Evaluation Detail" title="RAGXplain" />
-      <div className="trace-board">
-        {["User query", "Complexity classifier", "Route decision", "Retriever", "Post-retriever", "Prompt assembly", "LLM response", "Citation validator"].map((step, index) => (
-          <article key={step}>
-            <span>{index + 1}</span>
-            <strong>{step}</strong>
-            <p>{step === "Route decision" ? "Adaptive route selects L2 or L3/L4 based on classifier output." : "Captured in the trace metadata for each answer."}</p>
-          </article>
-        ))}
+    <section className="page-stack evaluation-detail-page">
+      <div className="action-row">
+        <button className="secondary-action" type="button" onClick={onBack}><IconLabel icon={ChevronLeft}>Back to Evaluation</IconLabel></button>
       </div>
+      <PanelHeader eyebrow="Evaluation Detail" title="RAGXplain" />
+      <section className="panel evaluation-case-summary">
+        <p className="eyebrow">{run?.name || "Evaluation run"}</p>
+        <h2>{evaluationCase.question}</h2>
+        <div className="metrics-grid evaluation-metrics-grid">
+          <article className="metric-card"><small>Expected label</small><strong>{evaluationCase.complexity_label}</strong><span>benchmark</span></article>
+          <article className="metric-card"><small>Adaptive route</small><strong>{evaluationCase.adaptive_metadata?.route_label || "-"}</strong><span>{evaluationCase.adaptive_metadata?.complexity_label || "classifier"}</span></article>
+          <article className="metric-card"><small>Context relevance</small><strong>{formatPercentMetric(evaluationCase.metrics?.adaptive?.context_relevance)}</strong><span>proxy</span></article>
+          <article className="metric-card"><small>Answer overlap</small><strong>{formatPercentMetric(evaluationCase.metrics?.adaptive?.answer_overlap)}</strong><span>expected answer</span></article>
+        </div>
+      </section>
+      <section className="evaluation-answer-grid">
+        <article className="panel">
+          <h3>Adaptive answer</h3>
+          <p>{evaluationCase.adaptive_answer}</p>
+        </article>
+        <article className="panel">
+          <h3>Static L2 answer</h3>
+          <p>{evaluationCase.static_answer || "Baseline disabled for this run."}</p>
+        </article>
+      </section>
+      <section className="panel">
+        <PanelHeader eyebrow="Sources" title="Adaptive retrieved contexts" />
+        <div className="run-list">
+          {evaluationCase.adaptive_contexts.map((context) => (
+            <article className="run-card" key={context.id}>
+              <div>
+                <strong>{context.metadata?.title || context.id}</strong>
+                <small>{context.mode} - rank {context.rank} - chunk {context.metadata?.chunk_index ?? "-"}</small>
+              </div>
+              <p>{context.text}</p>
+            </article>
+          ))}
+          {evaluationCase.adaptive_contexts.length === 0 && <p className="muted-text">No adaptive contexts returned.</p>}
+        </div>
+      </section>
+      <section className="panel">
+        <PanelHeader eyebrow="Trace" title="Adaptive pipeline trace" />
+        <div className="trace-board">
+          {traceSteps.map((step, index) => (
+            <article key={`${step.step}-${index}`}>
+              <span>{index + 1}</span>
+              <strong>{step.step}</strong>
+              <p>{step.detail}</p>
+            </article>
+          ))}
+          {traceSteps.length === 0 && <p className="muted-text">No trace metadata returned.</p>}
+        </div>
+      </section>
     </section>
   );
 }
@@ -2100,6 +2397,24 @@ function Metric({ label, value }) {
       <dd>{value}</dd>
     </div>
   );
+}
+
+function formatPercentMetric(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return `${Math.round(number * 100)}%`;
+}
+
+function formatNumber(value, digits = 1) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return number.toFixed(digits).replace(/\.0$/, "");
+}
+
+function formatDistribution(distribution = {}) {
+  const entries = Object.entries(distribution || {});
+  if (entries.length === 0) return "-";
+  return entries.map(([key, value]) => `${key.replace("l1_", "L1 ").replace("l2_", "L2 ").replace("l3_", "L3 ")}: ${value}`).join(" / ");
 }
 
 function answerModeFromRoute(route) {

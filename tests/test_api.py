@@ -8,7 +8,9 @@ fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 import api.main as api_main
+from aragbiz.answering import AdaptiveRAGAnswerService
 from aragbiz.chat import ChatService, JsonChatRepository
+from aragbiz.evaluation import EvaluationService, JsonEvaluationRepository
 from aragbiz.knowledge import HashEmbeddingModel, KnowledgeService, OverlapChunker, SentenceTransformerEmbeddingModel
 from aragbiz.knowledge_store import JsonKnowledgeRepository
 
@@ -372,6 +374,78 @@ def test_knowledge_document_crud_and_answer_selection(monkeypatch, tmp_path):
     deleted = client.delete(f"/knowledge-bases/{kb['id']}/documents/{document['id']}")
     assert deleted.status_code == 200
     assert client.get(f"/knowledge-bases/{kb['id']}/documents").json() == []
+
+
+def test_evaluation_run_endpoints(monkeypatch, tmp_path):
+    service = KnowledgeService(
+        repository=JsonKnowledgeRepository(str(tmp_path / "knowledge.json")),
+        chunker=OverlapChunker(chunk_size=60, chunk_overlap=10),
+        embedder=HashEmbeddingModel(dimension=16),
+    )
+    monkeypatch.setattr(api_main, "knowledge_service", service)
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '{"id":"q1","question":"After goods receipt, how should invoice mismatches be escalated and who approves follow-up?","answer":"Escalate invoice mismatches to finance operations.","context":"Invoice mismatch","complexity_label":"complex","metadata":{}}\n',
+        encoding="utf-8",
+    )
+    answer_service = AdaptiveRAGAnswerService(
+        router=api_main.pipeline.router,
+        generator=api_main.pipeline.generator,
+        knowledge_service=service,
+        bm25_weight=api_main.config.bm25_weight,
+        dense_weight=api_main.config.dense_weight,
+    )
+    monkeypatch.setattr(
+        api_main,
+        "evaluation_service",
+        EvaluationService(JsonEvaluationRepository(str(tmp_path / "evaluation.json")), answer_service, str(dataset_path)),
+    )
+    client = TestClient(app)
+
+    missing_kb = client.post("/evaluation/runs", json={"knowledge_base_id": ""})
+    assert missing_kb.status_code == 400
+    assert "knowledge base" in missing_kb.json()["detail"].lower()
+
+    kb = client.post("/knowledge-bases", json={"name": "Eval KB", "description": "Docs"}).json()
+    client.post(
+        f"/knowledge-bases/{kb['id']}/documents",
+        json={
+            "title": "Invoice workflow",
+            "text": "Invoice mismatches after goods receipt should be escalated to finance operations for approval.",
+            "metadata": {},
+        },
+    )
+
+    created = client.post(
+        "/evaluation/runs",
+        json={
+            "knowledge_base_id": kb["id"],
+            "retrieval_mode": "bm25",
+            "top_k": 2,
+            "limit": 1,
+            "compare_baseline": True,
+        },
+    )
+    assert created.status_code == 200
+    run = created.json()
+    assert run["status"] == "completed"
+    assert run["metrics"]["average_retrieved_contexts"] >= 1
+    assert run["baseline_metrics"]["average_retrieved_contexts"] >= 1
+
+    listed = client.get("/evaluation/runs").json()
+    assert listed[0]["id"] == run["id"]
+    cases = client.get(f"/evaluation/runs/{run['id']}/cases").json()
+    assert len(cases) == 1
+    assert cases[0]["adaptive_answer"]
+    assert cases[0]["adaptive_contexts"]
+    assert cases[0]["adaptive_metadata"]["trace_steps"]
+
+    missing = client.get("/evaluation/runs/eval-missing")
+    assert missing.status_code == 404
+
+    deleted = client.delete(f"/evaluation/runs/{run['id']}")
+    assert deleted.status_code == 200
+    assert client.get(f"/evaluation/runs/{run['id']}").status_code == 404
 
 
 def test_knowledge_base_update_and_delete_endpoints(monkeypatch, tmp_path):
