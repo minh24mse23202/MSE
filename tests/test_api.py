@@ -1,4 +1,7 @@
+import json
 import os
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +16,7 @@ from aragbiz.chat import ChatService, JsonChatRepository
 from aragbiz.evaluation import EvaluationService, JsonEvaluationRepository
 from aragbiz.knowledge import HashEmbeddingModel, KnowledgeService, OverlapChunker, SentenceTransformerEmbeddingModel
 from aragbiz.knowledge_store import JsonKnowledgeRepository
+from aragbiz.ragxplain import RagxplainRunner
 
 app = api_main.app
 
@@ -395,10 +399,37 @@ def test_evaluation_run_endpoints(monkeypatch, tmp_path):
         bm25_weight=api_main.config.bm25_weight,
         dense_weight=api_main.config.dense_weight,
     )
+    ragxplain_root = tmp_path / "ragxplain"
+    (ragxplain_root / "ragxplain").mkdir(parents=True)
+    (ragxplain_root / "ragxplain" / "cli.py").write_text("", encoding="utf-8")
+    (ragxplain_root / "viewer").mkdir()
+    (ragxplain_root / "viewer" / "insights-viewer.html").write_text("<html>RAGXplain viewer</html>", encoding="utf-8")
+
+    def successful_process(command, **kwargs):
+        output_dir = Path(command[command.index("--out") + 1])
+        (output_dir / "results.csv").write_text("question,candidate_answer\nq,a\n", encoding="utf-8")
+        (output_dir / "metrics_insights.json").write_text("{}", encoding="utf-8")
+        (output_dir / "overall_insights.json").write_text(
+            json.dumps({"analysis": {"executive_summary": "Evaluation summary", "insights": []}}),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, stdout="done", stderr="")
+
+    ragxplain_runner = RagxplainRunner(
+        str(ragxplain_root),
+        str(tmp_path / "results"),
+        "examples.mock_judge_impl:judge",
+        process_runner=successful_process,
+    )
     monkeypatch.setattr(
         api_main,
         "evaluation_service",
-        EvaluationService(JsonEvaluationRepository(str(tmp_path / "evaluation.json")), answer_service, str(dataset_path)),
+        EvaluationService(
+            JsonEvaluationRepository(str(tmp_path / "evaluation.json")),
+            answer_service,
+            str(dataset_path),
+            ragxplain_runner=ragxplain_runner,
+        ),
     )
     client = TestClient(app)
 
@@ -429,6 +460,7 @@ def test_evaluation_run_endpoints(monkeypatch, tmp_path):
     assert created.status_code == 200
     run = created.json()
     assert run["status"] == "completed"
+    assert run["metadata"]["ragxplain"]["status"] == "not_requested"
     assert run["metrics"]["average_retrieved_contexts"] >= 1
     assert run["baseline_metrics"]["average_retrieved_contexts"] >= 1
 
@@ -439,9 +471,38 @@ def test_evaluation_run_endpoints(monkeypatch, tmp_path):
     assert cases[0]["adaptive_answer"]
     assert cases[0]["adaptive_contexts"]
     assert cases[0]["adaptive_metadata"]["trace_steps"]
+    assert client.get(f"/evaluation/runs/{run['id']}/ragxplain/overall-insights").status_code == 409
+
+    ragxplain_created = client.post(
+        "/evaluation/runs",
+        json={
+            "knowledge_base_id": kb["id"],
+            "retrieval_mode": "bm25",
+            "top_k": 2,
+            "limit": 1,
+            "compare_baseline": False,
+            "run_ragxplain": True,
+        },
+    )
+    assert ragxplain_created.status_code == 200
+    ragxplain_run = ragxplain_created.json()
+    assert ragxplain_run["metadata"]["ragxplain"]["status"] == "completed"
+    insights = client.get(f"/evaluation/runs/{ragxplain_run['id']}/ragxplain/overall-insights")
+    assert insights.status_code == 200
+    assert insights.json()["analysis"]["executive_summary"] == "Evaluation summary"
+    viewer = client.get("/evaluation/ragxplain/viewer")
+    assert viewer.status_code == 200
+    assert "RAGXplain viewer" in viewer.text
+    artifact_dir = Path(ragxplain_run["metadata"]["ragxplain"]["output_dir"])
+    assert artifact_dir.exists()
 
     missing = client.get("/evaluation/runs/eval-missing")
     assert missing.status_code == 404
+    assert client.get("/evaluation/runs/eval-missing/ragxplain/overall-insights").status_code == 404
+
+    ragxplain_deleted = client.delete(f"/evaluation/runs/{ragxplain_run['id']}")
+    assert ragxplain_deleted.status_code == 200
+    assert not artifact_dir.exists()
 
     deleted = client.delete(f"/evaluation/runs/{run['id']}")
     assert deleted.status_code == 200

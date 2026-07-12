@@ -99,6 +99,14 @@ Run the evaluation:
 python scripts/evaluate_sample.py
 ```
 
+For RAGXplain LLM-judge evaluation and the embedded insights viewer, install the sibling project into the same environment:
+
+```powershell
+python -m pip install -e "..\ragxplain"
+```
+
+Set `ARAGBIZ_RAGXPLAIN_JUDGE=your_judge_module:judge` for a real judge. The configured default mock judge is intended only for integration testing.
+
 Train the Phase 2 lightweight query complexity classifier:
 
 ```powershell

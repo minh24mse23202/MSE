@@ -41,3 +41,9 @@ chunk_overlap = 120
 
 [evaluation]
 json_store = "data/knowledge/evaluation_store.json"
+
+[ragxplain]
+root = "../ragxplain"
+results_root = "docs/evaluation/results"
+judge = "examples.mock_judge_impl:judge"
+timeout_seconds = 1800

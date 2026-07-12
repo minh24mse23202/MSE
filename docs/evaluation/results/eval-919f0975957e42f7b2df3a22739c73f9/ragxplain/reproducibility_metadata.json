@@ -1,0 +1,63 @@
+{
+  "experiment_info": {
+    "experiment_name": "Adaptive vs Static L2 - 7/11/2026, 12:36:55 AM",
+    "timestamp": "2026-07-11T00:38:04.848448",
+    "git_commit": null
+  },
+  "system_info": {
+    "python_version": "3.11.9",
+    "platform": "Windows-10-10.0.19045-SP0",
+    "processor": "Intel64 Family 6 Model 142 Stepping 9, GenuineIntel",
+    "pytorch_version": "2.5.1+cpu",
+    "cuda_available": false,
+    "cuda_version": null
+  },
+  "rag_run_config_snapshot": {
+    "chat_configuration": {
+      "description": "Default configuration for concise business workflow answers.",
+      "generator_model": "extractive",
+      "generator_provider": "Local",
+      "humor_level": 0,
+      "id": "cfg-default-balanced-workflow",
+      "metadata": {
+        "actual_generator": "extractive",
+        "runtime": "configuration-only"
+      },
+      "name": "Balanced workflow assistant",
+      "predefined_prompt": "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.",
+      "response_structure": "Concise answer with bullets and cited workflow context",
+      "system_prompt": "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
+      "tone": "Professional"
+    },
+    "chat_configuration_id": "cfg-default-balanced-workflow",
+    "compare_baseline": true,
+    "dataset_name": "WixQA expert-written",
+    "knowledge_base_id": "kb-c4f7609afc09489a857b851970c517cf",
+    "knowledge_base_name": "Business Workflow Knowledge Base",
+    "name": "Adaptive vs Static L2 - 7/11/2026, 12:36:55 AM",
+    "retrieval_mode": "hybrid",
+    "route_distribution": {
+      "l1_direct": 12,
+      "l2_simple_rag": 8
+    },
+    "run_id": "eval-919f0975957e42f7b2df3a22739c73f9",
+    "top_k": 4
+  },
+  "ragxplain_config_snapshot": {
+    "metrics": [
+      "context_relevancy",
+      "context_adherence",
+      "answer_relevancy",
+      "context_recall",
+      "factuality",
+      "grading_note"
+    ],
+    "random_state": 42,
+    "traditional_metrics_per_example": [
+      "routing_match",
+      "context_relevance_proxy",
+      "faithfulness_proxy",
+      "answer_overlap"
+    ]
+  }
+}

@@ -21,6 +21,7 @@ from aragbiz.knowledge_store import JsonKnowledgeRepository, PostgresKnowledgeRe
 from aragbiz.pipeline import RAGPipeline
 from aragbiz.retrieval import InMemoryHybridRetriever
 from aragbiz.routing import AdaptiveRouter, RouterConfig
+from aragbiz.ragxplain import RagxplainRunner
 
 
 def build_sample_pipeline(config: Optional[AppConfig] = None) -> RAGPipeline:
@@ -129,6 +130,12 @@ def build_evaluation_service(
         repository=repository,
         answer_service=answer_service,
         dataset_path=existing_dataset_path(config),
+        ragxplain_runner=RagxplainRunner(
+            root=config.ragxplain_root,
+            results_root=config.ragxplain_results_root,
+            judge=config.ragxplain_judge,
+            timeout_seconds=config.ragxplain_timeout_seconds,
+        ),
     )
 
 

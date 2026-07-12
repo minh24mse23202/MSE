@@ -27,6 +27,10 @@ class AppConfig:
     knowledge_json_store: str = "data/knowledge/knowledge_store.json"
     chat_json_store: str = "data/knowledge/chat_store.json"
     evaluation_json_store: str = "data/knowledge/evaluation_store.json"
+    ragxplain_root: str = "../ragxplain"
+    ragxplain_results_root: str = "docs/evaluation/results"
+    ragxplain_judge: str = "examples.mock_judge_impl:judge"
+    ragxplain_timeout_seconds: int = 1800
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dimension: int = 384
     use_sentence_transformers: bool = False
@@ -74,6 +78,24 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
         evaluation_json_store=os.getenv(
             "ARAGBIZ_EVALUATION_STORE",
             raw.get("evaluation", {}).get("json_store", AppConfig.evaluation_json_store),
+        ),
+        ragxplain_root=os.getenv(
+            "ARAGBIZ_RAGXPLAIN_ROOT",
+            raw.get("ragxplain", {}).get("root", AppConfig.ragxplain_root),
+        ),
+        ragxplain_results_root=os.getenv(
+            "ARAGBIZ_RAGXPLAIN_RESULTS_ROOT",
+            raw.get("ragxplain", {}).get("results_root", AppConfig.ragxplain_results_root),
+        ),
+        ragxplain_judge=os.getenv(
+            "ARAGBIZ_RAGXPLAIN_JUDGE",
+            raw.get("ragxplain", {}).get("judge", AppConfig.ragxplain_judge),
+        ),
+        ragxplain_timeout_seconds=int(
+            os.getenv(
+                "ARAGBIZ_RAGXPLAIN_TIMEOUT_SECONDS",
+                raw.get("ragxplain", {}).get("timeout_seconds", AppConfig.ragxplain_timeout_seconds),
+            )
         ),
         embedding_model=raw.get("knowledge", {}).get("embedding_model", AppConfig.embedding_model),
         embedding_dimension=int(raw.get("knowledge", {}).get("embedding_dimension", AppConfig.embedding_dimension)),

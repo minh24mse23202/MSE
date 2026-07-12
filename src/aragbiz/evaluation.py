@@ -11,6 +11,7 @@ from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions
 from aragbiz.data import load_qac_jsonl
 from aragbiz.knowledge import KnowledgeProcessingError, utc_now
 from aragbiz.pipeline import RAGPipeline
+from aragbiz.ragxplain import RagxplainError, RagxplainRunner, RagxplainUnavailableError
 from aragbiz.schemas import AnswerResult, QACRecord, RetrievedContext, RetrievalMode
 
 
@@ -65,6 +66,7 @@ class EvaluationRunConfig:
     top_k: int = 4
     limit: int = 20
     compare_baseline: bool = True
+    run_ragxplain: bool = False
 
 
 class EvaluationRepository(Protocol):
@@ -94,11 +96,13 @@ class EvaluationService:
         answer_service: AdaptiveRAGAnswerService,
         dataset_path: str,
         dataset_name: str = "WixQA expert-written",
+        ragxplain_runner: Optional[RagxplainRunner] = None,
     ):
         self.repository = repository
         self.answer_service = answer_service
         self.dataset_path = dataset_path
         self.dataset_name = dataset_name
+        self.ragxplain_runner = ragxplain_runner
 
     def run(self, config: EvaluationRunConfig) -> EvaluationRunRecord:
         self.repository.initialize()
@@ -169,9 +173,52 @@ class EvaluationService:
         if config.compare_baseline:
             baseline_metrics = evaluate_predictions(records, static_results)
             baseline_metrics.update(_runtime_metrics(static_results))
+        run_name = (config.name or "Adaptive vs Static L2 evaluation").strip()
+        ragxplain_metadata: Dict[str, Any] = {
+            "status": "not_requested",
+            "output_dir": None,
+            "overall_insights_path": None,
+            "judge": self.ragxplain_runner.judge if self.ragxplain_runner else None,
+            "error": None,
+        }
+        if config.run_ragxplain:
+            if self.ragxplain_runner is None:
+                ragxplain_metadata.update(
+                    status="failed",
+                    error="RAGXplain is not configured for this environment.",
+                )
+            else:
+                try:
+                    ragxplain_metadata = self.ragxplain_runner.run(
+                        run_id,
+                        run_name,
+                        cases,
+                        {
+                            "run_id": run_id,
+                            "name": run_name,
+                            "dataset_name": self.dataset_name,
+                            "knowledge_base_id": knowledge_base.id,
+                            "knowledge_base_name": knowledge_base.name,
+                            "chat_configuration_id": config.chat_configuration_id,
+                            "chat_configuration": config.chat_configuration,
+                            "retrieval_mode": config.retrieval_mode,
+                            "top_k": top_k,
+                            "compare_baseline": config.compare_baseline,
+                            "route_distribution": _route_distribution(adaptive_results),
+                        },
+                    )
+                except RagxplainError as exc:
+                    ragxplain_metadata = {
+                        "status": "failed",
+                        "output_dir": str(self.ragxplain_runner.output_dir(run_id)),
+                        "overall_insights_path": None,
+                        "judge": self.ragxplain_runner.judge,
+                        "error": str(exc),
+                    }
+
         run = EvaluationRunRecord(
             id=run_id,
-            name=(config.name or "Adaptive vs Static L2 evaluation").strip(),
+            name=run_name,
             dataset_name=self.dataset_name,
             status="completed",
             knowledge_base_id=knowledge_base.id,
@@ -190,6 +237,7 @@ class EvaluationService:
                 "record_count": len(records),
                 "chat_configuration": config.chat_configuration,
                 "static_baseline": "simple_rag" if config.compare_baseline else "disabled",
+                "ragxplain": ragxplain_metadata,
             },
             error=None,
             created_at=now,
@@ -211,7 +259,29 @@ class EvaluationService:
 
     def delete_run(self, run_id: str) -> None:
         self.repository.initialize()
+        run = self.repository.get_run(run_id)
+        ragxplain = run.metadata.get("ragxplain", {})
+        output_dir = ragxplain.get("output_dir") if isinstance(ragxplain, dict) else None
+        if output_dir and self.ragxplain_runner is not None:
+            self.ragxplain_runner.delete_artifacts(run_id, str(output_dir))
         self.repository.delete_run(run_id)
+
+    def get_ragxplain_insights(self, run_id: str) -> Dict[str, Any]:
+        self.repository.initialize()
+        run = self.repository.get_run(run_id)
+        ragxplain = run.metadata.get("ragxplain", {})
+        if not isinstance(ragxplain, dict) or ragxplain.get("status") != "completed":
+            detail = ragxplain.get("error") if isinstance(ragxplain, dict) else None
+            raise RagxplainUnavailableError(detail or "RAGXplain insights are not available for this run.")
+        artifact_path = ragxplain.get("overall_insights_path")
+        if not artifact_path or self.ragxplain_runner is None:
+            raise RagxplainUnavailableError("RAGXplain insights are not available for this run.")
+        return self.ragxplain_runner.load_overall_insights(str(artifact_path))
+
+    def ragxplain_viewer_path(self) -> Path:
+        if self.ragxplain_runner is None:
+            raise RagxplainUnavailableError("RAGXplain viewer is not configured for this environment.")
+        return self.ragxplain_runner.viewer_path()
 
 
 class Evaluator:

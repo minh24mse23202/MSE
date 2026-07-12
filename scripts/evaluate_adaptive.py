@@ -18,6 +18,7 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=4)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--no-baseline", action="store_true", help="Disable static L2 baseline comparison.")
+    parser.add_argument("--run-ragxplain", action="store_true", help="Run the configured RAGXplain judge and generate insights.")
     parser.add_argument("--output-dir", default="docs/evaluation/results", help="Directory for JSON result snapshots.")
     args = parser.parse_args()
 
@@ -46,6 +47,7 @@ def main() -> None:
             top_k=args.top_k,
             limit=args.limit,
             compare_baseline=not args.no_baseline,
+            run_ragxplain=args.run_ragxplain,
         )
     )
     cases = evaluation_service.list_cases(run.id)
@@ -57,7 +59,18 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{run.id}.json"
     output_path.write_text(json.dumps(output, indent=2, sort_keys=True), encoding="utf-8")
-    print(json.dumps({"run_id": run.id, "metrics": run.metrics, "output": str(output_path)}, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "run_id": run.id,
+                "metrics": run.metrics,
+                "ragxplain": run.metadata.get("ragxplain", {}),
+                "output": str(output_path),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 def _configuration_snapshot(record):

@@ -132,6 +132,12 @@ export async function deleteEvaluationRun(runId) {
   await assertOk(response, "Delete evaluation run failed");
   return response.json();
 }
+
+export function getRagxplainViewerUrl(runId) {
+  const encodedRunId = encodeURIComponent(runId);
+  const insightsPath = `/evaluation/runs/${encodedRunId}/ragxplain/overall-insights`;
+  return `${API_BASE_URL}/evaluation/ragxplain/viewer?insights=${encodeURIComponent(insightsPath)}`;
+}
 export async function submitFeedback(payload) {
   const response = await fetch(`${API_BASE_URL}/feedback`, {
     method: "POST",

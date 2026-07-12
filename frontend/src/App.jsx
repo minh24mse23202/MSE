@@ -12,6 +12,7 @@ import {
   ClipboardList,
   Copy,
   Database,
+  ExternalLink,
   FileText,
   Filter,
   GitBranch,
@@ -47,6 +48,7 @@ import {
   deleteKnowledgeBase,
   deleteKnowledgeDocument,
   getKnowledgeProcessingTrace,
+  getRagxplainViewerUrl,
   ingestWebsiteSource,
   listChatConfigurations,
   listChatConversations,
@@ -241,8 +243,8 @@ export default function App() {
         <EvaluationScreen
           selectedKnowledgeBaseId={selectedKnowledgeBaseId}
           onSelectKnowledgeBase={setSelectedKnowledgeBaseId}
-          onOpenDetail={(run, evaluationCase) => {
-            setSelectedEvaluationDetail({ run, evaluationCase });
+          onOpenDetail={(run, evaluationCase, view = "case") => {
+            setSelectedEvaluationDetail({ run, evaluationCase, view });
             setScreen("evaluation-detail");
           }}
         />
@@ -1990,7 +1992,8 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
     retrievalMode: "hybrid",
     topK: 4,
     limit: 20,
-    compareBaseline: true
+    compareBaseline: true,
+    runRagxplain: false
   });
   const [status, setStatus] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -2068,11 +2071,18 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
         retrieval_mode: form.retrievalMode,
         top_k: Number(form.topK),
         limit: Number(form.limit),
-        compare_baseline: form.compareBaseline
+        compare_baseline: form.compareBaseline,
+        run_ragxplain: form.runRagxplain
       });
       onSelectKnowledgeBase(form.knowledgeBaseId);
       await refreshRuns(run.id);
-      setStatus(`Evaluation completed: ${run.metadata?.record_count || run.limit} case(s).`);
+      const ragxplainStatus = run.metadata?.ragxplain?.status;
+      if (ragxplainStatus === "failed") {
+        setStatus(`Evaluation completed, but RAGXplain failed: ${run.metadata.ragxplain.error}`);
+      } else {
+        const suffix = ragxplainStatus === "completed" ? " RAGXplain insights are ready." : "";
+        setStatus(`Evaluation completed: ${run.metadata?.record_count || run.limit} case(s).${suffix}`);
+      }
     } catch (error) {
       setStatus(`Evaluation failed: ${error.message}`);
     } finally {
@@ -2144,6 +2154,14 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
               Compare static L2
             </label>
           </div>
+          <label className="check-row evaluation-check-row ragxplain-toggle">
+            <input
+              type="checkbox"
+              checked={form.runRagxplain}
+              onChange={(event) => setForm({ ...form, runRagxplain: event.target.checked })}
+            />
+            <span><strong>Run RAGXplain LLM Judge</strong><small>Generate executive insights and prioritized actions.</small></span>
+          </label>
           {selectedKnowledgeBase && (
             <dl className="source-facts evaluation-kb-summary">
               <div><dt>Status</dt><dd>{selectedKnowledgeBase.status}</dd></div>
@@ -2170,6 +2188,9 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
                   <div>
                     <strong>{run.name}</strong>
                     <small>{run.dataset_name} - {run.status} - {run.metadata?.record_count ?? run.limit} cases</small>
+                    <span className={`evaluation-ragxplain-status is-${run.metadata?.ragxplain?.status || "not_requested"}`}>
+                      RAGXplain: {(run.metadata?.ragxplain?.status || "not_requested").replace("_", " ")}
+                    </span>
                   </div>
                   <dl>
                     <Metric label="Routing" value={formatPercentMetric(run.metrics?.routing_accuracy)} />
@@ -2185,12 +2206,25 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
         {selectedRun && (
           <div className="evaluation-run-detail">
             <div className="action-row">
-              <button className="secondary-action" type="button" onClick={() => onOpenDetail(selectedRun, cases[0])} disabled={cases.length === 0}>
-                <IconLabel icon={GitBranch}>Open first RAGXplain case</IconLabel>
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={() => onOpenDetail(selectedRun, null, "ragxplain")}
+                disabled={selectedRun.metadata?.ragxplain?.status !== "completed"}
+                title={selectedRun.metadata?.ragxplain?.error || "Open run-level RAGXplain insights"}
+              >
+                <IconLabel icon={GitBranch}>Open RAGXplain insights</IconLabel>
               </button>
               <button className="secondary-action danger-action" type="button" onClick={removeSelectedRun}>
                 <IconLabel icon={Trash2}>Delete run</IconLabel>
               </button>
+            </div>
+            <div className={`evaluation-ragxplain-summary is-${selectedRun.metadata?.ragxplain?.status || "not_requested"}`}>
+              <div>
+                <strong>RAGXplain {(selectedRun.metadata?.ragxplain?.status || "not_requested").replace("_", " ")}</strong>
+                <span>{selectedRun.metadata?.ragxplain?.judge || "No judge was requested for this run."}</span>
+              </div>
+              {selectedRun.metadata?.ragxplain?.error && <p>{selectedRun.metadata.ragxplain.error}</p>}
             </div>
             <div className="metrics-grid evaluation-metrics-grid">
               <article className="metric-card"><small>Adaptive routes</small><strong>{formatDistribution(selectedRun.route_distribution)}</strong><span>L1/L2/L3 distribution</span></article>
@@ -2218,7 +2252,7 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
                       <td>{evaluationCase.adaptive_metadata?.route_label || evaluationCase.adaptive_metadata?.route_level || "-"}</td>
                       <td>{formatPercentMetric(evaluationCase.metrics?.adaptive?.context_relevance)}</td>
                       <td>{formatPercentMetric(evaluationCase.metrics?.adaptive?.answer_overlap)}</td>
-                      <td><button className="secondary-action compact-action" type="button" onClick={() => onOpenDetail(selectedRun, evaluationCase)}><IconLabel icon={GitBranch}>Trace</IconLabel></button></td>
+                      <td><button className="secondary-action compact-action" type="button" onClick={() => onOpenDetail(selectedRun, evaluationCase, "case")}><IconLabel icon={GitBranch}>Trace</IconLabel></button></td>
                     </tr>
                   ))}
                   {cases.length === 0 && (
@@ -2237,6 +2271,9 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
 function EvaluationDetailScreen({ detail, onBack }) {
   const evaluationCase = detail?.evaluationCase;
   const run = detail?.run;
+  if (detail?.view === "ragxplain") {
+    return <RagxplainInsightsScreen run={run} onBack={onBack} />;
+  }
   const traceSteps = Array.isArray(evaluationCase?.adaptive_metadata?.trace_steps) ? evaluationCase.adaptive_metadata.trace_steps : [];
   if (!evaluationCase) {
     return (
@@ -2301,6 +2338,58 @@ function EvaluationDetailScreen({ detail, onBack }) {
           {traceSteps.length === 0 && <p className="muted-text">No trace metadata returned.</p>}
         </div>
       </section>
+    </section>
+  );
+}
+
+function RagxplainInsightsScreen({ run, onBack }) {
+  const [reloadKey, setReloadKey] = useState(0);
+  const ragxplain = run?.metadata?.ragxplain || {};
+  const viewerUrl = run?.id ? getRagxplainViewerUrl(run.id) : "";
+
+  if (!run) {
+    return (
+      <section className="page-stack evaluation-detail-page">
+        <button className="secondary-action" type="button" onClick={onBack}><IconLabel icon={ChevronLeft}>Back to Evaluation</IconLabel></button>
+        <div className="empty-state"><strong>No evaluation run selected</strong><p>Select a completed RAGXplain run from Evaluation.</p></div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="page-stack evaluation-detail-page ragxplain-insights-page">
+      <header className="ragxplain-insights-header">
+        <div>
+          <p className="eyebrow">Evaluation Insights</p>
+          <h1>{run.name}</h1>
+          <p>Executive summary and prioritized action items from RAGXplain.</p>
+        </div>
+        <div className="action-row">
+          <button className="secondary-action" type="button" onClick={onBack}><IconLabel icon={ChevronLeft}>Back to Evaluation</IconLabel></button>
+          <button className="secondary-action" type="button" onClick={() => setReloadKey((current) => current + 1)} disabled={ragxplain.status !== "completed"}>
+            <IconLabel icon={RotateCw}>Reload</IconLabel>
+          </button>
+          <a className="secondary-action" href={viewerUrl} target="_blank" rel="noreferrer">
+            <IconLabel icon={ExternalLink}>Open in new tab</IconLabel>
+          </a>
+        </div>
+      </header>
+      <div className={`evaluation-ragxplain-summary is-${ragxplain.status || "not_requested"}`}>
+        <div><strong>RAGXplain {String(ragxplain.status || "not_requested").replace("_", " ")}</strong><span>{ragxplain.judge || "Judge unavailable"}</span></div>
+        {ragxplain.error && <p>{ragxplain.error}</p>}
+      </div>
+      {ragxplain.status === "completed" ? (
+        <div className="ragxplain-viewer-frame">
+          <iframe
+            key={reloadKey}
+            src={viewerUrl}
+            title={`RAGXplain insights for ${run.name}`}
+            sandbox="allow-scripts allow-same-origin allow-downloads"
+          />
+        </div>
+      ) : (
+        <div className="empty-state"><strong>Insights are not ready</strong><p>{ragxplain.error || "Run the RAGXplain judge for this evaluation first."}</p></div>
+      )}
     </section>
   );
 }

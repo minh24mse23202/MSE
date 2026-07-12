@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions, AnsweringError
@@ -21,6 +22,7 @@ from aragbiz.knowledge import (
     StoredKnowledgeChunk,
     StoredKnowledgeDocument,
 )
+from aragbiz.ragxplain import RagxplainError, RagxplainUnavailableError
 
 config = load_config()
 pipeline = build_sample_pipeline(config)
@@ -164,6 +166,7 @@ class EvaluationRunRequest(BaseModel):
     top_k: int = Field(4, ge=1, le=50)
     limit: int = Field(20, ge=0, le=100)
     compare_baseline: bool = True
+    run_ragxplain: bool = False
 
 
 class EvaluationRunResponse(BaseModel):
@@ -479,6 +482,7 @@ def create_evaluation_run(request: EvaluationRunRequest) -> EvaluationRunRespons
                 top_k=request.top_k,
                 limit=request.limit,
                 compare_baseline=request.compare_baseline,
+                run_ragxplain=request.run_ragxplain,
             )
         )
         return _evaluation_run_response(run)
@@ -502,6 +506,28 @@ def list_evaluation_cases(run_id: str) -> List[EvaluationCaseResponse]:
         return [_evaluation_case_response(record) for record in evaluation_service.list_cases(run_id)]
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/evaluation/runs/{run_id}/ragxplain/overall-insights", response_model=Dict[str, Any])
+def get_ragxplain_overall_insights(run_id: str) -> Dict[str, Any]:
+    try:
+        return evaluation_service.get_ragxplain_insights(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RagxplainError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/evaluation/ragxplain/viewer", response_class=FileResponse)
+def get_ragxplain_viewer() -> FileResponse:
+    try:
+        return FileResponse(
+            evaluation_service.ragxplain_viewer_path(),
+            media_type="text/html",
+            headers={"Cache-Control": "no-store"},
+        )
+    except (RagxplainUnavailableError, RagxplainError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.delete("/evaluation/runs/{run_id}")
