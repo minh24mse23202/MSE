@@ -27,6 +27,16 @@ class AppConfig:
     knowledge_json_store: str = "data/knowledge/knowledge_store.json"
     chat_json_store: str = "data/knowledge/chat_store.json"
     evaluation_json_store: str = "data/knowledge/evaluation_store.json"
+    model_farm_json_store: str = "data/knowledge/model_farm_store.json"
+    model_secret_key: str = "aragbiz-local-development-secret"
+    auth_json_store: str = "data/knowledge/auth_store.json"
+    jobs_json_store: str = "data/knowledge/jobs_store.json"
+    blob_store: str = "data/uploads"
+    auth_required: bool = False
+    jwt_secret: str = "aragbiz-local-development-secret"
+    access_token_ttl_seconds: int = 28800
+    global_model_budget_usd: float = 0.0
+    job_lease_seconds: int = 120
     ragxplain_root: str = "../ragxplain"
     ragxplain_results_root: str = "docs/evaluation/results"
     ragxplain_judge: str = "examples.mock_judge_impl:judge"
@@ -78,6 +88,51 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
         evaluation_json_store=os.getenv(
             "ARAGBIZ_EVALUATION_STORE",
             raw.get("evaluation", {}).get("json_store", AppConfig.evaluation_json_store),
+        ),
+        model_farm_json_store=os.getenv(
+            "ARAGBIZ_MODEL_FARM_STORE",
+            raw.get("model_farm", {}).get("json_store", AppConfig.model_farm_json_store),
+        ),
+        model_secret_key=os.getenv(
+            "ARAGBIZ_MODEL_SECRET_KEY",
+            raw.get("model_farm", {}).get("secret_key", raw.get("auth", {}).get("jwt_secret", AppConfig.model_secret_key)),
+        ),
+        auth_json_store=os.getenv(
+            "ARAGBIZ_AUTH_STORE",
+            raw.get("auth", {}).get("json_store", AppConfig.auth_json_store),
+        ),
+        jobs_json_store=os.getenv(
+            "ARAGBIZ_JOBS_STORE",
+            raw.get("jobs", {}).get("json_store", AppConfig.jobs_json_store),
+        ),
+        blob_store=os.getenv(
+            "ARAGBIZ_BLOB_STORE",
+            raw.get("jobs", {}).get("blob_store", AppConfig.blob_store),
+        ),
+        auth_required=_parse_bool(
+            os.getenv("ARAGBIZ_AUTH_REQUIRED", str(raw.get("auth", {}).get("required", AppConfig.auth_required)))
+        ),
+        jwt_secret=os.getenv(
+            "ARAGBIZ_JWT_SECRET",
+            raw.get("auth", {}).get("jwt_secret", AppConfig.jwt_secret),
+        ),
+        access_token_ttl_seconds=int(
+            os.getenv(
+                "ARAGBIZ_ACCESS_TOKEN_TTL_SECONDS",
+                raw.get("auth", {}).get("access_token_ttl_seconds", AppConfig.access_token_ttl_seconds),
+            )
+        ),
+        global_model_budget_usd=float(
+            os.getenv(
+                "ARAGBIZ_GLOBAL_MODEL_BUDGET_USD",
+                raw.get("model_farm", {}).get("global_monthly_budget_usd", AppConfig.global_model_budget_usd),
+            )
+        ),
+        job_lease_seconds=int(
+            os.getenv(
+                "ARAGBIZ_JOB_LEASE_SECONDS",
+                raw.get("jobs", {}).get("lease_seconds", AppConfig.job_lease_seconds),
+            )
         ),
         ragxplain_root=os.getenv(
             "ARAGBIZ_RAGXPLAIN_ROOT",

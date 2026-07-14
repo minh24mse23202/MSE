@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol
 
 from aragbiz.schemas import RetrievedContext
+from aragbiz.model_farm import ModelCallContext, ModelFarmError, ModelFarmService, ModelGateway
 
 
 class GeneratorConfigurationError(ValueError):
@@ -107,7 +108,8 @@ class PromptBuilder:
             metadata = context.document.metadata
             title = metadata.get("title") or metadata.get("document_title") or metadata.get("source") or metadata.get("document_id") or context.document.id
             chunk_index = metadata.get("chunk_index", "-")
-            header = f"[{context.rank}] {title} | score={context.score:.4f} | chunk={chunk_index}"
+            source_label = metadata.get("source_label") or f"S{context.rank}"
+            header = f"[{source_label}] {title} | score={context.score:.4f} | chunk={chunk_index}"
             text = " ".join(context.document.text.split())
             segment = f"{header}\n{text}"
             if len(segment) > remaining:
@@ -190,12 +192,89 @@ class LocalFlanT5Generator:
         return self._pipelines[self.model_name]
 
 
-class GeneratorResolver:
-    def __init__(self, extractive_generator: Optional[ExtractiveGenerator] = None):
-        self.extractive_generator = extractive_generator or ExtractiveGenerator()
+class ModelFarmGenerator:
+    def __init__(
+        self,
+        gateway: ModelGateway,
+        deployment_id: str,
+        *,
+        fallback_deployment_ids: Optional[List[str]] = None,
+        parameters: Optional[Dict[str, Any]] = None,
+        external_processing_allowed: bool = True,
+        call_context: Optional[ModelCallContext] = None,
+    ):
+        self.gateway = gateway
+        self.deployment_id = deployment_id
+        self.fallback_deployment_ids = fallback_deployment_ids or []
+        self.parameters = parameters or {}
+        self.external_processing_allowed = external_processing_allowed
+        self.call_context = call_context
 
-    def resolve(self, chat_configuration: Optional[Dict[str, Any]]) -> Generator:
+    def generate(self, request: GenerationRequest) -> GeneratorResult:
+        try:
+            result = self.gateway.generate_sync(
+                [{"role": "user", "content": request.prompt}],
+                self.deployment_id,
+                fallback_deployment_ids=self.fallback_deployment_ids,
+                parameters=self.parameters,
+                context=self.call_context,
+                external_processing_allowed=self.external_processing_allowed,
+            )
+        except ModelFarmError as exc:
+            raise GeneratorExecutionError(str(exc)) from exc
+        return GeneratorResult(
+            answer=result.text,
+            provider=result.provider,
+            model=result.model,
+            status=result.status,
+            prompt_preview=request.prompt_preview,
+            input_chars=request.input_chars,
+            output_chars=len(result.text),
+            metadata={
+                **result.metadata,
+                "deployment_id": result.deployment_id,
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
+                "estimated_cost_usd": result.estimated_cost_usd,
+                "finish_reason": result.finish_reason,
+            },
+        )
+
+
+class GeneratorResolver:
+    def __init__(
+        self,
+        extractive_generator: Optional[ExtractiveGenerator] = None,
+        *,
+        model_farm_service: Optional[ModelFarmService] = None,
+        model_gateway: Optional[ModelGateway] = None,
+    ):
+        self.extractive_generator = extractive_generator or ExtractiveGenerator()
+        self.model_farm_service = model_farm_service
+        self.model_gateway = model_gateway
+
+    def resolve(
+        self,
+        chat_configuration: Optional[Dict[str, Any]],
+        *,
+        external_processing_allowed: bool = True,
+        call_context: Optional[ModelCallContext] = None,
+    ) -> Generator:
         configuration = _normalized_configuration(chat_configuration)
+        deployment_id = str(configuration.get("generator_deployment_id") or "").strip()
+        if deployment_id:
+            if self.model_gateway is not None and self.model_farm_service is not None:
+                self.model_farm_service.resolve(deployment_id, "generation")
+                return ModelFarmGenerator(
+                    self.model_gateway,
+                    deployment_id,
+                    fallback_deployment_ids=list(configuration.get("fallback_deployment_ids") or []),
+                    parameters=dict(configuration.get("generation_parameters") or {}),
+                    external_processing_allowed=external_processing_allowed,
+                    call_context=call_context,
+                )
+            if deployment_id not in {"model-local-extractive", "model-local-flan-t5-small"}:
+                raise GeneratorConfigurationError("The Model Farm gateway is not configured for this runtime.")
         provider = configuration["generator_provider"]
         model = configuration["generator_model"]
         if provider != "Local":
@@ -216,6 +295,11 @@ def default_chat_configuration() -> Dict[str, Any]:
         "name": "Balanced workflow assistant",
         "generator_provider": "Local",
         "generator_model": "extractive",
+        "generator_deployment_id": "model-local-extractive",
+        "fallback_deployment_ids": [],
+        "reranker_deployment_id": "",
+        "planner_deployment_id": "",
+        "generation_parameters": {"temperature": 0.2, "max_tokens": 500},
         "response_structure": "Concise answer with bullets and cited workflow context",
         "tone": "Professional",
         "humor_level": 0,

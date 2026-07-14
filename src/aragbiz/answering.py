@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple
 
 from aragbiz.generation import (
     GenerationRequest,
@@ -11,9 +11,12 @@ from aragbiz.generation import (
     GeneratorConfigurationError,
     GeneratorExecutionError,
     GeneratorResolver,
+    GeneratorResult,
+    PromptBuildResult,
     PromptBuilder,
 )
 from aragbiz.knowledge import KnowledgeBaseRecord, KnowledgeService, StoredKnowledgeChunk
+from aragbiz.model_farm import ModelCallContext, ModelFarmError, ModelFarmService, ModelGateway
 from aragbiz.retrieval import InMemoryHybridRetriever
 from aragbiz.routing import AdaptiveRouter
 from aragbiz.schemas import AnswerResult, ComplexityLabel, Document, RetrievedContext, RetrievalMode
@@ -33,6 +36,36 @@ class AnswerOptions:
     retrieval_mode: RetrievalMode = "hybrid"
     top_k: int = 4
     chat_configuration: Optional[Dict[str, Any]] = None
+    request_id: str = ""
+    user_id: str = ""
+    conversation_id: str = ""
+
+
+@dataclass
+class PreparedAnswer:
+    query: str
+    options: AnswerOptions
+    start: float
+    top_k: int
+    chat_configuration: Dict[str, Any]
+    complexity_label: ComplexityLabel
+    route_level: RouteLevel
+    knowledge_base: Optional[KnowledgeBaseRecord]
+    contexts: List[RetrievedContext]
+    retrieval_mode: str
+    retrieval_used: bool
+    external_processing_allowed: bool
+    decomposed_queries: List[str]
+    retrieval_steps: List[Dict[str, Any]]
+    aggregation_summary: Dict[str, Any]
+    prompt: PromptBuildResult
+    trace_steps: List[Dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class AnswerStreamEvent:
+    type: str
+    data: Dict[str, Any]
 
 
 class AdaptiveRAGAnswerService:
@@ -46,12 +79,20 @@ class AdaptiveRAGAnswerService:
         prompt_builder: Optional[PromptBuilder] = None,
         generator_resolver: Optional[GeneratorResolver] = None,
         query_decomposer: Optional["QueryDecomposer"] = None,
+        model_farm_service: Optional[ModelFarmService] = None,
+        model_gateway: Optional[ModelGateway] = None,
     ):
         self.router = router
         self.generator = generator
         self.knowledge_service = knowledge_service
         self.prompt_builder = prompt_builder or PromptBuilder()
-        self.generator_resolver = generator_resolver or GeneratorResolver(generator if hasattr(generator, "max_context_chars") else None)
+        self.model_farm_service = model_farm_service
+        self.model_gateway = model_gateway
+        self.generator_resolver = generator_resolver or GeneratorResolver(
+            generator if hasattr(generator, "max_context_chars") else None,
+            model_farm_service=model_farm_service,
+            model_gateway=model_gateway,
+        )
         self.decomposer = query_decomposer or QueryDecomposer()
         self.retriever = KnowledgeBaseRetriever(
             knowledge_service=knowledge_service,
@@ -60,6 +101,52 @@ class AdaptiveRAGAnswerService:
         )
 
     def answer(self, query: str, options: Optional[AnswerOptions] = None) -> AnswerResult:
+        prepared = self._prepare_answer(query, options or AnswerOptions())
+        generation = self._generate_answer(prepared)
+        return self._finalize_answer(prepared, generation)
+
+    async def answer_stream(self, query: str, options: Optional[AnswerOptions] = None) -> AsyncIterator[AnswerStreamEvent]:
+        prepared = await _to_thread(self._prepare_answer, query, options or AnswerOptions())
+        for step in prepared.trace_steps:
+            yield AnswerStreamEvent("trace", step)
+        yield AnswerStreamEvent("sources", {"contexts": prepared.contexts})
+
+        answer_parts: List[str] = []
+        model_completed: Dict[str, Any] = {}
+        try:
+            async for event in self._stream_generation(prepared):
+                if event.type == "delta":
+                    answer_parts.append(str(event.data.get("text") or ""))
+                elif event.type == "model_completed":
+                    model_completed = event.data
+                yield event
+        except (GeneratorConfigurationError, GeneratorExecutionError, ModelFarmError) as exc:
+            raise AnsweringError(str(exc)) from exc
+
+        answer_text = "".join(answer_parts)
+        generation = GeneratorResult(
+            answer=answer_text,
+            provider=str(model_completed.get("provider") or "Local"),
+            model=str(model_completed.get("model") or prepared.chat_configuration.get("generator_model") or "extractive"),
+            status=str(model_completed.get("status") or "completed"),
+            prompt_preview=prepared.prompt.prompt_preview,
+            input_chars=prepared.prompt.input_chars,
+            output_chars=len(answer_text),
+            metadata={
+                **dict(model_completed.get("metadata") or {}),
+                "deployment_id": model_completed.get("deployment_id", ""),
+                "input_tokens": int(model_completed.get("input_tokens") or 0),
+                "output_tokens": int(model_completed.get("output_tokens") or 0),
+                "estimated_cost_usd": float(model_completed.get("estimated_cost_usd") or 0.0),
+                "finish_reason": model_completed.get("finish_reason", ""),
+            },
+        )
+        result = self._finalize_answer(prepared, generation)
+        for step in result.metadata.get("trace_steps", [])[len(prepared.trace_steps) :]:
+            yield AnswerStreamEvent("trace", step)
+        yield AnswerStreamEvent("completed", {"result": result})
+
+    def _prepare_answer(self, query: str, options: AnswerOptions) -> PreparedAnswer:
         options = options or AnswerOptions()
         start = time.perf_counter()
         top_k = max(1, min(int(options.top_k), 50))
@@ -93,6 +180,7 @@ class AdaptiveRAGAnswerService:
         contexts: List[RetrievedContext] = []
         retrieval_mode: str = "none"
         retrieval_used = route_level in {"l2_simple_rag", "l3_complex_rag"}
+        external_processing_allowed = _external_processing_allowed(knowledge_base)
         decomposed_queries: List[str] = []
         retrieval_steps: List[Dict[str, Any]] = []
         aggregation_summary: Dict[str, Any] = {}
@@ -159,6 +247,54 @@ class AdaptiveRAGAnswerService:
             )
             retrieval_mode = options.retrieval_mode
 
+        contexts = _with_source_labels(contexts)
+        reranker_deployment_id = str(chat_configuration.get("reranker_deployment_id") or "").strip()
+        if contexts and reranker_deployment_id and self.model_gateway is not None:
+            original_contexts = contexts
+            try:
+                reranked = self.model_gateway.rerank_sync(
+                    query,
+                    [context.document.text for context in contexts],
+                    reranker_deployment_id,
+                    top_n=min(top_k, len(contexts)),
+                    context=ModelCallContext(
+                        purpose="query_rerank",
+                        request_id=options.request_id,
+                        user_id=options.user_id,
+                        conversation_id=options.conversation_id,
+                        knowledge_base_id=knowledge_base.id if knowledge_base else "",
+                    ),
+                    external_processing_allowed=external_processing_allowed,
+                )
+                contexts = [
+                    RetrievedContext(
+                        document=original_contexts[item.index].document,
+                        score=item.score,
+                        rank=rank,
+                        mode=original_contexts[item.index].mode,
+                    )
+                    for rank, item in enumerate(reranked.items, start=1)
+                    if 0 <= item.index < len(original_contexts)
+                ]
+                contexts = _with_source_labels(contexts)
+                trace_steps.append(
+                    _trace_step(
+                        "Context reranking",
+                        "completed",
+                        f"Reranked {len(contexts)} context chunk(s).",
+                        {"deployment_id": reranker_deployment_id, **reranked.metadata},
+                    )
+                )
+            except ModelFarmError as exc:
+                trace_steps.append(
+                    _trace_step(
+                        "Context reranking",
+                        "warning",
+                        "Reranker failed open; original retrieval order was retained.",
+                        {"deployment_id": reranker_deployment_id, "error": str(exc)},
+                    )
+                )
+
         prompt = self.prompt_builder.build(query, contexts, chat_configuration, route_level=route_level)
         trace_steps.append(
             _trace_step(
@@ -168,21 +304,92 @@ class AdaptiveRAGAnswerService:
                 {**prompt.metadata, "input_chars": prompt.input_chars, "prompt_preview": prompt.prompt_preview},
             )
         )
+        return PreparedAnswer(
+            query=query,
+            options=options,
+            start=start,
+            top_k=top_k,
+            chat_configuration=chat_configuration,
+            complexity_label=complexity_label,
+            route_level=route_level,
+            knowledge_base=knowledge_base,
+            contexts=contexts,
+            retrieval_mode=retrieval_mode,
+            retrieval_used=retrieval_used,
+            external_processing_allowed=external_processing_allowed,
+            decomposed_queries=decomposed_queries,
+            retrieval_steps=retrieval_steps,
+            aggregation_summary=aggregation_summary,
+            prompt=prompt,
+            trace_steps=trace_steps,
+        )
+
+    def _generation_request(self, prepared: PreparedAnswer) -> GenerationRequest:
+        return GenerationRequest(
+            query=prepared.query,
+            contexts=prepared.contexts,
+            chat_configuration=prepared.chat_configuration,
+            prompt=prepared.prompt.prompt,
+            prompt_preview=prepared.prompt.prompt_preview,
+            input_chars=prepared.prompt.input_chars,
+            route_level=prepared.route_level,
+        )
+
+    def _call_context(self, prepared: PreparedAnswer) -> ModelCallContext:
+        return ModelCallContext(
+            purpose="answer_generation",
+            request_id=prepared.options.request_id,
+            user_id=prepared.options.user_id,
+            conversation_id=prepared.options.conversation_id,
+            knowledge_base_id=prepared.knowledge_base.id if prepared.knowledge_base else "",
+        )
+
+    def _generate_answer(self, prepared: PreparedAnswer) -> GeneratorResult:
         try:
-            generator = self.generator_resolver.resolve(chat_configuration)
-            generation = generator.generate(
-                GenerationRequest(
-                    query=query,
-                    contexts=contexts,
-                    chat_configuration=chat_configuration,
-                    prompt=prompt.prompt,
-                    prompt_preview=prompt.prompt_preview,
-                    input_chars=prompt.input_chars,
-                    route_level=route_level,
-                )
+            generator = self.generator_resolver.resolve(
+                prepared.chat_configuration,
+                external_processing_allowed=prepared.external_processing_allowed,
+                call_context=self._call_context(prepared),
             )
+            return generator.generate(self._generation_request(prepared))
         except (GeneratorConfigurationError, GeneratorExecutionError) as exc:
             raise AnsweringError(str(exc)) from exc
+
+    async def _stream_generation(self, prepared: PreparedAnswer) -> AsyncIterator[AnswerStreamEvent]:
+        deployment_id = str(prepared.chat_configuration.get("generator_deployment_id") or "").strip()
+        if deployment_id and self.model_gateway is not None:
+            try:
+                async for event in self.model_gateway.stream(
+                    [{"role": "user", "content": prepared.prompt.prompt}],
+                    deployment_id,
+                    fallback_deployment_ids=list(prepared.chat_configuration.get("fallback_deployment_ids") or []),
+                    parameters=dict(prepared.chat_configuration.get("generation_parameters") or {}),
+                    context=self._call_context(prepared),
+                    external_processing_allowed=prepared.external_processing_allowed,
+                ):
+                    yield AnswerStreamEvent(event.type, event.data)
+                return
+            except ModelFarmError as exc:
+                raise GeneratorExecutionError(str(exc)) from exc
+        generation = await _to_thread(self._generate_answer, prepared)
+        for chunk in _text_chunks(generation.answer, 32):
+            yield AnswerStreamEvent("delta", {"text": chunk})
+        yield AnswerStreamEvent(
+            "model_completed",
+            {
+                "provider": generation.provider,
+                "model": generation.model,
+                "status": generation.status,
+                "metadata": generation.metadata,
+                "input_tokens": generation.metadata.get("input_tokens", 0),
+                "output_tokens": generation.metadata.get("output_tokens", 0),
+                "estimated_cost_usd": generation.metadata.get("estimated_cost_usd", 0.0),
+                "finish_reason": generation.metadata.get("finish_reason", ""),
+            },
+        )
+
+    def _finalize_answer(self, prepared: PreparedAnswer, generation: GeneratorResult) -> AnswerResult:
+        trace_steps = list(prepared.trace_steps)
         trace_steps.append(
             _trace_step(
                 "Generator execution",
@@ -198,24 +405,34 @@ class AdaptiveRAGAnswerService:
             )
         )
 
-        elapsed_ms = round((time.perf_counter() - start) * 1000, 3)
+        citation_validation = _validate_citations(generation.answer, prepared.contexts)
+        trace_steps.append(
+            _trace_step(
+                "Citation validation",
+                citation_validation["status"],
+                citation_validation["detail"],
+                citation_validation,
+            )
+        )
+
+        elapsed_ms = round((time.perf_counter() - prepared.start) * 1000, 3)
         metadata: Dict[str, Any] = {
-            "requested_mode": options.mode,
-            "route_level": route_level,
-            "route_label": _route_label(route_level),
-            "complexity_label": complexity_label,
-            "retrieval_used": retrieval_used,
-            "retrieval_mode": retrieval_mode,
-            "top_k": top_k,
-            "multi_step": route_level == "l3_complex_rag",
-            "decomposed_queries": decomposed_queries,
-            "retrieval_steps": retrieval_steps,
-            "aggregation_summary": aggregation_summary,
+            "requested_mode": prepared.options.mode,
+            "route_level": prepared.route_level,
+            "route_label": _route_label(prepared.route_level),
+            "complexity_label": prepared.complexity_label,
+            "retrieval_used": prepared.retrieval_used,
+            "retrieval_mode": prepared.retrieval_mode,
+            "top_k": prepared.top_k,
+            "multi_step": prepared.route_level == "l3_complex_rag",
+            "decomposed_queries": prepared.decomposed_queries,
+            "retrieval_steps": prepared.retrieval_steps,
+            "aggregation_summary": prepared.aggregation_summary,
             "latency_ms": elapsed_ms,
             "generator": generation.model,
             "configured_generator": {
-                "provider": chat_configuration.get("generator_provider", "Local"),
-                "model": chat_configuration.get("generator_model", "extractive"),
+                "provider": prepared.chat_configuration.get("generator_provider", "Local"),
+                "model": prepared.chat_configuration.get("generator_model", "extractive"),
             },
             "actual_generator": {
                 "provider": generation.provider,
@@ -225,20 +442,23 @@ class AdaptiveRAGAnswerService:
             "prompt_preview": generation.prompt_preview,
             "input_chars": generation.input_chars,
             "output_chars": generation.output_chars,
-            "chat_configuration": chat_configuration,
+            "chat_configuration": prepared.chat_configuration,
             "trace_steps": trace_steps,
+            "request_id": prepared.options.request_id,
+            "citation_validation": citation_validation,
+            "external_processing_allowed": prepared.external_processing_allowed,
         }
-        if knowledge_base is not None:
+        if prepared.knowledge_base is not None:
             metadata.update(
                 {
-                    "knowledge_base_id": knowledge_base.id,
-                    "knowledge_base_name": knowledge_base.name,
-                    "knowledge_base_status": knowledge_base.status,
-                    "knowledge_base_chunk_count": knowledge_base.chunk_count,
-                    "knowledge_base_document_count": knowledge_base.document_count,
+                    "knowledge_base_id": prepared.knowledge_base.id,
+                    "knowledge_base_name": prepared.knowledge_base.name,
+                    "knowledge_base_status": prepared.knowledge_base.status,
+                    "knowledge_base_chunk_count": prepared.knowledge_base.chunk_count,
+                    "knowledge_base_document_count": prepared.knowledge_base.document_count,
                 }
             )
-        return AnswerResult(question=query, answer=generation.answer, contexts=contexts, metadata=metadata)
+        return AnswerResult(question=prepared.query, answer=generation.answer, contexts=prepared.contexts, metadata=metadata)
 
     def _retrieve_multi_step(
         self,
@@ -540,3 +760,49 @@ def _trace_step(step: str, status: str, detail: str, metadata: Optional[Dict[str
         "detail": detail,
         "metadata": metadata or {},
     }
+
+
+def _external_processing_allowed(knowledge_base: Optional[KnowledgeBaseRecord]) -> bool:
+    if knowledge_base is None:
+        return True
+    configuration = knowledge_base.metadata.get("configuration") if isinstance(knowledge_base.metadata, dict) else {}
+    return bool((configuration or {}).get("external_processing_allowed", False))
+
+
+def _with_source_labels(contexts: List[RetrievedContext]) -> List[RetrievedContext]:
+    labeled: List[RetrievedContext] = []
+    for rank, context in enumerate(contexts, start=1):
+        metadata = dict(context.document.metadata)
+        metadata["source_label"] = f"S{rank}"
+        labeled.append(
+            RetrievedContext(
+                document=Document(id=context.document.id, text=context.document.text, metadata=metadata),
+                score=context.score,
+                rank=rank,
+                mode=context.mode,
+            )
+        )
+    return labeled
+
+
+def _validate_citations(answer: str, contexts: List[RetrievedContext]) -> Dict[str, Any]:
+    valid_labels = {str(context.document.metadata.get("source_label") or f"S{context.rank}") for context in contexts}
+    cited = set(re.findall(r"\[(S\d+)\]", answer or ""))
+    invalid = sorted(cited - valid_labels)
+    if not contexts:
+        return {"status": "not_applicable", "detail": "No retrieval context required citations.", "cited": sorted(cited), "invalid": invalid}
+    if invalid:
+        return {"status": "warning", "detail": "The answer contains citations that do not match retrieved sources.", "cited": sorted(cited), "invalid": invalid, "available": sorted(valid_labels)}
+    if not cited:
+        return {"status": "warning", "detail": "Retrieved context was used, but the answer contains no source labels.", "cited": [], "invalid": [], "available": sorted(valid_labels)}
+    return {"status": "completed", "detail": "All answer citations match retrieved sources.", "cited": sorted(cited), "invalid": [], "available": sorted(valid_labels)}
+
+
+async def _to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+    import asyncio
+
+    return await asyncio.to_thread(func, *args, **kwargs)
+
+
+def _text_chunks(text: str, size: int) -> List[str]:
+    return [text[index : index + max(size, 1)] for index in range(0, len(text), max(size, 1))]

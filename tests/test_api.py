@@ -16,6 +16,7 @@ from aragbiz.chat import ChatService, JsonChatRepository
 from aragbiz.evaluation import EvaluationService, JsonEvaluationRepository
 from aragbiz.knowledge import HashEmbeddingModel, KnowledgeService, OverlapChunker, SentenceTransformerEmbeddingModel
 from aragbiz.knowledge_store import JsonKnowledgeRepository
+from aragbiz.model_farm import JsonModelFarmRepository, ModelFarmError, ModelFarmService, ModelGateway, ModelStreamEvent
 from aragbiz.ragxplain import RagxplainRunner
 
 app = api_main.app
@@ -193,6 +194,64 @@ def test_answer_appends_to_existing_conversation():
     assert messages[0]["content"].startswith("Can I start accepting")
 
 
+def test_answer_stream_emits_deltas_and_persists_completed_messages():
+    client = TestClient(app)
+
+    response = client.post(
+        "/answer/stream",
+        json={
+            "question": "Can I start accepting payments while Wix Payments is under verification?",
+            "mode": "direct",
+        },
+    )
+
+    assert response.status_code == 200
+    events = _sse_events(response.text)
+    assert [event["type"] for event in events][0] == "started"
+    assert any(event["type"] == "trace" for event in events)
+    assert any(event["type"] == "delta" for event in events)
+    assert events[-1]["type"] == "completed"
+    started = next(event["data"] for event in events if event["type"] == "started" and event["data"].get("assistant_message_id"))
+    completed = events[-1]["data"]
+    assert completed["conversation_id"] == started["conversation_id"]
+    assert completed["metadata"]["assistant_message_id"] == started["assistant_message_id"]
+
+    messages = client.get(f"/chat/conversations/{completed['conversation_id']}/messages").json()
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert [message["status"] for message in messages] == ["completed", "completed"]
+    assert messages[1]["id"] == started["assistant_message_id"]
+    assert messages[1]["content"] == completed["answer"]
+    assert messages[1]["request_id"] == started["request_id"]
+
+
+def test_answer_stream_persists_failed_partial_message(monkeypatch):
+    async def broken_stream(*args, **kwargs):
+        yield ModelStreamEvent("delta", {"text": "partial answer"})
+        raise ModelFarmError("provider stopped")
+
+    monkeypatch.setattr(api_main.model_gateway, "stream", broken_stream)
+    client = TestClient(app)
+
+    response = client.post(
+        "/answer/stream",
+        json={
+            "question": "Can I start accepting payments while Wix Payments is under verification?",
+            "mode": "direct",
+        },
+    )
+
+    assert response.status_code == 200
+    events = _sse_events(response.text)
+    assert any(event["type"] == "delta" for event in events)
+    assert events[-1]["type"] == "error"
+    assert "provider stopped" in events[-1]["data"]["detail"]
+    started = next(event["data"] for event in events if event["type"] == "started" and event["data"].get("assistant_message_id"))
+    messages = client.get(f"/chat/conversations/{started['conversation_id']}/messages").json()
+    assert messages[1]["status"] == "failed"
+    assert messages[1]["content"] == "partial answer"
+    assert "provider stopped" in messages[1]["metadata"]["error"]
+
+
 def test_knowledge_base_endpoints_ingest_upload(monkeypatch, tmp_path):
     pytest.importorskip("multipart")
     service = KnowledgeService(
@@ -308,6 +367,77 @@ def test_upload_embedding_runtime_failure_returns_bad_request(monkeypatch, tmp_p
     assert response.status_code == 400
     assert "broken optional dependency" in response.json()["detail"]
     assert client.get(f"/knowledge-bases/{created['id']}").json()["status"] == "failed"
+
+
+def test_upload_with_model_gateway_embedding_runs_outside_active_event_loop(monkeypatch, tmp_path):
+    pytest.importorskip("multipart")
+    model_farm_service = ModelFarmService(JsonModelFarmRepository(str(tmp_path / "models.json")))
+    model_gateway = ModelGateway(model_farm_service)
+    service = KnowledgeService(
+        repository=JsonKnowledgeRepository(str(tmp_path / "knowledge.json")),
+        chunker=OverlapChunker(chunk_size=60, chunk_overlap=10),
+        embedder=HashEmbeddingModel(dimension=16),
+        model_farm_service=model_farm_service,
+        model_gateway=model_gateway,
+    )
+    monkeypatch.setattr(api_main, "knowledge_service", service)
+    client = TestClient(app)
+    created = client.post(
+        "/knowledge-bases",
+        json={
+            "name": "Model Farm KB",
+            "description": "Test",
+            "configuration": {
+                "embedding_deployment_id": "model-local-hash-384",
+                "embedding_provider": "Local",
+                "embedding_model": "hash-embedding-384",
+            },
+        },
+    ).json()
+
+    response = client.post(
+        f"/knowledge-bases/{created['id']}/sources/upload",
+        files={"files": ("workflow.txt", b"Approve invoices after matching purchase order.", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["documents_added"] == 1
+    chunks = client.get(f"/knowledge-bases/{created['id']}/chunks").json()
+    assert chunks[0]["embedding_model"] == "hash-embedding-384"
+
+
+def test_model_farm_template_api_creates_disabled_deployment(monkeypatch, tmp_path):
+    model_farm_service = ModelFarmService(JsonModelFarmRepository(str(tmp_path / "models.json")))
+    model_gateway = ModelGateway(model_farm_service)
+    monkeypatch.setattr(api_main, "model_farm_service", model_farm_service)
+    monkeypatch.setattr(api_main, "model_gateway", model_gateway)
+    monkeypatch.setattr(api_main, "_require_user", lambda authorization: None)
+    monkeypatch.setattr(api_main, "_require_admin", lambda authorization: None)
+    client = TestClient(app)
+
+    providers = client.get("/model-farm/providers")
+    assert providers.status_code == 200
+    assert {item["id"] for item in providers.json()} >= {"openai-generation", "openai-compatible"}
+
+    created = client.post(
+        "/model-farm/deployments/from-template",
+        json={
+            "template_id": "openai-generation",
+            "name": "OpenAI GPT deployment",
+            "credential_env_refs": {"api_key": "ARAGBIZ_MODEL_OPENAI_API_KEY"},
+            "capabilities": ["generation", "judge"],
+        },
+    )
+    assert created.status_code == 200
+    payload = created.json()
+    assert payload["enabled"] is False
+    assert payload["health_status"] == "untested"
+    assert payload["metadata"]["template_id"] == "openai-generation"
+
+    enable = client.patch(f"/model-farm/deployments/{payload['id']}", json={"enabled": True})
+    assert enable.status_code == 400
+    assert "Test a remote deployment" in enable.json()["detail"]
 
 
 def test_knowledge_document_crud_and_answer_selection(monkeypatch, tmp_path):
@@ -569,3 +699,20 @@ def test_knowledge_base_update_and_delete_endpoints(monkeypatch, tmp_path):
     assert deleted.status_code == 200
     assert client.get("/knowledge-bases").json() == []
     assert client.get(f"/knowledge-bases/{kb['id']}/documents").status_code == 404
+
+
+def _sse_events(body: str):
+    events = []
+    for part in body.strip().split("\n\n"):
+        if not part.strip():
+            continue
+        event_type = "message"
+        data_lines = []
+        for line in part.splitlines():
+            if line.startswith("event:"):
+                event_type = line.split(":", 1)[1].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line.split(":", 1)[1].strip())
+        if data_lines:
+            events.append({"type": event_type, "data": json.loads("\n".join(data_lines))})
+    return events

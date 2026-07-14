@@ -1,4 +1,39 @@
-﻿const API_BASE_URL = import.meta.env.VITE_ARAGBIZ_API_URL || "http://127.0.0.1:8000";
+const API_BASE_URL = import.meta.env.VITE_ARAGBIZ_API_URL || "http://127.0.0.1:8000";
+const AUTH_STORAGE_KEY = "aragbiz:auth-token";
+
+function authHeaders(extra = {}) {
+  const token = window.localStorage.getItem(AUTH_STORAGE_KEY);
+  return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
+}
+
+export function setAuthToken(token) {
+  if (token) window.localStorage.setItem(AUTH_STORAGE_KEY, token);
+  else window.localStorage.removeItem(AUTH_STORAGE_KEY);
+}
+
+export async function login(payload) {
+  const response = await fetch(`${API_BASE_URL}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  await assertOk(response, "Login failed");
+  const result = await response.json();
+  setAuthToken(result.access_token);
+  return result;
+}
+
+export async function signup(payload) {
+  const response = await fetch(`${API_BASE_URL}/auth/signup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  await assertOk(response, "Sign up failed");
+  const result = await response.json();
+  setAuthToken(result.access_token);
+  return result;
+}
 
 export async function askQuestion(question, options = {}) {
   const response = await fetch(`${API_BASE_URL}/answer`, {
@@ -19,12 +54,80 @@ export async function askQuestion(question, options = {}) {
   return response.json();
 }
 
+export async function askQuestionStream(question, options = {}, onEvent = () => {}) {
+  const response = await fetch(`${API_BASE_URL}/answer/stream`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      question,
+      request_id: options.requestId || "",
+      conversation_id: options.conversationId || null,
+      knowledge_base_id: options.knowledgeBaseId || null,
+      mode: options.mode || "adaptive",
+      retrieval_mode: options.retrievalMode || "hybrid",
+      top_k: options.topK || 4,
+      chat_configuration_id: options.chatConfigurationId || null,
+      chat_configuration: options.chatConfiguration || null
+    })
+  });
+  await assertOk(response, "Streaming answer request failed");
+  if (!response.body) throw new Error("Streaming is not supported by this browser.");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let completedPayload = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split(/\n\n/);
+    buffer = parts.pop() || "";
+    for (const part of parts) {
+      const event = parseSseEvent(part);
+      if (!event) continue;
+      onEvent(event);
+      if (event.type === "completed") completedPayload = event.data;
+      if (event.type === "error") {
+        throw new Error(event.data?.detail || "Streaming answer failed.");
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const event = parseSseEvent(buffer);
+    if (event) {
+      onEvent(event);
+      if (event.type === "completed") completedPayload = event.data;
+      if (event.type === "error") throw new Error(event.data?.detail || "Streaming answer failed.");
+    }
+  }
+  return completedPayload;
+}
+
+function parseSseEvent(raw) {
+  const lines = raw.split(/\r?\n/);
+  const typeLine = lines.find((line) => line.startsWith("event:"));
+  const dataLines = lines.filter((line) => line.startsWith("data:"));
+  if (!typeLine || dataLines.length === 0) return null;
+  const type = typeLine.slice("event:".length).trim();
+  const dataRaw = dataLines.map((line) => line.slice("data:".length).trimStart()).join("\n");
+  try {
+    return { type, data: JSON.parse(dataRaw) };
+  } catch {
+    return { type, data: dataRaw };
+  }
+}
+
 export async function listChatConversations({ query = "", section = "" } = {}) {
   const params = new URLSearchParams();
   if (query) params.set("query", query);
   if (section) params.set("section", section);
   const suffix = params.toString() ? `?${params.toString()}` : "";
-  const response = await fetch(`${API_BASE_URL}/chat/conversations${suffix}`);
+  const response = await fetch(`${API_BASE_URL}/chat/conversations${suffix}`, {
+    headers: authHeaders()
+  });
   await assertOk(response, "Chat conversations request failed");
   return response.json();
 }
@@ -58,7 +161,9 @@ export async function deleteChatConversation(conversationId) {
 }
 
 export async function listChatMessages(conversationId) {
-  const response = await fetch(`${API_BASE_URL}/chat/conversations/${conversationId}/messages`);
+  const response = await fetch(`${API_BASE_URL}/chat/conversations/${conversationId}/messages`, {
+    headers: authHeaders()
+  });
   await assertOk(response, "Chat messages request failed");
   return response.json();
 }
@@ -94,6 +199,93 @@ export async function deleteChatConfiguration(configurationId) {
     method: "DELETE"
   });
   await assertOk(response, "Delete chat configuration failed");
+  return response.json();
+}
+
+export async function listModelProviders() {
+  const response = await fetch(`${API_BASE_URL}/model-farm/providers`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Model providers request failed");
+  return response.json();
+}
+
+export async function listModelDeployments({ capability = "", enabled = "" } = {}) {
+  const params = new URLSearchParams();
+  if (capability) params.set("capability", capability);
+  if (enabled !== "") params.set("enabled", String(enabled));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(`${API_BASE_URL}/model-farm/deployments${suffix}`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Model deployments request failed");
+  return response.json();
+}
+
+export async function createModelDeploymentFromTemplate(payload) {
+  const response = await fetch(`${API_BASE_URL}/model-farm/deployments/from-template`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload)
+  });
+  await assertOk(response, "Create model deployment failed");
+  return response.json();
+}
+
+export async function updateModelDeployment(deploymentId, payload) {
+  const response = await fetch(`${API_BASE_URL}/model-farm/deployments/${deploymentId}`, {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload)
+  });
+  await assertOk(response, "Update model deployment failed");
+  return response.json();
+}
+
+export async function deleteModelDeployment(deploymentId) {
+  const response = await fetch(`${API_BASE_URL}/model-farm/deployments/${deploymentId}`, {
+    method: "DELETE",
+    headers: authHeaders()
+  });
+  await assertOk(response, "Delete model deployment failed");
+  return response.json();
+}
+
+export async function testModelDeployment(deploymentId) {
+  const response = await fetch(`${API_BASE_URL}/model-farm/deployments/${deploymentId}/test`, {
+    method: "POST",
+    headers: authHeaders()
+  });
+  await assertOk(response, "Test model deployment failed");
+  return response.json();
+}
+
+export async function listModelUsage({ deploymentId = "", purpose = "", limit = 500 } = {}) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (deploymentId) params.set("deployment_id", deploymentId);
+  if (purpose) params.set("purpose", purpose);
+  const response = await fetch(`${API_BASE_URL}/model-farm/usage?${params.toString()}`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Model usage request failed");
+  return response.json();
+}
+
+export async function getModelUsageSummary() {
+  const response = await fetch(`${API_BASE_URL}/model-farm/usage/summary`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Model usage summary request failed");
+  return response.json();
+}
+
+export async function listJobs({ status = "", limit = 100 } = {}) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (status) params.set("status", status);
+  const response = await fetch(`${API_BASE_URL}/jobs?${params.toString()}`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Jobs request failed");
   return response.json();
 }
 
@@ -226,6 +418,12 @@ export async function listKnowledgeChunks(knowledgeBaseId, limit = 1000) {
 export async function getKnowledgeProcessingTrace(knowledgeBaseId) {
   const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/processing-trace`);
   await assertOk(response, "Processing trace request failed");
+  return response.json();
+}
+
+export async function listKnowledgeIndexVersions(knowledgeBaseId) {
+  const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/index-versions`);
+  await assertOk(response, "Index versions request failed");
   return response.json();
 }
 

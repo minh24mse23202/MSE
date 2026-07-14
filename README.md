@@ -29,7 +29,7 @@ py -3.11 --version
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -U pip
-python -m pip install -e ".[dev,api,app,ml]"
+python -m pip install -e ".[dev,api,app,ml,models]"
 python -m pytest
 ```
 
@@ -50,10 +50,22 @@ Start local PostgreSQL + pgVector for the Knowledge & data processing layer:
 docker compose up -d postgres
 ```
 
+Apply database migrations when using PostgreSQL:
+
+```powershell
+alembic upgrade head
+```
+
 Run the API:
 
 ```powershell
 python -m uvicorn api.main:app --reload
+```
+
+Run the background worker for queued ingestion, indexing, and evaluation jobs:
+
+```powershell
+python -m aragbiz.worker
 ```
 
 Run the chatbot UI:
@@ -71,6 +83,28 @@ npm run dev
 ```
 
 The React app calls the FastAPI backend at `http://127.0.0.1:8000`.
+
+Run the full local stack with PostgreSQL, migrations, API, and worker:
+
+```powershell
+docker compose up --build
+```
+
+## AI Models
+
+AI Models is the provider-neutral runtime layer for generation, embeddings, reranking, judging, planning, and classifiers. Built-in local deployments are seeded automatically:
+
+- `model-local-extractive`
+- `model-local-flan-t5-small`
+- `model-local-hash-384`
+- `model-local-minilm-384`
+- `model-local-lexical-reranker`
+- `model-local-distilbert`
+- `model-local-t5-classifier`
+
+Remote deployments are registered from the React **AI Models** screen or the `/model-farm/deployments` API. Deployment records store only environment-variable names with the `ARAGBIZ_MODEL_*` prefix; secrets stay in `.env` or the host environment. Paid deployments should be tested before enabling and should have pricing/budget values configured.
+
+Knowledge bases select an embedding deployment and keep query embeddings tied to the active index version. Chat configurations select generator, fallback, planner, and reranker deployments. Evaluation runs can select a registered judge deployment and persist that choice with the run metadata.
 
 Knowledge-base ingestion APIs are available under:
 

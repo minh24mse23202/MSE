@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import mimetypes
 import re
+import socket
 import uuid
 import urllib.request
-from dataclasses import dataclass, field
+import urllib.parse
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Protocol
+
+from aragbiz.model_farm import ModelCallContext, ModelFarmError, ModelFarmService, ModelGateway
 
 
 CUSTOM_CHUNKING_EXTENSIONS = {".aratxt", ".arajson", ".aramd"}
@@ -30,6 +35,8 @@ DEFAULT_KNOWLEDGE_BASE_CONFIGURATION = {
     "chunk_overlap": 120,
     "embedding_provider": "Local",
     "embedding_model": "hash-embedding-384",
+    "embedding_deployment_id": "model-local-hash-384",
+    "external_processing_allowed": False,
 }
 LOCAL_EMBEDDING_PROVIDER = "Local"
 HASH_EMBEDDING_MODEL = "hash-embedding-384"
@@ -66,6 +73,23 @@ class KnowledgeBaseRecord:
     updated_at: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class KnowledgeIndexVersionRecord:
+    id: str
+    knowledge_base_id: str
+    status: str
+    chunking_configuration: Dict[str, Any] = field(default_factory=dict)
+    embedding_deployment_id: str = ""
+    embedding_provider: str = ""
+    embedding_model: str = ""
+    embedding_dimension: int = 0
+    document_count: int = 0
+    chunk_count: int = 0
+    error: str = ""
+    created_at: str = ""
+    activated_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,6 +134,8 @@ class StoredKnowledgeChunk:
     embedding_model: str = ""
     embedding_dimension: int = 0
     has_embedding: bool = False
+    index_version_id: str = ""
+    parent_chunk_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -235,6 +261,27 @@ class KnowledgeRepository(Protocol):
     ) -> None:
         """Persist an ingestion run summary."""
 
+    def create_index_version(
+        self,
+        knowledge_base_id: str,
+        configuration: Dict[str, Any],
+        *,
+        embedding_provider: str,
+        embedding_model: str,
+        embedding_deployment_id: str,
+        embedding_dimension: int,
+    ) -> KnowledgeIndexVersionRecord:
+        """Create a draft immutable index version."""
+
+    def activate_index_version(self, knowledge_base_id: str, version_id: str) -> KnowledgeIndexVersionRecord:
+        """Atomically activate a completed index version."""
+
+    def fail_index_version(self, knowledge_base_id: str, version_id: str, error: str) -> None:
+        """Mark a draft version failed without replacing the active index."""
+
+    def list_index_versions(self, knowledge_base_id: str) -> List[KnowledgeIndexVersionRecord]:
+        """List index versions newest first."""
+
 
 class KnowledgeService:
     def __init__(
@@ -242,12 +289,16 @@ class KnowledgeService:
         repository: KnowledgeRepository,
         chunker: "OverlapChunker",
         embedder: "EmbeddingModel",
+        model_farm_service: Optional[ModelFarmService] = None,
+        model_gateway: Optional[ModelGateway] = None,
     ):
         self.repository = repository
         self.chunker = chunker
         self.default_embedder = embedder
         self._embedding_dimension = embedder.dimension
         self._embedder_cache: Dict[tuple[str, str, int], "EmbeddingModel"] = {}
+        self.model_farm_service = model_farm_service
+        self.model_gateway = model_gateway
 
     def create_knowledge_base(
         self,
@@ -256,7 +307,7 @@ class KnowledgeService:
         configuration: Optional[Dict[str, Any]] = None,
     ) -> KnowledgeBaseRecord:
         self.repository.initialize()
-        normalized_configuration = validate_knowledge_base_configuration(configuration)
+        normalized_configuration = self._validate_configuration(configuration)
         return self.repository.create_knowledge_base(
             name=name,
             description=description,
@@ -282,7 +333,7 @@ class KnowledgeService:
         current = self.repository.get_knowledge_base(knowledge_base_id)
         metadata = dict(current.metadata)
         if configuration is not None:
-            metadata["configuration"] = validate_knowledge_base_configuration(configuration)
+            metadata["configuration"] = self._validate_configuration(configuration)
         self.repository.update_knowledge_base(
             knowledge_base_id,
             name=name.strip(),
@@ -315,6 +366,12 @@ class KnowledgeService:
         embedder = self._embedder_for_configuration(configuration)
         embeddings = embedder.embed([query])
         return (embeddings[0] if embeddings else [], embedder.model_name)
+
+    def list_index_versions(self, knowledge_base_id: str) -> List[KnowledgeIndexVersionRecord]:
+        self.repository.initialize()
+        self.repository.get_knowledge_base(knowledge_base_id)
+        method = getattr(self.repository, "list_index_versions", None)
+        return list(method(knowledge_base_id)) if callable(method) else []
 
     def processing_trace(self, knowledge_base_id: str) -> List[ProcessingTraceStep]:
         self.repository.initialize()
@@ -439,21 +496,7 @@ class KnowledgeService:
             },
         )
         self.repository.add_document(document)
-        chunks = _chunker_from_configuration(configuration).chunk_stored_document(document)
-        embeddings = embedder.embed([chunk.text for chunk in chunks]) if chunks else []
-        self.repository.replace_document_chunks(knowledge_base_id, document.id, chunks, embeddings, embedder.model_name)
-        self.repository.update_knowledge_base(
-            knowledge_base_id,
-            status="indexed" if chunks else "empty",
-            embedding_model=embedder.model_name,
-            error=None,
-        )
-        self.repository.record_ingestion_run(
-            knowledge_base_id,
-            "indexed" if chunks else "empty",
-            {"documents_added": 1, "documents_skipped": 0, "chunks_added": len(chunks)},
-            source_id=source.id,
-        )
+        self.reindex(knowledge_base_id)
         return document
 
     def update_document(
@@ -467,7 +510,6 @@ class KnowledgeService:
         self.repository.initialize()
         existing = self.repository.get_document(knowledge_base_id, document_id)
         configuration = self._knowledge_base_configuration(knowledge_base_id)
-        embedder = self._embedder_for_configuration(configuration)
         clean = clean_text(text)
         if not clean:
             raise KnowledgeProcessingError("Document text cannot be empty.")
@@ -491,40 +533,15 @@ class KnowledgeService:
             },
         )
         self.repository.update_document(updated)
-        chunks = _chunker_from_configuration(configuration).chunk_stored_document(updated)
-        embeddings = embedder.embed([chunk.text for chunk in chunks]) if chunks else []
-        self.repository.replace_document_chunks(knowledge_base_id, document_id, chunks, embeddings, embedder.model_name)
-        self.repository.update_knowledge_base(
-            knowledge_base_id,
-            status="indexed" if chunks else "empty",
-            embedding_model=embedder.model_name,
-            error=None,
-        )
-        self.repository.record_ingestion_run(
-            knowledge_base_id,
-            "indexed" if chunks else "empty",
-            {"documents_added": 0, "documents_skipped": 0, "chunks_added": len(chunks)},
-            source_id=existing.source_id,
-        )
+        self.reindex(knowledge_base_id)
         return updated
 
     def delete_document(self, knowledge_base_id: str, document_id: str) -> None:
         self.repository.initialize()
-        knowledge_base = self.repository.get_knowledge_base(knowledge_base_id)
+        self.repository.get_knowledge_base(knowledge_base_id)
         self.repository.get_document(knowledge_base_id, document_id)
         self.repository.delete_document(knowledge_base_id, document_id)
-        remaining_chunks = self.repository.list_chunks(knowledge_base_id, limit=1)
-        self.repository.update_knowledge_base(
-            knowledge_base_id,
-            status="indexed" if remaining_chunks else "empty",
-            embedding_model=knowledge_base.embedding_model,
-            error=None,
-        )
-        self.repository.record_ingestion_run(
-            knowledge_base_id,
-            "indexed" if remaining_chunks else "empty",
-            {"documents_added": 0, "documents_skipped": 0, "chunks_added": 0},
-        )
+        self.reindex(knowledge_base_id)
 
     def ingest_uploaded_file(self, knowledge_base_id: str, filename: str, content: bytes) -> IngestionSummary:
         self.repository.initialize()
@@ -553,18 +570,48 @@ class KnowledgeService:
         configuration = self._knowledge_base_configuration(knowledge_base_id)
         embedder = self._embedder_for_configuration(configuration)
         documents = self.repository.list_documents(knowledge_base_id)
-        chunks: List[StoredKnowledgeChunk] = []
-        chunker = _chunker_from_configuration(configuration)
-        for document in documents:
-            chunks.extend(chunker.chunk_stored_document(_document_with_processing_metadata(document, configuration)))
-        embeddings = embedder.embed([chunk.text for chunk in chunks]) if chunks else []
-        self.repository.replace_chunks(knowledge_base_id, chunks, embeddings, embedder.model_name)
-        self.repository.update_knowledge_base(
-            knowledge_base_id,
-            status="indexed" if chunks else "empty",
-            embedding_model=embedder.model_name,
-            error=None,
-        )
+        version = self._create_index_version(knowledge_base_id, configuration, embedder)
+        try:
+            chunks: List[StoredKnowledgeChunk] = []
+            chunker = _chunker_from_configuration(configuration)
+            for document in documents:
+                chunks.extend(chunker.chunk_stored_document(_document_with_processing_metadata(document, configuration)))
+            if version is not None:
+                chunks = [
+                    replace(
+                        chunk,
+                        index_version_id=version.id,
+                        metadata={**chunk.metadata, "index_version_id": version.id},
+                    )
+                    for chunk in chunks
+                ]
+            embeddings = embedder.embed([chunk.text for chunk in chunks]) if chunks else []
+            self.repository.replace_chunks(knowledge_base_id, chunks, embeddings, embedder.model_name)
+            if version is not None:
+                activate = getattr(self.repository, "activate_index_version", None)
+                if callable(activate):
+                    activate(knowledge_base_id, version.id)
+            self.repository.update_knowledge_base(
+                knowledge_base_id,
+                status="indexed" if chunks else "empty",
+                embedding_model=embedder.model_name,
+                error=None,
+            )
+        except Exception as exc:
+            if version is not None:
+                fail = getattr(self.repository, "fail_index_version", None)
+                if callable(fail):
+                    fail(knowledge_base_id, version.id, str(exc))
+            current = self.repository.get_knowledge_base(knowledge_base_id)
+            self.repository.update_knowledge_base(
+                knowledge_base_id,
+                status="indexed" if current.chunk_count else "failed",
+                embedding_model=current.embedding_model,
+                error=str(exc),
+            )
+            if isinstance(exc, KnowledgeProcessingError):
+                raise
+            raise KnowledgeProcessingError(str(exc)) from exc
         summary = IngestionSummary(
             knowledge_base_id=knowledge_base_id,
             source_id=None,
@@ -579,6 +626,24 @@ class KnowledgeService:
             {"documents_added": 0, "documents_skipped": 0, "chunks_added": len(chunks)},
         )
         return summary
+
+    def _create_index_version(
+        self,
+        knowledge_base_id: str,
+        configuration: Dict[str, Any],
+        embedder: "EmbeddingModel",
+    ) -> Optional[KnowledgeIndexVersionRecord]:
+        create = getattr(self.repository, "create_index_version", None)
+        if not callable(create):
+            return None
+        return create(
+            knowledge_base_id,
+            configuration,
+            embedding_provider=configuration.get("embedding_provider", ""),
+            embedding_model=embedder.model_name,
+            embedding_deployment_id=configuration.get("embedding_deployment_id", ""),
+            embedding_dimension=embedder.dimension,
+        )
 
     def _ingest_documents(
         self,
@@ -597,7 +662,6 @@ class KnowledgeService:
         )
         try:
             configuration = self._knowledge_base_configuration(knowledge_base_id)
-            embedder = self._embedder_for_configuration(configuration)
             self.repository.update_knowledge_base(knowledge_base_id, status="processing", error=None)
             known_hashes = self.repository.existing_hashes(knowledge_base_id)
             stored_documents: List[StoredKnowledgeDocument] = []
@@ -630,26 +694,16 @@ class KnowledgeService:
                 )
                 self.repository.add_document(stored_document)
                 stored_documents.append(stored_document)
-            chunks: List[StoredKnowledgeChunk] = []
-            chunker = _chunker_from_configuration(configuration)
-            for document in stored_documents:
-                chunks.extend(chunker.chunk_stored_document(document))
-            embeddings = embedder.embed([chunk.text for chunk in chunks]) if chunks else []
-            self.repository.append_chunks(chunks, embeddings, embedder.model_name)
-            status = "indexed" if chunks or skipped else "empty"
-            self.repository.update_knowledge_base(
-                knowledge_base_id,
-                status=status,
-                embedding_model=embedder.model_name,
-                error=None,
-            )
+            reindex_summary = self.reindex(knowledge_base_id) if stored_documents else None
+            chunks_added = reindex_summary.chunks_added if reindex_summary else 0
+            status = reindex_summary.status if reindex_summary else ("indexed" if skipped else "empty")
             summary = IngestionSummary(
                 knowledge_base_id=knowledge_base_id,
                 source_id=source.id,
                 status=status,
                 documents_added=len(stored_documents),
                 documents_skipped=skipped,
-                chunks_added=len(chunks),
+                chunks_added=chunks_added,
             )
             self.repository.record_ingestion_run(
                 knowledge_base_id,
@@ -657,7 +711,7 @@ class KnowledgeService:
                 {
                     "documents_added": len(stored_documents),
                     "documents_skipped": skipped,
-                    "chunks_added": len(chunks),
+                    "chunks_added": chunks_added,
                 },
                 source_id=source.id,
             )
@@ -681,7 +735,20 @@ class KnowledgeService:
         return normalize_knowledge_base_configuration(knowledge_base.metadata.get("configuration"))
 
     def _embedder_for_configuration(self, configuration: Dict[str, Any]) -> "EmbeddingModel":
-        normalized = validate_knowledge_base_configuration(configuration)
+        normalized = self._validate_configuration(configuration)
+        deployment_id = normalized.get("embedding_deployment_id", "")
+        if deployment_id and self.model_farm_service is not None and self.model_gateway is not None:
+            deployment = self.model_farm_service.resolve(deployment_id, "embedding")
+            cache_key = (deployment.provider, deployment.id, deployment.dimension)
+            if cache_key not in self._embedder_cache:
+                self._embedder_cache[cache_key] = GatewayEmbeddingModel(
+                    self.model_gateway,
+                    deployment.id,
+                    model_name=deployment.model,
+                    dimension=deployment.dimension,
+                    external_processing_allowed=bool(normalized.get("external_processing_allowed")),
+                )
+            return self._embedder_cache[cache_key]
         provider = normalized["embedding_provider"]
         model_name = normalized["embedding_model"]
         cache_key = (provider, model_name, self._embedding_dimension)
@@ -700,6 +767,22 @@ class KnowledgeService:
                     f"Modify the knowledge base to use Local with one of: {supported}."
                 )
         return self._embedder_cache[cache_key]
+
+    def _validate_configuration(self, configuration: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        normalized = validate_knowledge_base_configuration(configuration)
+        deployment_id = normalized.get("embedding_deployment_id", "")
+        if deployment_id and self.model_farm_service is not None:
+            try:
+                deployment = self.model_farm_service.resolve(deployment_id, "embedding")
+            except (KeyError, ModelFarmError) as exc:
+                raise KnowledgeProcessingError(str(exc)) from exc
+            if not deployment.is_local and not normalized.get("external_processing_allowed"):
+                raise KnowledgeProcessingError(
+                    "Enable external processing before selecting a remote embedding deployment."
+                )
+            normalized["embedding_provider"] = deployment.provider
+            normalized["embedding_model"] = deployment.model
+        return normalized
 
 
 class OverlapChunker:
@@ -753,12 +836,218 @@ class OverlapChunker:
         return chunks
 
 
+class HeaderChunker:
+    def __init__(self, chunk_size: int = 800):
+        self.chunk_size = chunk_size
+
+    def chunk_stored_document(self, document: StoredKnowledgeDocument) -> List[StoredKnowledgeChunk]:
+        text = clean_text(document.text)
+        sections: List[tuple[str, str]] = []
+        heading = document.title
+        body: List[str] = []
+        for line in text.splitlines():
+            clean = line.strip()
+            if re.match(r"^#{1,6}\s+", clean) or (clean.endswith(":") and len(clean) < 100):
+                if body:
+                    sections.append((heading, "\n".join(body).strip()))
+                heading = re.sub(r"^#{1,6}\s+", "", clean).rstrip(":").strip() or heading
+                body = []
+            else:
+                body.append(line)
+        if body:
+            sections.append((heading, "\n".join(body).strip()))
+        if not sections:
+            sections = [(document.title, text)]
+        chunks: List[StoredKnowledgeChunk] = []
+        for section_heading, section_text in sections:
+            for segment in _bounded_segments(section_text, self.chunk_size):
+                chunks.append(_stored_chunk(document, len(chunks), segment, "header_based", {"header": section_heading}))
+        return chunks
+
+
+class RecursiveChunker:
+    def __init__(self, chunk_size: int = 800, chunk_overlap: int = 0):
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+
+    def chunk_stored_document(self, document: StoredKnowledgeDocument) -> List[StoredKnowledgeChunk]:
+        segments = _recursive_split(clean_text(document.text), self.chunk_size, ["\n\n", "\n", ". ", " "])
+        if self.chunk_overlap > 0 and len(segments) > 1:
+            segments = [segments[0], *[(segments[index - 1][-self.chunk_overlap :] + " " + segment).strip() for index, segment in enumerate(segments[1:], 1)]]
+        return [_stored_chunk(document, index, segment, "recursive") for index, segment in enumerate(segments) if segment]
+
+
+class SemanticChunker:
+    def __init__(self, chunk_size: int = 800, similarity_threshold: float = 0.12):
+        self.chunk_size = chunk_size
+        self.similarity_threshold = similarity_threshold
+
+    def chunk_stored_document(self, document: StoredKnowledgeDocument) -> List[StoredKnowledgeChunk]:
+        sentences = [item.strip() for item in re.split(r"(?<=[.!?])\s+|\n+", clean_text(document.text)) if item.strip()]
+        if not sentences:
+            return []
+        groups: List[List[str]] = [[sentences[0]]]
+        for sentence in sentences[1:]:
+            current = " ".join(groups[-1])
+            related = _token_similarity(current, sentence) >= self.similarity_threshold
+            if related and len(current) + len(sentence) + 1 <= self.chunk_size:
+                groups[-1].append(sentence)
+            else:
+                groups.append([sentence])
+        segments: List[str] = []
+        for group in groups:
+            segments.extend(_bounded_segments(" ".join(group), self.chunk_size))
+        return [
+            _stored_chunk(document, index, segment, "semantic", {"semantic_threshold": self.similarity_threshold})
+            for index, segment in enumerate(segments)
+        ]
+
+
+class HierarchicalChunker:
+    def __init__(self, parent_size: int = 2000, child_size: int = 600, child_overlap: int = 80):
+        self.parent_size = max(parent_size, child_size)
+        self.child_size = child_size
+        self.child_overlap = min(max(child_overlap, 0), child_size - 1)
+
+    def chunk_stored_document(self, document: StoredKnowledgeDocument) -> List[StoredKnowledgeChunk]:
+        parents = _bounded_segments(clean_text(document.text), self.parent_size)
+        chunks: List[StoredKnowledgeChunk] = []
+        for parent_index, parent_text in enumerate(parents):
+            parent_id = f"parent-{uuid.uuid4().hex}"
+            child_document = StoredKnowledgeDocument(
+                document.id, document.knowledge_base_id, document.source_id, document.title,
+                document.content_hash, parent_text, document.metadata,
+            )
+            children = OverlapChunker(self.child_size, self.child_overlap).chunk_stored_document(child_document)
+            for child in children:
+                chunks.append(
+                    StoredKnowledgeChunk(
+                        id=child.id,
+                        knowledge_base_id=child.knowledge_base_id,
+                        document_id=child.document_id,
+                        chunk_index=len(chunks),
+                        text=child.text,
+                        token_count=child.token_count,
+                        metadata={
+                            **child.metadata,
+                            "chunking_strategy": "hierarchical_parent_child",
+                            "parent_chunk_id": parent_id,
+                            "parent_chunk_index": parent_index,
+                            "parent_text": parent_text,
+                        },
+                        parent_chunk_id=parent_id,
+                    )
+                )
+        return chunks
+
+
+def _stored_chunk(
+    document: StoredKnowledgeDocument,
+    index: int,
+    text: str,
+    strategy: str,
+    extra_metadata: Optional[Dict[str, Any]] = None,
+) -> StoredKnowledgeChunk:
+    return StoredKnowledgeChunk(
+        id=f"chunk-{uuid.uuid4().hex}",
+        knowledge_base_id=document.knowledge_base_id,
+        document_id=document.id,
+        chunk_index=index,
+        text=text.strip(),
+        token_count=len(simple_tokens(text)),
+        metadata={
+            "title": document.title,
+            "source_id": document.source_id,
+            "content_hash": document.content_hash,
+            "chunk_content_hash": content_hash(text),
+            "chunking_mode": strategy,
+            "chunking_strategy": strategy,
+            "embedding_provider": document.metadata.get("embedding_provider", ""),
+            "embedding_model_requested": document.metadata.get("embedding_model_requested", ""),
+            "embedding_deployment_id": document.metadata.get("embedding_deployment_id", ""),
+            **(extra_metadata or {}),
+        },
+    )
+
+
+def _bounded_segments(text: str, size: int) -> List[str]:
+    clean = text.strip()
+    if not clean:
+        return []
+    if len(clean) <= size:
+        return [clean]
+    return _recursive_split(clean, size, ["\n\n", "\n", ". ", " "])
+
+
+def _recursive_split(text: str, size: int, separators: List[str]) -> List[str]:
+    clean = text.strip()
+    if not clean:
+        return []
+    if len(clean) <= size:
+        return [clean]
+    if not separators:
+        return [clean[index : index + size].strip() for index in range(0, len(clean), size)]
+    separator = separators[0]
+    parts = clean.split(separator)
+    if len(parts) == 1:
+        return _recursive_split(clean, size, separators[1:])
+    segments: List[str] = []
+    buffer = ""
+    for part in parts:
+        candidate = f"{buffer}{separator if buffer else ''}{part}".strip()
+        if len(candidate) <= size:
+            buffer = candidate
+            continue
+        if buffer:
+            segments.extend(_recursive_split(buffer, size, separators[1:]))
+        buffer = part.strip()
+    if buffer:
+        segments.extend(_recursive_split(buffer, size, separators[1:]))
+    return segments
+
+
+def _token_similarity(left: str, right: str) -> float:
+    left_tokens = set(simple_tokens(left))
+    right_tokens = set(simple_tokens(right))
+    return len(left_tokens & right_tokens) / max(len(left_tokens | right_tokens), 1)
+
+
 class EmbeddingModel(Protocol):
     model_name: str
     dimension: int
 
     def embed(self, texts: List[str]) -> List[List[float]]:
         """Embed text chunks."""
+
+
+class GatewayEmbeddingModel:
+    def __init__(
+        self,
+        gateway: ModelGateway,
+        deployment_id: str,
+        *,
+        model_name: str,
+        dimension: int,
+        external_processing_allowed: bool,
+    ):
+        self.gateway = gateway
+        self.deployment_id = deployment_id
+        self.model_name = model_name
+        self.dimension = dimension
+        self.external_processing_allowed = external_processing_allowed
+
+    def embed(self, texts: List[str]) -> List[List[float]]:
+        try:
+            result = self.gateway.embed_sync(
+                texts,
+                self.deployment_id,
+                context=ModelCallContext(purpose="knowledge_embedding"),
+                external_processing_allowed=self.external_processing_allowed,
+            )
+        except ModelFarmError as exc:
+            raise KnowledgeProcessingError(str(exc)) from exc
+        self.dimension = result.dimension
+        return result.embeddings
 
 
 class HashEmbeddingModel:
@@ -864,12 +1153,23 @@ def normalize_knowledge_base_configuration(configuration: Optional[Dict[str, Any
     if provider.lower() == LOCAL_EMBEDDING_PROVIDER.lower():
         provider = LOCAL_EMBEDDING_PROVIDER
     embedding_model = str(raw.get("embedding_model") or DEFAULT_KNOWLEDGE_BASE_CONFIGURATION["embedding_model"]).strip() or HASH_EMBEDDING_MODEL
+    embedding_deployment_id = str(raw.get("embedding_deployment_id") or "").strip()
+    if (
+        not embedding_deployment_id
+        and provider == LOCAL_EMBEDDING_PROVIDER
+        and embedding_model in SUPPORTED_LOCAL_EMBEDDING_MODELS
+    ):
+        embedding_deployment_id = (
+            "model-local-minilm-384" if embedding_model == SENTENCE_TRANSFORMER_MINILM_MODEL else "model-local-hash-384"
+        )
     return {
         "chunking_strategy": strategy,
         "chunk_size": chunk_size,
         "chunk_overlap": min(chunk_overlap, max(chunk_size - 1, 0)),
         "embedding_provider": provider,
         "embedding_model": embedding_model,
+        "embedding_deployment_id": embedding_deployment_id,
+        "external_processing_allowed": bool(raw.get("external_processing_allowed", False)),
     }
 
 
@@ -878,6 +1178,8 @@ def validate_knowledge_base_configuration(configuration: Optional[Dict[str, Any]
     provider = normalized["embedding_provider"]
     model_name = normalized["embedding_model"]
     supported = ", ".join(sorted(SUPPORTED_LOCAL_EMBEDDING_MODELS))
+    if normalized.get("embedding_deployment_id"):
+        return normalized
     if provider != LOCAL_EMBEDDING_PROVIDER:
         raise KnowledgeProcessingError(
             f"Embedding provider {provider!r} is visible for the roadmap but is not executable in v1. "
@@ -899,12 +1201,30 @@ def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(parsed, maximum))
 
 
-def _chunker_from_configuration(configuration: Dict[str, Any]) -> OverlapChunker:
+def _chunker_from_configuration(configuration: Dict[str, Any]) -> Any:
     normalized = normalize_knowledge_base_configuration(configuration)
-    return OverlapChunker(
-        chunk_size=int(normalized["chunk_size"]),
-        chunk_overlap=int(normalized["chunk_overlap"]),
-    )
+    strategy = normalized["chunking_strategy"]
+    chunk_size = int(normalized["chunk_size"])
+    overlap = int(normalized["chunk_overlap"])
+    if strategy == "fixed_size":
+        return OverlapChunker(chunk_size=chunk_size, chunk_overlap=0)
+    if strategy == "sliding_window_overlap":
+        return OverlapChunker(chunk_size=chunk_size, chunk_overlap=overlap)
+    if strategy == "header_based":
+        return HeaderChunker(chunk_size=chunk_size)
+    if strategy == "recursive":
+        return RecursiveChunker(chunk_size=chunk_size, chunk_overlap=overlap)
+    if strategy == "semantic":
+        return SemanticChunker(chunk_size=chunk_size)
+    if strategy == "hierarchical_parent_child":
+        return HierarchicalChunker(
+            parent_size=max(chunk_size * 3, 1200),
+            child_size=chunk_size,
+            child_overlap=overlap,
+        )
+    if strategy == "structure_aware_custom":
+        raise KnowledgeProcessingError("Custom ara* chunking is disabled until the aratxt/arajson/aramd schemas are supplied.")
+    raise KnowledgeProcessingError(f"Unsupported chunking strategy: {strategy}")
 
 
 def _processing_metadata(configuration: Dict[str, Any]) -> Dict[str, Any]:
@@ -916,6 +1236,8 @@ def _processing_metadata(configuration: Dict[str, Any]) -> Dict[str, Any]:
         "configured_chunk_overlap": normalized["chunk_overlap"],
         "embedding_provider": normalized["embedding_provider"],
         "embedding_model_requested": normalized["embedding_model"],
+        "embedding_deployment_id": normalized["embedding_deployment_id"],
+        "external_processing_allowed": normalized["external_processing_allowed"],
     }
 
 
@@ -967,12 +1289,20 @@ def load_file_documents(filename: str, content: bytes) -> List[KnowledgeDocument
 
 
 def load_public_website(url: str) -> KnowledgeDocumentInput:
-    if not url.startswith(("http://", "https://")):
-        raise KnowledgeProcessingError("Website source must start with http:// or https://.")
+    _validate_public_url(url)
     request = urllib.request.Request(url, headers={"User-Agent": "aragbiz-ingestion/0.1"})
     with urllib.request.urlopen(request, timeout=20) as response:
-        content_type = response.headers.get("content-type", "text/html")
-        raw = response.read()
+        final_url = getattr(response, "geturl", lambda: url)()
+        _validate_public_url(final_url)
+        content_type = response.headers.get("content-type", "text/html").split(";", 1)[0].strip().lower()
+        if content_type not in {"text/html", "application/xhtml+xml", "text/plain"}:
+            raise KnowledgeProcessingError(f"Website content type {content_type!r} is not supported.")
+        try:
+            raw = response.read(5_000_001)
+        except TypeError:
+            raw = response.read()
+        if len(raw) > 5_000_000:
+            raise KnowledgeProcessingError("Website response exceeds the 5 MB ingestion limit.")
     html = raw.decode("utf-8", errors="replace")
     title = _html_title(html) or url
     text = _html_text(html)
@@ -980,14 +1310,29 @@ def load_public_website(url: str) -> KnowledgeDocumentInput:
         title=title,
         text=text,
         source_type="website",
-        uri=url,
+        uri=final_url,
         metadata={
-            "url": url,
+            "url": final_url,
             "content_type": content_type,
             "size_bytes": len(raw),
             "loader": "website_html",
         },
     )
+
+
+def _validate_public_url(url: str) -> None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise KnowledgeProcessingError("Website source must be an absolute http:// or https:// URL.")
+    hostname = parsed.hostname.lower().rstrip(".")
+    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith((".local", ".internal")):
+        raise KnowledgeProcessingError("Private or local website addresses are not allowed.")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return
+    if not address.is_global:
+        raise KnowledgeProcessingError("Private, loopback, link-local, and reserved website addresses are not allowed.")
 
 
 def clean_text(text: str) -> str:

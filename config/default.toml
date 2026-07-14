@@ -39,6 +39,22 @@ use_sentence_transformers = false
 chunk_size = 800
 chunk_overlap = 120
 
+[model_farm]
+json_store = "data/knowledge/model_farm_store.json"
+global_monthly_budget_usd = 0
+# Override with ARAGBIZ_MODEL_SECRET_KEY in real deployments.
+secret_key = "aragbiz-local-development-secret"
+
+[auth]
+json_store = "data/knowledge/auth_store.json"
+required = false
+access_token_ttl_seconds = 28800
+
+[jobs]
+json_store = "data/knowledge/jobs_store.json"
+blob_store = "data/uploads"
+lease_seconds = 120
+
 [evaluation]
 json_store = "data/knowledge/evaluation_store.json"
 

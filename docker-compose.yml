@@ -16,5 +16,52 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ARAGBIZ_DATABASE_URL: postgresql+psycopg://aragbiz:aragbiz@postgres:5432/aragbiz
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ARAGBIZ_DATABASE_URL: postgresql+psycopg://aragbiz:aragbiz@postgres:5432/aragbiz
+      ARAGBIZ_KNOWLEDGE_BACKEND: postgres
+    ports:
+      - "8000:8000"
+    volumes:
+      - aragbiz_uploads:/app/data/uploads
+      - ./data/artifacts:/app/data/artifacts:ro
+      - ./docs/evaluation/results:/app/docs/evaluation/results
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ARAGBIZ_DATABASE_URL: postgresql+psycopg://aragbiz:aragbiz@postgres:5432/aragbiz
+      ARAGBIZ_KNOWLEDGE_BACKEND: postgres
+    command: ["python", "-m", "aragbiz.worker"]
+    volumes:
+      - aragbiz_uploads:/app/data/uploads
+      - ./data/artifacts:/app/data/artifacts:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
 volumes:
   aragbiz_postgres_data:
+  aragbiz_uploads:

@@ -10,6 +10,7 @@ from aragbiz.knowledge import KnowledgeProcessingError, utc_now
 
 ChatSection = Literal["recents", "library"]
 ChatRole = Literal["user", "assistant"]
+ChatMessageStatus = Literal["pending", "streaming", "completed", "failed", "cancelled"]
 
 
 @dataclass
@@ -27,6 +28,28 @@ class ChatConfigurationRecord:
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: str = ""
     updated_at: str = ""
+
+    @property
+    def generator_deployment_id(self) -> str:
+        if "generator_deployment_id" in self.metadata:
+            return str(self.metadata.get("generator_deployment_id") or "")
+        return "model-local-extractive"
+
+    @property
+    def fallback_deployment_ids(self) -> List[str]:
+        return list(self.metadata.get("fallback_deployment_ids") or [])
+
+    @property
+    def reranker_deployment_id(self) -> str:
+        return str(self.metadata.get("reranker_deployment_id") or "")
+
+    @property
+    def planner_deployment_id(self) -> str:
+        return str(self.metadata.get("planner_deployment_id") or "")
+
+    @property
+    def generation_parameters(self) -> Dict[str, Any]:
+        return dict(self.metadata.get("generation_parameters") or {})
 
 
 @dataclass
@@ -52,7 +75,10 @@ class ChatMessageRecord:
     content: str
     contexts: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    status: ChatMessageStatus = "completed"
+    request_id: str = ""
     created_at: str = ""
+    updated_at: str = ""
 
 
 class ChatRepository(Protocol):
@@ -104,8 +130,21 @@ class ChatRepository(Protocol):
         *,
         contexts: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        status: ChatMessageStatus = "completed",
+        request_id: str = "",
     ) -> ChatMessageRecord:
         """Append a message."""
+
+    def update_message(
+        self,
+        message_id: str,
+        *,
+        content: Optional[str] = None,
+        contexts: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        status: Optional[ChatMessageStatus] = None,
+    ) -> ChatMessageRecord:
+        """Update a message."""
 
     def list_messages(self, conversation_id: str) -> List[ChatMessageRecord]:
         """List messages for a conversation."""
@@ -122,6 +161,12 @@ class ChatRepository(Protocol):
         humor_level: int = 0,
         system_prompt: str = "",
         predefined_prompt: str = "",
+        generator_deployment_id: str = "model-local-extractive",
+        fallback_deployment_ids: Optional[List[str]] = None,
+        reranker_deployment_id: str = "",
+        planner_deployment_id: str = "",
+        generation_parameters: Optional[Dict[str, Any]] = None,
+        citations_enabled: bool = True,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> ChatConfigurationRecord:
         """Create a reusable chat configuration."""
@@ -215,6 +260,12 @@ class ChatService:
         humor_level: int = 0,
         system_prompt: str = "",
         predefined_prompt: str = "",
+        generator_deployment_id: str = "model-local-extractive",
+        fallback_deployment_ids: Optional[List[str]] = None,
+        reranker_deployment_id: str = "",
+        planner_deployment_id: str = "",
+        generation_parameters: Optional[Dict[str, Any]] = None,
+        citations_enabled: bool = True,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> ChatConfigurationRecord:
         self.repository.initialize()
@@ -228,7 +279,15 @@ class ChatService:
             humor_level=_clean_humor_level(humor_level),
             system_prompt=system_prompt,
             predefined_prompt=predefined_prompt,
-            metadata=metadata,
+            metadata={
+                **(metadata or {}),
+                "generator_deployment_id": generator_deployment_id,
+                "fallback_deployment_ids": list(fallback_deployment_ids or []),
+                "reranker_deployment_id": reranker_deployment_id,
+                "planner_deployment_id": planner_deployment_id,
+                "generation_parameters": dict(generation_parameters or {}),
+                "citations_enabled": bool(citations_enabled),
+            },
         )
 
     def list_configurations(self) -> List[ChatConfigurationRecord]:
@@ -259,9 +318,30 @@ class ChatService:
         humor_level: Optional[int] = None,
         system_prompt: Optional[str] = None,
         predefined_prompt: Optional[str] = None,
+        generator_deployment_id: Optional[str] = None,
+        fallback_deployment_ids: Optional[List[str]] = None,
+        reranker_deployment_id: Optional[str] = None,
+        planner_deployment_id: Optional[str] = None,
+        generation_parameters: Optional[Dict[str, Any]] = None,
+        citations_enabled: Optional[bool] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> ChatConfigurationRecord:
         self.repository.initialize()
+        current = self.repository.get_configuration(configuration_id)
+        model_metadata = dict(current.metadata)
+        if metadata is not None:
+            model_metadata.update(metadata)
+        updates = {
+            "generator_deployment_id": generator_deployment_id,
+            "fallback_deployment_ids": fallback_deployment_ids,
+            "reranker_deployment_id": reranker_deployment_id,
+            "planner_deployment_id": planner_deployment_id,
+            "generation_parameters": generation_parameters,
+            "citations_enabled": citations_enabled,
+        }
+        for key, value in updates.items():
+            if value is not None:
+                model_metadata[key] = value
         return self.repository.update_configuration(
             configuration_id,
             name=_clean_title(name) if name is not None else None,
@@ -273,7 +353,7 @@ class ChatService:
             humor_level=_clean_humor_level(humor_level) if humor_level is not None else None,
             system_prompt=system_prompt,
             predefined_prompt=predefined_prompt,
-            metadata=metadata,
+            metadata=model_metadata,
         )
 
     def delete_configuration(self, configuration_id: str) -> None:
@@ -288,6 +368,46 @@ class ChatService:
         self.repository.initialize()
         self.repository.get_conversation(conversation_id)
         return self.repository.list_messages(conversation_id)
+
+    def append_message(
+        self,
+        conversation_id: str,
+        role: ChatRole,
+        content: str,
+        *,
+        contexts: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        status: ChatMessageStatus = "completed",
+        request_id: str = "",
+    ) -> ChatMessageRecord:
+        self.repository.initialize()
+        return self.repository.append_message(
+            conversation_id,
+            role,
+            content,
+            contexts=contexts,
+            metadata=metadata,
+            status=_clean_message_status(status),
+            request_id=request_id,
+        )
+
+    def update_message(
+        self,
+        message_id: str,
+        *,
+        content: Optional[str] = None,
+        contexts: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        status: Optional[ChatMessageStatus] = None,
+    ) -> ChatMessageRecord:
+        self.repository.initialize()
+        return self.repository.update_message(
+            message_id,
+            content=content,
+            contexts=contexts,
+            metadata=metadata,
+            status=_clean_message_status(status) if status is not None else None,
+        )
 
     def ensure_conversation_for_question(
         self,
@@ -339,13 +459,14 @@ class ChatService:
         metadata: Dict[str, Any],
     ) -> None:
         self.repository.initialize()
-        self.repository.append_message(conversation_id, "user", question, contexts=[], metadata={})
+        self.repository.append_message(conversation_id, "user", question, contexts=[], metadata={}, status="completed")
         self.repository.append_message(
             conversation_id,
             "assistant",
             answer,
             contexts=contexts,
             metadata={**metadata, "question": question},
+            status="completed",
         )
 
 
@@ -481,6 +602,8 @@ class JsonChatRepository:
         *,
         contexts: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        status: ChatMessageStatus = "completed",
+        request_id: str = "",
     ) -> ChatMessageRecord:
         state = self._read()
         if conversation_id not in state["chat_conversations"]:
@@ -493,12 +616,44 @@ class JsonChatRepository:
             content=content,
             contexts=list(contexts or []),
             metadata=dict(metadata or {}),
+            status=_clean_message_status(status),
+            request_id=request_id,
             created_at=now,
+            updated_at=now,
         )
         state["chat_messages"][record.id] = _message_to_dict(record)
         state["chat_conversations"][conversation_id]["updated_at"] = now
         self._write(state)
         return record
+
+    def update_message(
+        self,
+        message_id: str,
+        *,
+        content: Optional[str] = None,
+        contexts: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        status: Optional[ChatMessageStatus] = None,
+    ) -> ChatMessageRecord:
+        state = self._read()
+        payload = state["chat_messages"].get(message_id)
+        if not payload:
+            raise KeyError(f"Message not found: {message_id}")
+        now = utc_now()
+        if content is not None:
+            payload["content"] = content
+        if contexts is not None:
+            payload["contexts"] = contexts
+        if metadata is not None:
+            payload["metadata"] = metadata
+        if status is not None:
+            payload["status"] = _clean_message_status(status)
+        payload["updated_at"] = now
+        conversation = state["chat_conversations"].get(payload["conversation_id"])
+        if conversation:
+            conversation["updated_at"] = now
+        self._write(state)
+        return _message_from_dict(payload)
 
     def list_messages(self, conversation_id: str) -> List[ChatMessageRecord]:
         state = self._read()
@@ -667,11 +822,19 @@ class PostgresChatRepository:
             content TEXT NOT NULL,
             contexts_json JSONB NOT NULL DEFAULT '[]'::jsonb,
             metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-            created_at TEXT NOT NULL
+            status TEXT NOT NULL DEFAULT 'completed',
+            request_id TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         );
+        ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed';
+        ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS request_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT '';
+        UPDATE chat_messages SET updated_at = created_at WHERE updated_at = '';
         CREATE INDEX IF NOT EXISTS idx_chat_configurations_updated_at ON chat_configurations(updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_chat_conversations_updated_at ON chat_conversations(updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_id ON chat_messages(conversation_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_request_id ON chat_messages(request_id);
         """
         with self.engine.begin() as connection:
             for statement in [part.strip() for part in ddl.split(";") if part.strip()]:
@@ -828,6 +991,8 @@ class PostgresChatRepository:
         *,
         contexts: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        status: ChatMessageStatus = "completed",
+        request_id: str = "",
     ) -> ChatMessageRecord:
         from sqlalchemy import text
 
@@ -840,16 +1005,19 @@ class PostgresChatRepository:
             content=content,
             contexts=list(contexts or []),
             metadata=dict(metadata or {}),
+            status=_clean_message_status(status),
+            request_id=request_id,
             created_at=now,
+            updated_at=now,
         )
         with self.engine.begin() as connection:
             connection.execute(
                 text(
                     """
                     INSERT INTO chat_messages
-                        (id, conversation_id, role, content, contexts_json, metadata_json, created_at)
+                        (id, conversation_id, role, content, contexts_json, metadata_json, status, request_id, created_at, updated_at)
                     VALUES
-                        (:id, :conversation_id, :role, :content, CAST(:contexts AS JSONB), CAST(:metadata AS JSONB), :created_at)
+                        (:id, :conversation_id, :role, :content, CAST(:contexts AS JSONB), CAST(:metadata AS JSONB), :status, :request_id, :created_at, :updated_at)
                     """
                 ),
                 {**_message_to_dict(record), "contexts": json.dumps(record.contexts), "metadata": json.dumps(record.metadata)},
@@ -859,6 +1027,61 @@ class PostgresChatRepository:
                 {"id": conversation_id, "updated_at": now},
             )
         return record
+
+    def update_message(
+        self,
+        message_id: str,
+        *,
+        content: Optional[str] = None,
+        contexts: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        status: Optional[ChatMessageStatus] = None,
+    ) -> ChatMessageRecord:
+        from sqlalchemy import text
+
+        now = utc_now()
+        current: Optional[ChatMessageRecord] = None
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                text("SELECT * FROM chat_messages WHERE id = :id"),
+                {"id": message_id},
+            ).mappings().first()
+            if row:
+                current = _message_from_row(row)
+        if current is None:
+            raise KeyError(f"Message not found: {message_id}")
+        updated = ChatMessageRecord(
+            id=current.id,
+            conversation_id=current.conversation_id,
+            role=current.role,
+            content=content if content is not None else current.content,
+            contexts=list(contexts) if contexts is not None else current.contexts,
+            metadata=dict(metadata) if metadata is not None else current.metadata,
+            status=_clean_message_status(status) if status is not None else current.status,
+            request_id=current.request_id,
+            created_at=current.created_at,
+            updated_at=now,
+        )
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    UPDATE chat_messages
+                    SET content = :content,
+                        contexts_json = CAST(:contexts AS JSONB),
+                        metadata_json = CAST(:metadata AS JSONB),
+                        status = :status,
+                        updated_at = :updated_at
+                    WHERE id = :id
+                    """
+                ),
+                {**_message_to_dict(updated), "contexts": json.dumps(updated.contexts), "metadata": json.dumps(updated.metadata)},
+            )
+            connection.execute(
+                text("UPDATE chat_conversations SET updated_at = :updated_at WHERE id = :id"),
+                {"id": updated.conversation_id, "updated_at": now},
+            )
+        return updated
 
     def list_messages(self, conversation_id: str) -> List[ChatMessageRecord]:
         from sqlalchemy import text
@@ -1025,6 +1248,13 @@ def _clean_humor_level(value: int) -> int:
     return max(0, min(parsed, 5))
 
 
+def _clean_message_status(value: Optional[str]) -> ChatMessageStatus:
+    status = str(value or "completed")
+    if status in {"pending", "streaming", "completed", "failed", "cancelled"}:
+        return status  # type: ignore[return-value]
+    return "completed"
+
+
 def _empty_chat_state() -> Dict[str, Dict[str, Any]]:
     return {"chat_conversations": {}, "chat_messages": {}, "chat_configurations": {}}
 
@@ -1056,7 +1286,16 @@ def _default_chat_configuration_payload() -> Dict[str, Any]:
         "humor_level": 0,
         "system_prompt": "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
         "predefined_prompt": "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.",
-        "metadata": {"runtime": "local-generator", "actual_generator": "extractive"},
+        "metadata": {
+            "runtime": "local-generator",
+            "actual_generator": "extractive",
+            "generator_deployment_id": "model-local-extractive",
+            "fallback_deployment_ids": [],
+            "reranker_deployment_id": "",
+            "planner_deployment_id": "",
+            "generation_parameters": {"temperature": 0.2, "max_tokens": 500},
+            "citations_enabled": True,
+        },
     }
 
 
@@ -1115,7 +1354,10 @@ def _message_to_dict(record: ChatMessageRecord) -> Dict[str, Any]:
         "content": record.content,
         "contexts": record.contexts,
         "metadata": record.metadata,
+        "status": record.status,
+        "request_id": record.request_id,
         "created_at": record.created_at,
+        "updated_at": record.updated_at,
     }
 
 
@@ -1143,7 +1385,10 @@ def _message_from_dict(payload: Dict[str, Any]) -> ChatMessageRecord:
         content=payload["content"],
         contexts=list(payload.get("contexts") or []),
         metadata=dict(payload.get("metadata") or {}),
+        status=_clean_message_status(payload.get("status")),
+        request_id=payload.get("request_id", ""),
         created_at=payload.get("created_at", ""),
+        updated_at=payload.get("updated_at") or payload.get("created_at", ""),
     )
 
 
@@ -1171,7 +1416,10 @@ def _message_from_row(row: Any) -> ChatMessageRecord:
         content=row["content"],
         contexts=list(row.get("contexts_json") or []),
         metadata=dict(row.get("metadata_json") or {}),
+        status=_clean_message_status(row.get("status")),
+        request_id=row.get("request_id") or "",
         created_at=row.get("created_at") or "",
+        updated_at=row.get("updated_at") or row.get("created_at") or "",
     )
 
 

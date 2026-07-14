@@ -11,6 +11,7 @@ from aragbiz.classifier import (
     T5QueryClassifier,
 )
 from aragbiz.answering import AdaptiveRAGAnswerService
+from aragbiz.auth import AuthService, JsonAuthRepository, PostgresAuthRepository
 from aragbiz.chat import ChatService, JsonChatRepository, PostgresChatRepository
 from aragbiz.config import AppConfig, load_config
 from aragbiz.data import load_documents_jsonl, load_qac_jsonl, records_to_documents
@@ -18,6 +19,13 @@ from aragbiz.evaluation import EvaluationService, JsonEvaluationRepository, Post
 from aragbiz.generation import ExtractiveGenerator
 from aragbiz.knowledge import KnowledgeService, OverlapChunker, build_embedder
 from aragbiz.knowledge_store import JsonKnowledgeRepository, PostgresKnowledgeRepository
+from aragbiz.jobs import JobService, JsonJobRepository, LocalBlobStore, PostgresJobRepository
+from aragbiz.model_farm import (
+    JsonModelFarmRepository,
+    ModelFarmService,
+    ModelGateway,
+    PostgresModelFarmRepository,
+)
 from aragbiz.pipeline import RAGPipeline
 from aragbiz.retrieval import InMemoryHybridRetriever
 from aragbiz.routing import AdaptiveRouter, RouterConfig
@@ -68,7 +76,73 @@ def build_query_classifier(config: AppConfig) -> QueryClassifier:
     return HeuristicQueryClassifier()
 
 
-def build_knowledge_service(config: Optional[AppConfig] = None) -> KnowledgeService:
+def build_model_farm_service(config: Optional[AppConfig] = None) -> ModelFarmService:
+    config = config or load_config()
+    if config.knowledge_backend.lower() == "json":
+        repository = JsonModelFarmRepository(config.model_farm_json_store)
+    else:
+        try:
+            repository = PostgresModelFarmRepository(config.knowledge_database_url)
+            repository.initialize()
+        except Exception:
+            repository = JsonModelFarmRepository(config.model_farm_json_store)
+    return ModelFarmService(
+        repository,
+        global_monthly_budget_usd=config.global_model_budget_usd,
+        secret_key=config.model_secret_key or config.jwt_secret,
+    )
+
+
+def build_model_gateway(
+    config: Optional[AppConfig] = None,
+    *,
+    model_farm_service: Optional[ModelFarmService] = None,
+) -> ModelGateway:
+    return ModelGateway(model_farm_service or build_model_farm_service(config))
+
+
+def build_auth_service(config: Optional[AppConfig] = None) -> AuthService:
+    config = config or load_config()
+    if config.knowledge_backend.lower() == "json":
+        repository = JsonAuthRepository(config.auth_json_store)
+    else:
+        try:
+            repository = PostgresAuthRepository(config.knowledge_database_url)
+            repository.initialize()
+        except Exception:
+            repository = JsonAuthRepository(config.auth_json_store)
+    return AuthService(
+        repository,
+        jwt_secret=config.jwt_secret,
+        token_ttl_seconds=config.access_token_ttl_seconds,
+        auth_required=config.auth_required,
+    )
+
+
+def build_job_service(config: Optional[AppConfig] = None) -> JobService:
+    config = config or load_config()
+    if config.knowledge_backend.lower() == "json":
+        repository = JsonJobRepository(config.jobs_json_store)
+    else:
+        try:
+            repository = PostgresJobRepository(config.knowledge_database_url)
+            repository.initialize()
+        except Exception:
+            repository = JsonJobRepository(config.jobs_json_store)
+    return JobService(repository)
+
+
+def build_blob_store(config: Optional[AppConfig] = None) -> LocalBlobStore:
+    config = config or load_config()
+    return LocalBlobStore(config.blob_store)
+
+
+def build_knowledge_service(
+    config: Optional[AppConfig] = None,
+    *,
+    model_farm_service: Optional[ModelFarmService] = None,
+    model_gateway: Optional[ModelGateway] = None,
+) -> KnowledgeService:
     config = config or load_config()
     if config.knowledge_backend.lower() == "json":
         repository = JsonKnowledgeRepository(config.knowledge_json_store)
@@ -88,6 +162,8 @@ def build_knowledge_service(config: Optional[AppConfig] = None) -> KnowledgeServ
             dimension=config.embedding_dimension,
             use_sentence_transformers=config.use_sentence_transformers,
         ),
+        model_farm_service=model_farm_service,
+        model_gateway=model_gateway,
     )
 
 
@@ -108,6 +184,8 @@ def build_evaluation_service(
     *,
     knowledge_service: Optional[KnowledgeService] = None,
     pipeline: Optional[RAGPipeline] = None,
+    model_farm_service: Optional[ModelFarmService] = None,
+    model_gateway: Optional[ModelGateway] = None,
 ) -> EvaluationService:
     config = config or load_config()
     knowledge_service = knowledge_service or build_knowledge_service(config)
@@ -125,6 +203,8 @@ def build_evaluation_service(
         knowledge_service=knowledge_service,
         bm25_weight=config.bm25_weight,
         dense_weight=config.dense_weight,
+        model_farm_service=model_farm_service,
+        model_gateway=model_gateway,
     )
     return EvaluationService(
         repository=repository,

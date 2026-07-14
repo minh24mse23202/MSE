@@ -62,6 +62,7 @@ class EvaluationRunConfig:
     knowledge_base_id: str = ""
     chat_configuration_id: Optional[str] = None
     chat_configuration: Dict[str, Any] = field(default_factory=dict)
+    judge_deployment_id: str = ""
     retrieval_mode: RetrievalMode = "hybrid"
     top_k: int = 4
     limit: int = 20
@@ -236,6 +237,7 @@ class EvaluationService:
                 "dataset_path": self.dataset_path,
                 "record_count": len(records),
                 "chat_configuration": config.chat_configuration,
+                "judge_deployment_id": config.judge_deployment_id,
                 "static_baseline": "simple_rag" if config.compare_baseline else "disabled",
                 "ragxplain": ragxplain_metadata,
             },

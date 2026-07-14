@@ -1,31 +1,41 @@
 # Architecture
 
 ```mermaid
-flowchart LR
-    EndUser["End user"] --> Frontend["React RAG Studio"]
-    Developer["Developer / evaluator"] --> Frontend
-    Frontend --> API["FastAPI API"]
-    API --> Adaptive["Adaptive RAG"]
-    Adaptive --> Classifier["Complexity classifier: NB / DistilBERT / T5-small"]
-    Adaptive --> Retriever["Hybrid retriever: BM25 + dense"]
-    Retriever --> Storage["Vector DB + relational metadata"]
-    Adaptive --> Generator["Generator model"]
-    Generator --> Answer["Answer + citations + trace"]
-    API --> Feedback["Feedback + usage logs"]
-    Knowledge["Knowledge processing: connectors, loaders, chunking, embeddings"] --> Storage
-    Eval["Evaluation: datasets, RAGAS, ablations"] --> API
-    Analytics["Analytics: tokens, latency, feedback"] --> Feedback
-    Governance["Governance: RBAC, policy, citation validation"] --> API
+flowchart TB
+    UI["React: Main, Knowledge Bases, AI Models, Evaluation, Analytics"]
+    API["FastAPI: REST, auth-ready endpoints, SSE"]
+    RAG["Adaptive RAG Orchestrator: L1 / L2 / L3"]
+    POLICY["Policy, Budget, Data-Egress, Citation Checks"]
+    GATEWAY["Model Gateway"]
+    LOCAL["Local Adapters: extractive, FLAN-T5, hash, MiniLM, reranker"]
+    LITELLM["Embedded LiteLLM SDK"]
+    PROVIDERS["Paid / Hosted / OpenAI-Compatible Providers"]
+    STORAGE["PostgreSQL + pgVector"]
+    JOBS["PostgreSQL Job Queue"]
+    WORKER["Ingestion / Indexing / Evaluation Worker"]
+    RAGX["RAGXplain Embedded Insights"]
+
+    UI --> API
+    API --> RAG --> POLICY --> GATEWAY
+    GATEWAY --> LOCAL
+    GATEWAY --> LITELLM --> PROVIDERS
+    RAG --> STORAGE
+    API --> JOBS --> WORKER
+    WORKER --> GATEWAY
+    WORKER --> STORAGE
+    API --> RAGX
 ```
 
 ## Layers
 
-- Application layer: React RAG Studio, chatbot, API access and analytics dashboard.
-- Adaptive RAG layer: route decision, complexity classifier, retriever, post-retriever, prompt assembly and generator.
-- Knowledge processing layer: local upload and website connectors, loader registry, metadata extraction, deduplication, chunking, embedding and index management.
-- Storage layer: PostgreSQL relational metadata, pgVector chunk embeddings, chat history, configuration, usage and audit logs.
-- Model farm layer: classifier models, embedding models, rerankers and generator models.
-- Governance layer: RBAC, policy checks, hallucination detection and citation validation.
+- Application layer: React RAG Studio, Knowledge Bases, AI Models, Evaluation, Analytics, and API access.
+- Adaptive RAG layer: policy check, classification, L1/L2/L3 routing, retrieval, optional reranking, prompt assembly, generation, citation validation, persistence, and telemetry.
+- Knowledge processing layer: local upload and website connectors, loader registry, metadata extraction, deduplication, real chunking strategies, embedding, and active index management.
+- AI Models layer: admin-registered deployments for generation, embedding, rerank, judge, planner, and classifier capabilities.
+- Model Gateway layer: local adapters plus embedded LiteLLM for paid/hosted providers, normalized errors, budget checks, data-egress policy, usage events, and optional fallbacks.
+- Storage layer: PostgreSQL relational metadata, dimension-aware pgVector chunk embeddings, chat history, configurations, jobs, users, model deployments, usage, evaluation, and audit-friendly metadata.
+- Worker layer: durable PostgreSQL jobs for ingestion, indexing, and evaluation using leases and retry metadata.
+- Governance layer: JWT-ready roles, secret redaction, external-processing controls, hard budgets, and citation validation.
 
 Core interfaces:
 
@@ -41,3 +51,17 @@ Knowledge ingestion interfaces:
 - `KnowledgeService.ingest_website(kb_id, url) -> ingestion_summary`
 - `KnowledgeService.create_document/update_document/delete_document(...)` manages documents inside a selected knowledge base and regenerates affected chunks/embeddings.
 - `KnowledgeRepository` stores knowledge bases, data sources, documents, chunks, embeddings and ingestion runs.
+
+AI Models interfaces:
+
+- `ModelGateway.generate(messages, deployment_id, ...) -> ModelGenerationResult`
+- `ModelGateway.stream(messages, deployment_id, ...) -> ModelStreamEvent`
+- `ModelGateway.embed(texts, deployment_id, ...) -> ModelEmbeddingResult`
+- `ModelGateway.rerank(query, documents, deployment_id, top_n) -> ModelRerankResult`
+- `ModelFarmService` validates capabilities, credential environment references, budgets, egress policy, health, and usage.
+
+Indexing model:
+
+- Each knowledge base stores an embedding deployment and external-processing policy.
+- Re-indexing builds a draft `knowledge_index_versions` record and activates it only after chunking and embedding succeeds.
+- Queries use the active index version and its embedding deployment so document vectors and query vectors stay compatible.

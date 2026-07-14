@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -9,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from aragbiz.knowledge import (
     DataSourceRecord,
     KnowledgeBaseRecord,
+    KnowledgeIndexVersionRecord,
     KnowledgeProcessingError,
     StoredKnowledgeChunk,
     StoredKnowledgeDocument,
@@ -120,6 +122,13 @@ class JsonKnowledgeRepository:
             state["chunk_embeddings"].pop(chunk_id, None)
         for run_id in run_ids:
             state["ingestion_runs"].pop(run_id, None)
+        version_ids = [
+            version_id
+            for version_id, version in state["index_versions"].items()
+            if version["knowledge_base_id"] == knowledge_base_id
+        ]
+        for version_id in version_ids:
+            state["index_versions"].pop(version_id, None)
         self._write(state)
 
     def create_data_source(
@@ -201,10 +210,12 @@ class JsonKnowledgeRepository:
 
     def replace_chunks(self, knowledge_base_id: str, chunks: List[StoredKnowledgeChunk], embeddings: List[List[float]], model: str) -> None:
         state = self._read()
+        target_version = next((chunk.index_version_id for chunk in chunks if chunk.index_version_id), "")
         existing_chunk_ids = {
             chunk_id
             for chunk_id, payload in state["chunks"].items()
             if payload["knowledge_base_id"] == knowledge_base_id
+            and (not target_version or payload.get("index_version_id", "") == target_version)
         }
         for chunk_id in existing_chunk_ids:
             state["chunks"].pop(chunk_id, None)
@@ -239,10 +250,12 @@ class JsonKnowledgeRepository:
 
     def list_chunks(self, knowledge_base_id: str, limit: int = 100) -> List[StoredKnowledgeChunk]:
         state = self._read()
+        active_version = state["knowledge_bases"].get(knowledge_base_id, {}).get("active_index_version_id", "")
         chunks = [
             _chunk_from_dict(payload, state["chunk_embeddings"].get(chunk_id))
             for chunk_id, payload in state["chunks"].items()
             if payload["knowledge_base_id"] == knowledge_base_id
+            and (not active_version or payload.get("index_version_id", "") == active_version)
         ]
         chunks.sort(key=lambda chunk: (chunk.document_id, chunk.chunk_index))
         return chunks[:limit]
@@ -254,9 +267,12 @@ class JsonKnowledgeRepository:
         limit: int = 10,
     ) -> List[tuple[StoredKnowledgeChunk, float]]:
         state = self._read()
+        active_version = state["knowledge_bases"].get(knowledge_base_id, {}).get("active_index_version_id", "")
         matches: List[tuple[StoredKnowledgeChunk, float]] = []
         for chunk_id, payload in state["chunks"].items():
             if payload["knowledge_base_id"] != knowledge_base_id:
+                continue
+            if active_version and payload.get("index_version_id", "") != active_version:
                 continue
             embedding_payload = state["chunk_embeddings"].get(chunk_id)
             if not embedding_payload:
@@ -300,6 +316,63 @@ class JsonKnowledgeRepository:
         }
         self._write(state)
 
+    def create_index_version(
+        self,
+        knowledge_base_id: str,
+        configuration: Dict[str, Any],
+        *,
+        embedding_provider: str,
+        embedding_model: str,
+        embedding_deployment_id: str,
+        embedding_dimension: int,
+    ) -> KnowledgeIndexVersionRecord:
+        self.get_knowledge_base(knowledge_base_id)
+        state = self._read()
+        record = KnowledgeIndexVersionRecord(
+            id=f"index-{uuid.uuid4().hex}", knowledge_base_id=knowledge_base_id, status="building",
+            chunking_configuration=dict(configuration), embedding_deployment_id=embedding_deployment_id,
+            embedding_provider=embedding_provider, embedding_model=embedding_model,
+            embedding_dimension=embedding_dimension, created_at=utc_now(),
+        )
+        state["index_versions"][record.id] = _index_version_to_dict(record)
+        state["knowledge_bases"][knowledge_base_id]["pending_index_version_id"] = record.id
+        self._write(state)
+        return record
+
+    def activate_index_version(self, knowledge_base_id: str, version_id: str) -> KnowledgeIndexVersionRecord:
+        state = self._read()
+        payload = state["index_versions"].get(version_id)
+        if not payload or payload["knowledge_base_id"] != knowledge_base_id:
+            raise KeyError(f"Knowledge index version not found: {version_id}")
+        previous = state["knowledge_bases"][knowledge_base_id].get("active_index_version_id", "")
+        if previous and previous in state["index_versions"]:
+            state["index_versions"][previous]["status"] = "superseded"
+        chunk_count = sum(1 for chunk in state["chunks"].values() if chunk.get("index_version_id") == version_id)
+        document_count = len({chunk["document_id"] for chunk in state["chunks"].values() if chunk.get("index_version_id") == version_id})
+        payload.update({"status": "active", "activated_at": utc_now(), "chunk_count": chunk_count, "document_count": document_count})
+        state["knowledge_bases"][knowledge_base_id]["active_index_version_id"] = version_id
+        state["knowledge_bases"][knowledge_base_id]["pending_index_version_id"] = ""
+        self._write(state)
+        return _index_version_from_dict(payload)
+
+    def fail_index_version(self, knowledge_base_id: str, version_id: str, error: str) -> None:
+        state = self._read()
+        payload = state["index_versions"].get(version_id)
+        if payload and payload["knowledge_base_id"] == knowledge_base_id:
+            payload.update({"status": "failed", "error": str(error)[:2000]})
+            state["knowledge_bases"][knowledge_base_id]["pending_index_version_id"] = ""
+            self._write(state)
+
+    def list_index_versions(self, knowledge_base_id: str) -> List[KnowledgeIndexVersionRecord]:
+        state = self._read()
+        records = [
+            _index_version_from_dict(payload)
+            for payload in state["index_versions"].values()
+            if payload["knowledge_base_id"] == knowledge_base_id
+        ]
+        records.sort(key=lambda item: item.created_at, reverse=True)
+        return records
+
     def _append_chunks_to_state(
         self,
         state: Dict[str, Dict[str, Any]],
@@ -317,8 +390,13 @@ class JsonKnowledgeRepository:
 
     def _hydrate_kb(self, payload: Dict[str, Any], state: Dict[str, Dict[str, Any]]) -> KnowledgeBaseRecord:
         knowledge_base_id = payload["id"]
+        active_version = payload.get("active_index_version_id", "")
         document_count = sum(1 for document in state["documents"].values() if document["knowledge_base_id"] == knowledge_base_id)
-        chunk_count = sum(1 for chunk in state["chunks"].values() if chunk["knowledge_base_id"] == knowledge_base_id)
+        chunk_count = sum(
+            1 for chunk in state["chunks"].values()
+            if chunk["knowledge_base_id"] == knowledge_base_id
+            and (not active_version or chunk.get("index_version_id", "") == active_version)
+        )
         return KnowledgeBaseRecord(
             id=payload["id"],
             name=payload["name"],
@@ -335,7 +413,10 @@ class JsonKnowledgeRepository:
 
     def _read(self) -> Dict[str, Dict[str, Any]]:
         self.initialize()
-        return json.loads(self.path.read_text(encoding="utf-8"))
+        state = json.loads(self.path.read_text(encoding="utf-8"))
+        for key, value in _empty_state().items():
+            state.setdefault(key, value)
+        return state
 
     def _write(self, state: Dict[str, Dict[str, Any]]) -> None:
         self.path.write_text(json.dumps(state, indent=2, ensure_ascii=True), encoding="utf-8")
@@ -363,7 +444,9 @@ class PostgresKnowledgeRepository:
             metadata_json JSONB NOT NULL DEFAULT '{{}}'::jsonb,
             error TEXT,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            active_index_version_id TEXT NOT NULL DEFAULT '',
+            pending_index_version_id TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS data_sources (
             id TEXT PRIMARY KEY,
@@ -390,12 +473,31 @@ class PostgresKnowledgeRepository:
             chunk_index INTEGER NOT NULL,
             text TEXT NOT NULL,
             token_count INTEGER NOT NULL,
-            metadata_json JSONB NOT NULL DEFAULT '{{}}'::jsonb
+            metadata_json JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+            index_version_id TEXT NOT NULL DEFAULT '',
+            parent_chunk_id TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS chunk_embeddings (
             chunk_id TEXT PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
-            embedding vector({int(self.embedding_dimension)}) NOT NULL,
-            embedding_model TEXT NOT NULL
+            embedding vector NOT NULL,
+            embedding_model TEXT NOT NULL,
+            embedding_deployment_id TEXT NOT NULL DEFAULT '',
+            embedding_dimension INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS knowledge_index_versions (
+            id TEXT PRIMARY KEY,
+            knowledge_base_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+            status TEXT NOT NULL,
+            chunking_configuration_json JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+            embedding_deployment_id TEXT NOT NULL DEFAULT '',
+            embedding_provider TEXT NOT NULL DEFAULT '',
+            embedding_model TEXT NOT NULL DEFAULT '',
+            embedding_dimension INTEGER NOT NULL DEFAULT 0,
+            document_count INTEGER NOT NULL DEFAULT 0,
+            chunk_count INTEGER NOT NULL DEFAULT 0,
+            error TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            activated_at TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS ingestion_runs (
             id TEXT PRIMARY KEY,
@@ -407,6 +509,14 @@ class PostgresKnowledgeRepository:
             started_at TEXT NOT NULL,
             finished_at TEXT NOT NULL
         );
+        ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS active_index_version_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS pending_index_version_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE chunks ADD COLUMN IF NOT EXISTS index_version_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE chunks ADD COLUMN IF NOT EXISTS parent_chunk_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE chunk_embeddings ADD COLUMN IF NOT EXISTS embedding_deployment_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE chunk_embeddings ADD COLUMN IF NOT EXISTS embedding_dimension INTEGER NOT NULL DEFAULT 0;
+        CREATE INDEX IF NOT EXISTS idx_chunks_active_version ON chunks(knowledge_base_id, index_version_id);
+        CREATE INDEX IF NOT EXISTS idx_index_versions_kb ON knowledge_index_versions(knowledge_base_id, created_at DESC);
         """
         with self.engine.begin() as connection:
             for statement in [part.strip() for part in ddl.split(";") if part.strip()]:
@@ -454,6 +564,7 @@ class PostgresKnowledgeRepository:
                     FROM knowledge_bases kb
                     LEFT JOIN documents d ON d.knowledge_base_id = kb.id
                     LEFT JOIN chunks c ON c.knowledge_base_id = kb.id
+                        AND (kb.active_index_version_id = '' OR c.index_version_id = kb.active_index_version_id)
                     GROUP BY kb.id
                     ORDER BY kb.updated_at DESC
                     """
@@ -474,6 +585,7 @@ class PostgresKnowledgeRepository:
                     FROM knowledge_bases kb
                     LEFT JOIN documents d ON d.knowledge_base_id = kb.id
                     LEFT JOIN chunks c ON c.knowledge_base_id = kb.id
+                        AND (kb.active_index_version_id = '' OR c.index_version_id = kb.active_index_version_id)
                     WHERE kb.id = :id
                     GROUP BY kb.id
                     """
@@ -524,6 +636,120 @@ class PostgresKnowledgeRepository:
                     "updated_at": utc_now(),
                 },
             )
+
+    def create_index_version(
+        self,
+        knowledge_base_id: str,
+        configuration: Dict[str, Any],
+        *,
+        embedding_provider: str,
+        embedding_model: str,
+        embedding_deployment_id: str,
+        embedding_dimension: int,
+    ) -> KnowledgeIndexVersionRecord:
+        from sqlalchemy import text
+
+        self.get_knowledge_base(knowledge_base_id)
+        record = KnowledgeIndexVersionRecord(
+            id=f"index-{uuid.uuid4().hex}", knowledge_base_id=knowledge_base_id, status="building",
+            chunking_configuration=dict(configuration), embedding_deployment_id=embedding_deployment_id,
+            embedding_provider=embedding_provider, embedding_model=embedding_model,
+            embedding_dimension=embedding_dimension, created_at=utc_now(),
+        )
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO knowledge_index_versions (
+                        id, knowledge_base_id, status, chunking_configuration_json,
+                        embedding_deployment_id, embedding_provider, embedding_model,
+                        embedding_dimension, document_count, chunk_count, error, created_at, activated_at
+                    ) VALUES (
+                        :id, :knowledge_base_id, :status, CAST(:configuration AS JSONB),
+                        :embedding_deployment_id, :embedding_provider, :embedding_model,
+                        :embedding_dimension, 0, 0, '', :created_at, ''
+                    )
+                    """
+                ),
+                {
+                    "id": record.id, "knowledge_base_id": knowledge_base_id, "status": record.status,
+                    "configuration": json.dumps(configuration), "embedding_deployment_id": embedding_deployment_id,
+                    "embedding_provider": embedding_provider, "embedding_model": embedding_model,
+                    "embedding_dimension": embedding_dimension, "created_at": record.created_at,
+                },
+            )
+            connection.execute(
+                text("UPDATE knowledge_bases SET pending_index_version_id = :version_id WHERE id = :id"),
+                {"id": knowledge_base_id, "version_id": record.id},
+            )
+        return record
+
+    def activate_index_version(self, knowledge_base_id: str, version_id: str) -> KnowledgeIndexVersionRecord:
+        from sqlalchemy import text
+
+        with self.engine.begin() as connection:
+            exists = connection.execute(
+                text("SELECT 1 FROM knowledge_index_versions WHERE id = :version_id AND knowledge_base_id = :id"),
+                {"version_id": version_id, "id": knowledge_base_id},
+            ).first()
+            if not exists:
+                raise KeyError(f"Knowledge index version not found: {version_id}")
+            connection.execute(
+                text(
+                    """
+                    UPDATE knowledge_index_versions
+                    SET status = 'superseded'
+                    WHERE knowledge_base_id = :id AND status = 'active' AND id <> :version_id
+                    """
+                ),
+                {"id": knowledge_base_id, "version_id": version_id},
+            )
+            connection.execute(
+                text(
+                    """
+                    UPDATE knowledge_index_versions v
+                    SET status = 'active', activated_at = :now,
+                        chunk_count = (SELECT COUNT(*) FROM chunks WHERE index_version_id = v.id),
+                        document_count = (SELECT COUNT(DISTINCT document_id) FROM chunks WHERE index_version_id = v.id),
+                        error = ''
+                    WHERE v.id = :version_id
+                    """
+                ),
+                {"version_id": version_id, "now": utc_now()},
+            )
+            connection.execute(
+                text(
+                    """
+                    UPDATE knowledge_bases
+                    SET active_index_version_id = :version_id, pending_index_version_id = '', updated_at = :now
+                    WHERE id = :id
+                    """
+                ),
+                {"id": knowledge_base_id, "version_id": version_id, "now": utc_now()},
+            )
+        return next(item for item in self.list_index_versions(knowledge_base_id) if item.id == version_id)
+
+    def fail_index_version(self, knowledge_base_id: str, version_id: str, error: str) -> None:
+        from sqlalchemy import text
+
+        with self.engine.begin() as connection:
+            connection.execute(
+                text("UPDATE knowledge_index_versions SET status = 'failed', error = :error WHERE id = :version_id AND knowledge_base_id = :id"),
+                {"id": knowledge_base_id, "version_id": version_id, "error": str(error)[:2000]},
+            )
+            connection.execute(
+                text("UPDATE knowledge_bases SET pending_index_version_id = '' WHERE id = :id"), {"id": knowledge_base_id}
+            )
+
+    def list_index_versions(self, knowledge_base_id: str) -> List[KnowledgeIndexVersionRecord]:
+        from sqlalchemy import text
+
+        with self.engine.begin() as connection:
+            rows = connection.execute(
+                text("SELECT * FROM knowledge_index_versions WHERE knowledge_base_id = :id ORDER BY created_at DESC"),
+                {"id": knowledge_base_id},
+            ).mappings()
+            return [_index_version_from_row(row) for row in rows]
 
     def delete_knowledge_base(self, knowledge_base_id: str) -> None:
         from sqlalchemy import text
@@ -655,8 +881,15 @@ class PostgresKnowledgeRepository:
     def replace_chunks(self, knowledge_base_id: str, chunks: List[StoredKnowledgeChunk], embeddings: List[List[float]], model: str) -> None:
         from sqlalchemy import text
 
+        target_version = next((chunk.index_version_id for chunk in chunks if chunk.index_version_id), "")
         with self.engine.begin() as connection:
-            connection.execute(text("DELETE FROM chunks WHERE knowledge_base_id = :id"), {"id": knowledge_base_id})
+            if target_version:
+                connection.execute(
+                    text("DELETE FROM chunks WHERE knowledge_base_id = :id AND index_version_id = :version_id"),
+                    {"id": knowledge_base_id, "version_id": target_version},
+                )
+            else:
+                connection.execute(text("DELETE FROM chunks WHERE knowledge_base_id = :id"), {"id": knowledge_base_id})
         self.append_chunks(chunks, embeddings, model)
 
     def replace_document_chunks(
@@ -684,8 +917,8 @@ class PostgresKnowledgeRepository:
                 connection.execute(
                     text(
                         """
-                        INSERT INTO chunks (id, knowledge_base_id, document_id, chunk_index, text, token_count, metadata_json)
-                        VALUES (:id, :knowledge_base_id, :document_id, :chunk_index, :text, :token_count, CAST(:metadata AS JSONB))
+                        INSERT INTO chunks (id, knowledge_base_id, document_id, chunk_index, text, token_count, metadata_json, index_version_id, parent_chunk_id)
+                        VALUES (:id, :knowledge_base_id, :document_id, :chunk_index, :text, :token_count, CAST(:metadata AS JSONB), :index_version_id, :parent_chunk_id)
                         """
                     ),
                     {**_chunk_to_dict(chunk), "metadata": json.dumps(chunk.metadata)},
@@ -693,18 +926,102 @@ class PostgresKnowledgeRepository:
                 connection.execute(
                     text(
                         """
-                        INSERT INTO chunk_embeddings (chunk_id, embedding, embedding_model)
-                        VALUES (:chunk_id, :embedding, :embedding_model)
+                        INSERT INTO chunk_embeddings (chunk_id, embedding, embedding_model, embedding_deployment_id, embedding_dimension)
+                        VALUES (:chunk_id, :embedding, :embedding_model, :embedding_deployment_id, :embedding_dimension)
                         """
                     ),
                     {
                         "chunk_id": chunk.id,
                         "embedding": _vector_literal(embedding),
                         "embedding_model": model,
+                        "embedding_deployment_id": chunk.metadata.get("embedding_deployment_id", ""),
+                        "embedding_dimension": len(embedding),
                     },
                 )
 
     def list_chunks(self, knowledge_base_id: str, limit: int = 100) -> List[StoredKnowledgeChunk]:
+        from sqlalchemy import text
+
+        def _query() -> List[StoredKnowledgeChunk]:
+            with self.engine.begin() as connection:
+                active_version = connection.execute(
+                    text("SELECT active_index_version_id FROM knowledge_bases WHERE id = :id"),
+                    {"id": knowledge_base_id},
+                ).scalar_one_or_none()
+                if active_version is None:
+                    raise KeyError(f"Knowledge base not found: {knowledge_base_id}")
+                version_filter = "AND c.index_version_id = :active_version" if active_version else ""
+                params = {"id": knowledge_base_id, "limit": limit, "active_version": active_version or ""}
+                rows = connection.execute(
+                    text(
+                        f"""
+                        SELECT c.*,
+                               ce.embedding_model,
+                               ce.embedding_deployment_id,
+                               ce.embedding_dimension,
+                               ce.embedding::text AS embedding_text
+                        FROM chunks c
+                        LEFT JOIN chunk_embeddings ce ON ce.chunk_id = c.id
+                        WHERE c.knowledge_base_id = :id
+                          {version_filter}
+                        ORDER BY c.document_id, c.chunk_index
+                        LIMIT :limit
+                        """
+                    ),
+                    params,
+                ).mappings()
+                return [_chunk_from_row(row) for row in rows]
+
+        return _retry_transient_db_error(_query)
+
+    def search_chunks_by_embedding(
+        self,
+        knowledge_base_id: str,
+        embedding: List[float],
+        limit: int = 10,
+    ) -> List[tuple[StoredKnowledgeChunk, float]]:
+        from sqlalchemy import text
+
+        def _query() -> List[tuple[StoredKnowledgeChunk, float]]:
+            with self.engine.begin() as connection:
+                active_version = connection.execute(
+                    text("SELECT active_index_version_id FROM knowledge_bases WHERE id = :id"),
+                    {"id": knowledge_base_id},
+                ).scalar_one_or_none()
+                if active_version is None:
+                    raise KeyError(f"Knowledge base not found: {knowledge_base_id}")
+                version_filter = "AND c.index_version_id = :active_version" if active_version else ""
+                rows = connection.execute(
+                    text(
+                        f"""
+                        SELECT c.*,
+                               ce.embedding_model,
+                               ce.embedding_deployment_id,
+                               ce.embedding_dimension,
+                               ce.embedding::text AS embedding_text,
+                               1 - (ce.embedding <=> CAST(:embedding AS vector)) AS score
+                        FROM chunks c
+                        JOIN chunk_embeddings ce ON ce.chunk_id = c.id
+                        WHERE c.knowledge_base_id = :id
+                          {version_filter}
+                          AND (ce.embedding_dimension = 0 OR ce.embedding_dimension = :dimension)
+                        ORDER BY ce.embedding <=> CAST(:embedding AS vector)
+                        LIMIT :limit
+                        """
+                    ),
+                    {
+                        "id": knowledge_base_id,
+                        "active_version": active_version or "",
+                        "embedding": _vector_literal(embedding),
+                        "dimension": len(embedding),
+                        "limit": limit,
+                    },
+                ).mappings()
+                return [(_chunk_from_row(row), float(row.get("score") or 0.0)) for row in rows]
+
+        return _retry_transient_db_error(_query)
+
+    def _legacy_join_list_chunks(self, knowledge_base_id: str, limit: int = 100) -> List[StoredKnowledgeChunk]:
         from sqlalchemy import text
 
         with self.engine.begin() as connection:
@@ -713,10 +1030,14 @@ class PostgresKnowledgeRepository:
                     """
                     SELECT c.*,
                            ce.embedding_model,
+                           ce.embedding_deployment_id,
+                           ce.embedding_dimension,
                            ce.embedding::text AS embedding_text
                     FROM chunks c
                     LEFT JOIN chunk_embeddings ce ON ce.chunk_id = c.id
+                    JOIN knowledge_bases kb ON kb.id = c.knowledge_base_id
                     WHERE c.knowledge_base_id = :id
+                      AND (kb.active_index_version_id = '' OR c.index_version_id = kb.active_index_version_id)
                     ORDER BY c.document_id, c.chunk_index
                     LIMIT :limit
                     """
@@ -725,7 +1046,7 @@ class PostgresKnowledgeRepository:
             ).mappings()
             return [_chunk_from_row(row) for row in rows]
 
-    def search_chunks_by_embedding(
+    def _legacy_join_search_chunks_by_embedding(
         self,
         knowledge_base_id: str,
         embedding: List[float],
@@ -739,16 +1060,21 @@ class PostgresKnowledgeRepository:
                     """
                     SELECT c.*,
                            ce.embedding_model,
+                           ce.embedding_deployment_id,
+                           ce.embedding_dimension,
                            ce.embedding::text AS embedding_text,
                            1 - (ce.embedding <=> CAST(:embedding AS vector)) AS score
                     FROM chunks c
                     JOIN chunk_embeddings ce ON ce.chunk_id = c.id
+                    JOIN knowledge_bases kb ON kb.id = c.knowledge_base_id
                     WHERE c.knowledge_base_id = :id
+                      AND (kb.active_index_version_id = '' OR c.index_version_id = kb.active_index_version_id)
+                      AND (ce.embedding_dimension = 0 OR ce.embedding_dimension = :dimension)
                     ORDER BY ce.embedding <=> CAST(:embedding AS vector)
                     LIMIT :limit
                     """
                 ),
-                {"id": knowledge_base_id, "embedding": _vector_literal(embedding), "limit": limit},
+                {"id": knowledge_base_id, "embedding": _vector_literal(embedding), "dimension": len(embedding), "limit": limit},
             ).mappings()
             return [(_chunk_from_row(row), float(row.get("score") or 0.0)) for row in rows]
 
@@ -822,6 +1148,7 @@ def _empty_state() -> Dict[str, Dict[str, Any]]:
         "chunks": {},
         "chunk_embeddings": {},
         "ingestion_runs": {},
+        "index_versions": {},
     }
 
 
@@ -871,6 +1198,8 @@ def _chunk_to_dict(record: StoredKnowledgeChunk) -> Dict[str, Any]:
         "text": record.text,
         "token_count": record.token_count,
         "metadata": record.metadata,
+        "index_version_id": record.index_version_id or record.metadata.get("index_version_id", ""),
+        "parent_chunk_id": record.parent_chunk_id or record.metadata.get("parent_chunk_id", ""),
     }
 
 
@@ -899,6 +1228,38 @@ def _chunk_from_dict(payload: Dict[str, Any], embedding_payload: Optional[Dict[s
         embedding_model=(embedding_payload or {}).get("embedding_model", ""),
         embedding_dimension=len(embedding) if isinstance(embedding, list) else _vector_dimension(str(embedding)),
         has_embedding=bool(embedding_payload),
+        index_version_id=payload.get("index_version_id", ""),
+        parent_chunk_id=payload.get("parent_chunk_id", ""),
+    )
+
+
+def _index_version_to_dict(record: KnowledgeIndexVersionRecord) -> Dict[str, Any]:
+    return {
+        "id": record.id,
+        "knowledge_base_id": record.knowledge_base_id,
+        "status": record.status,
+        "chunking_configuration": record.chunking_configuration,
+        "embedding_deployment_id": record.embedding_deployment_id,
+        "embedding_provider": record.embedding_provider,
+        "embedding_model": record.embedding_model,
+        "embedding_dimension": record.embedding_dimension,
+        "document_count": record.document_count,
+        "chunk_count": record.chunk_count,
+        "error": record.error,
+        "created_at": record.created_at,
+        "activated_at": record.activated_at,
+    }
+
+
+def _index_version_from_dict(payload: Dict[str, Any]) -> KnowledgeIndexVersionRecord:
+    return KnowledgeIndexVersionRecord(
+        id=payload["id"], knowledge_base_id=payload["knowledge_base_id"], status=payload["status"],
+        chunking_configuration=dict(payload.get("chunking_configuration", {})),
+        embedding_deployment_id=payload.get("embedding_deployment_id", ""),
+        embedding_provider=payload.get("embedding_provider", ""), embedding_model=payload.get("embedding_model", ""),
+        embedding_dimension=int(payload.get("embedding_dimension") or 0), document_count=int(payload.get("document_count") or 0),
+        chunk_count=int(payload.get("chunk_count") or 0), error=payload.get("error", ""),
+        created_at=payload.get("created_at", ""), activated_at=payload.get("activated_at", ""),
     )
 
 
@@ -942,13 +1303,56 @@ def _chunk_from_row(row: Any) -> StoredKnowledgeChunk:
         token_count=int(row["token_count"]),
         metadata=dict(row.get("metadata_json") or {}),
         embedding_model=row.get("embedding_model") or "",
-        embedding_dimension=_vector_dimension(embedding_text),
+        embedding_dimension=int(row.get("embedding_dimension") or 0) or _vector_dimension(embedding_text),
         has_embedding=bool(row.get("embedding_model")),
+        index_version_id=row.get("index_version_id") or "",
+        parent_chunk_id=row.get("parent_chunk_id") or "",
+    )
+
+
+def _index_version_from_row(row: Any) -> KnowledgeIndexVersionRecord:
+    return KnowledgeIndexVersionRecord(
+        id=row["id"], knowledge_base_id=row["knowledge_base_id"], status=row["status"],
+        chunking_configuration=dict(row.get("chunking_configuration_json") or {}),
+        embedding_deployment_id=row.get("embedding_deployment_id") or "",
+        embedding_provider=row.get("embedding_provider") or "", embedding_model=row.get("embedding_model") or "",
+        embedding_dimension=int(row.get("embedding_dimension") or 0), document_count=int(row.get("document_count") or 0),
+        chunk_count=int(row.get("chunk_count") or 0), error=row.get("error") or "",
+        created_at=row.get("created_at") or "", activated_at=row.get("activated_at") or "",
     )
 
 
 def _vector_literal(values: List[float]) -> str:
     return "[" + ",".join(f"{value:.8f}" for value in values) + "]"
+
+
+def _retry_transient_db_error(operation: Any, attempts: int = 3) -> Any:
+    last_error: Optional[Exception] = None
+    for attempt in range(attempts):
+        try:
+            return operation()
+        except Exception as exc:
+            if not _is_transient_db_error(exc) or attempt >= attempts - 1:
+                raise
+            last_error = exc
+            time.sleep(0.08 * (attempt + 1))
+    if last_error:
+        raise last_error
+    return operation()
+
+
+def _is_transient_db_error(error: Exception) -> bool:
+    value = f"{type(error).__name__}: {error}".lower()
+    return any(
+        marker in value
+        for marker in [
+            "deadlock detected",
+            "deadlockdetected",
+            "lock timeout",
+            "could not serialize access",
+            "serializationfailure",
+        ]
+    )
 
 
 def _vector_dimension(value: str) -> int:

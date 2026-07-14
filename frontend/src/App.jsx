@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Activity,
+  AlertTriangle,
   BarChart3,
   BookOpen,
   Bot,
@@ -11,7 +12,10 @@ import {
   CircleUserRound,
   ClipboardList,
   Copy,
+  Cpu,
   Database,
+  Eye,
+  EyeOff,
   ExternalLink,
   FileText,
   Filter,
@@ -40,13 +44,16 @@ import {
 } from "lucide-react";
 import {
   askQuestion,
-  createChatConfiguration,
+  askQuestionStream,
   createEvaluationRun,
   createKnowledgeBase,
+  createModelDeploymentFromTemplate,
   deleteChatConversation,
   deleteEvaluationRun,
   deleteKnowledgeBase,
   deleteKnowledgeDocument,
+  deleteModelDeployment,
+  getModelUsageSummary,
   getKnowledgeProcessingTrace,
   getRagxplainViewerUrl,
   ingestWebsiteSource,
@@ -58,11 +65,16 @@ import {
   listKnowledgeChunks,
   listKnowledgeDocuments,
   listKnowledgeBases,
+  listKnowledgeIndexVersions,
+  listModelDeployments,
+  listModelProviders,
+  listModelUsage,
   reindexKnowledgeBase,
   submitFeedback,
-  updateChatConfiguration,
+  testModelDeployment,
   updateChatConversation,
   updateKnowledgeBase,
+  updateModelDeployment,
   uploadKnowledgeSource
 } from "./api.js";
 import {
@@ -75,11 +87,11 @@ import {
 const navItems = [
   { id: "main", label: "Main", icon: Home },
   { id: "knowledge", label: "Knowledge Bases", icon: Database },
+  { id: "model-farm", label: "AI Models", icon: Cpu },
   { id: "evaluation", label: "Evaluation", icon: ClipboardList },
   { id: "analytics", label: "Analytics", icon: BarChart3 }
 ];
 
-const classifiers = ["DistilBERT", "T5-small", "Naive Bayes", "Heuristic"];
 const routes = [
   { value: "Adaptive", label: "Adaptive" },
   { value: "L1 Direct", label: "L1 Direct Generation" },
@@ -119,10 +131,19 @@ const responseStructures = [
   "JSON-style structured response"
 ];
 const chatbotTones = ["Professional", "Friendly", "Formal", "Technical", "Coaching"];
+const modelCapabilities = ["generation", "embedding", "rerank", "judge", "planner", "classifier"];
+const defaultGeneratorDeploymentId = "model-local-extractive";
+const defaultEmbeddingDeploymentId = "model-local-hash-384";
 const defaultChatConfigurationDraft = {
   chatConfigurationId: "",
   configurationName: "Balanced workflow assistant",
   configurationDescription: "Default configuration for concise business workflow answers.",
+  generatorDeploymentId: defaultGeneratorDeploymentId,
+  fallbackDeploymentIds: [],
+  rerankerDeploymentId: "",
+  plannerDeploymentId: "",
+  generationParameters: { temperature: 0.2, max_tokens: 500 },
+  citationsEnabled: true,
   generatorProvider: "Local",
   generatorModel: "extractive",
   responseStructure: "Concise answer with bullets and cited workflow context",
@@ -174,6 +195,8 @@ const defaultKnowledgeConfiguration = {
   chunking_strategy: "sliding_window_overlap",
   chunk_size: 800,
   chunk_overlap: 120,
+  embedding_deployment_id: defaultEmbeddingDeploymentId,
+  external_processing_allowed: false,
   embedding_provider: "Local",
   embedding_model: "hash-embedding-384"
 };
@@ -198,6 +221,8 @@ export default function App() {
   const [signedIn, setSignedIn] = useState(false);
   const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState("");
   const [selectedEvaluationDetail, setSelectedEvaluationDetail] = useState(null);
+  const [confirmation, setConfirmation] = useState(null);
+  const confirmationResolverRef = useRef(null);
 
   useEffect(() => {
     if (screen !== "splash") return undefined;
@@ -211,6 +236,28 @@ export default function App() {
   function enterStudio() {
     setSignedIn(true);
     setScreen("main");
+  }
+
+  function confirmAction(options = {}) {
+    return new Promise((resolve) => {
+      confirmationResolverRef.current = resolve;
+      setConfirmation({
+        title: "Confirm action",
+        message: "Are you sure you want to continue?",
+        confirmLabel: "Confirm",
+        cancelLabel: "Cancel",
+        tone: "danger",
+        ...options
+      });
+    });
+  }
+
+  function resolveConfirmation(confirmed) {
+    if (confirmationResolverRef.current) {
+      confirmationResolverRef.current(confirmed);
+      confirmationResolverRef.current = null;
+    }
+    setConfirmation(null);
   }
 
   if (screen === "splash") {
@@ -231,18 +278,22 @@ export default function App() {
         <MainScreen
           selectedKnowledgeBaseId={selectedKnowledgeBaseId}
           onSelectKnowledgeBase={setSelectedKnowledgeBaseId}
+          confirmAction={confirmAction}
         />
       )}
       {screen === "knowledge" && (
         <KnowledgeBasesScreen
           selectedKnowledgeBaseId={selectedKnowledgeBaseId}
           onSelectKnowledgeBase={setSelectedKnowledgeBaseId}
+          confirmAction={confirmAction}
         />
       )}
+      {screen === "model-farm" && <AIModelsScreen confirmAction={confirmAction} />}
       {screen === "evaluation" && (
         <EvaluationScreen
           selectedKnowledgeBaseId={selectedKnowledgeBaseId}
           onSelectKnowledgeBase={setSelectedKnowledgeBaseId}
+          confirmAction={confirmAction}
           onOpenDetail={(run, evaluationCase, view = "case") => {
             setSelectedEvaluationDetail({ run, evaluationCase, view });
             setScreen("evaluation-detail");
@@ -256,6 +307,11 @@ export default function App() {
         />
       )}
       {screen === "analytics" && <AnalyticsScreen />}
+      <ConfirmationDialog
+        confirmation={confirmation}
+        onCancel={() => resolveConfirmation(false)}
+        onConfirm={() => resolveConfirmation(true)}
+      />
     </Shell>
   );
 }
@@ -353,7 +409,7 @@ function SignupScreen({ onSubmit, onSwitch }) {
         <label className="signup-consent">
           <input type="checkbox" />
           <span>
-            I agree to use Adaptive RAG Studio as an AI窶叢owered system. I will verify answers since AI can make mistakes.
+            I agree to use Adaptive RAG Studio as an AI遯ｶ蜿｢owered system. I will verify answers since AI can make mistakes.
           </span>
         </label>
         <button className="primary-action signup-submit" onClick={onSubmit}><IconLabel icon={UserPlus} size={20}>Agree and start</IconLabel></button>
@@ -396,7 +452,51 @@ function Shell({ activeScreen, onNavigate, children }) {
   );
 }
 
-function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
+function ConfirmationDialog({ confirmation, onCancel, onConfirm }) {
+  useEffect(() => {
+    if (!confirmation) return undefined;
+    function handleKeyDown(event) {
+      if (event.key === "Escape") onCancel();
+      if (event.key === "Enter") onConfirm();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [confirmation, onCancel, onConfirm]);
+
+  if (!confirmation) return null;
+  const isDanger = confirmation.tone !== "neutral";
+  return (
+    <div className="confirmation-backdrop" role="presentation" onMouseDown={onCancel}>
+      <section
+        className={`confirmation-dialog ${isDanger ? "danger" : "neutral"}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirmation-title"
+        aria-describedby="confirmation-message"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="confirmation-icon" aria-hidden="true">
+          <IconOnly icon={isDanger ? AlertTriangle : CheckCircle2} size={22} />
+        </div>
+        <div className="confirmation-content">
+          <h2 id="confirmation-title">{confirmation.title}</h2>
+          <p id="confirmation-message">{confirmation.message}</p>
+          {confirmation.detail && <p className="confirmation-detail">{confirmation.detail}</p>}
+        </div>
+        <div className="confirmation-actions">
+          <button className="secondary-action" type="button" onClick={onCancel}>
+            {confirmation.cancelLabel || "Cancel"}
+          </button>
+          <button className={`primary-action ${isDanger ? "danger-confirm" : ""}`} type="button" onClick={onConfirm}>
+            {confirmation.confirmLabel || "Confirm"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAction }) {
   const mainGridRef = useRef(null);
   const [messages, setMessages] = useState(seedMessages);
   const [question, setQuestion] = useState("");
@@ -410,10 +510,13 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
   const [libraryConversations, setLibraryConversations] = useState([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [chatConfigurations, setChatConfigurations] = useState([]);
+  const [modelDeployments, setModelDeployments] = useState([]);
   const [configurationStatus, setConfigurationStatus] = useState("");
   const [layout, setLayout] = useState(loadMainLayout);
   const [config, setConfig] = useState({
     classifier: "DistilBERT",
+    classifierDeploymentId: "",
+    queryEmbeddingDeploymentId: "",
     route: "Adaptive",
     retrievalMode: "Hybrid",
     topK: 6,
@@ -438,11 +541,36 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
 
   useEffect(() => {
     refreshChatConfigurations();
+    refreshMainModelDeployments();
   }, []);
+
+  async function refreshMainModelDeployments() {
+    try {
+      const [generators, embeddings, classifiers, rerankers, planners] = await Promise.all([
+        listModelDeployments({ capability: "generation", enabled: true }),
+        listModelDeployments({ capability: "embedding", enabled: true }),
+        listModelDeployments({ capability: "classifier", enabled: true }),
+        listModelDeployments({ capability: "rerank", enabled: true }),
+        listModelDeployments({ capability: "planner", enabled: true })
+      ]);
+      const byId = new Map();
+      [...generators, ...embeddings, ...classifiers, ...rerankers, ...planners].forEach((deployment) => byId.set(deployment.id, deployment));
+      setModelDeployments(Array.from(byId.values()));
+    } catch (error) {
+      setConfigurationStatus(`AI Models unavailable: ${error.message}`);
+      setModelDeployments([]);
+    }
+  }
 
   useEffect(() => {
     saveMainLayout(layout);
   }, [layout]);
+
+  useEffect(() => {
+    if (!feedbackStatus) return undefined;
+    const timer = window.setTimeout(() => setFeedbackStatus(""), 4200);
+    return () => window.clearTimeout(timer);
+  }, [feedbackStatus]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -473,8 +601,8 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
     try {
       const items = await listChatConfigurations();
       setChatConfigurations(items);
-      const selected = items.find((item) => item.id === preferredId) || items[0];
-      if (selected && !preferredId) {
+      const selected = preferredId ? items.find((item) => item.id === preferredId) : null;
+      if (selected) {
         setConfig((current) => applyChatConfigurationToDraft(current, selected));
       }
       return items;
@@ -483,50 +611,6 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
       setChatConfigurations([]);
       return [];
     }
-  }
-
-  function selectChatConfiguration(configurationId) {
-    const selected = chatConfigurations.find((item) => item.id === configurationId);
-    if (!selected) {
-      setConfig((current) => ({ ...current, chatConfigurationId: "" }));
-      return;
-    }
-    setConfig((current) => applyChatConfigurationToDraft(current, selected));
-    setConfigurationStatus(`Loaded "${selected.name}"`);
-  }
-
-  async function saveChatConfigurationAsNew() {
-    try {
-      const created = await createChatConfiguration(chatConfigurationPayloadFromDraft(config));
-      const items = await refreshChatConfigurations(created.id);
-      setChatConfigurations(items);
-      setConfig((current) => applyChatConfigurationToDraft(current, created));
-      setConfigurationStatus(`Saved "${created.name}"`);
-    } catch (error) {
-      setConfigurationStatus(`Save configuration failed: ${error.message}`);
-    }
-  }
-
-  async function updateSelectedChatConfiguration() {
-    if (!config.chatConfigurationId) {
-      await saveChatConfigurationAsNew();
-      return;
-    }
-    try {
-      const updated = await updateChatConfiguration(config.chatConfigurationId, chatConfigurationPayloadFromDraft(config));
-      const items = await refreshChatConfigurations(updated.id);
-      setChatConfigurations(items);
-      setConfig((current) => applyChatConfigurationToDraft(current, updated));
-      setConfigurationStatus(`Updated "${updated.name}"`);
-    } catch (error) {
-      setConfigurationStatus(`Update configuration failed: ${error.message}`);
-    }
-  }
-
-  function resetChatConfigurationDraft() {
-    const selected = chatConfigurations.find((item) => item.id === config.chatConfigurationId) || chatConfigurations[0];
-    setConfig((current) => selected ? applyChatConfigurationToDraft(current, selected) : { ...current, ...defaultChatConfigurationDraft });
-    setConfigurationStatus("Configuration draft reset");
   }
 
   async function startNewChat() {
@@ -571,8 +655,26 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
     }
   }
 
+  async function renameConversation(conversation, nextTitle) {
+    const cleanedTitle = String(nextTitle || "").trim();
+    if (!cleanedTitle || cleanedTitle === conversation.title) return true;
+    try {
+      await updateChatConversation(conversation.id, { title: cleanedTitle });
+      await refreshConversationLists();
+      return true;
+    } catch (error) {
+      setFeedbackStatus(`Rename chat failed: ${error.message}`);
+      return false;
+    }
+  }
+
   async function removeConversation(conversation) {
-    const confirmed = window.confirm(`Delete "${conversation.title}"?`);
+    const confirmed = await confirmAction({
+      title: "Delete chat?",
+      message: `Delete "${conversation.title || "this chat"}"?`,
+      detail: "This removes the saved conversation and its messages from chat history.",
+      confirmLabel: "Delete chat"
+    });
     if (!confirmed) return;
     try {
       await deleteChatConversation(conversation.id);
@@ -596,12 +698,108 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
       setFeedbackStatus("Select or save a chatbot configuration before sending.");
       return;
     }
+    const assistantMessageId = createId();
+    const streamRequestId = createId();
+    let persistedConversationId = activeConversationId || "";
+    let persistedAssistantMessageId = "";
+    let streamPollTimer = null;
+    let streamFinished = false;
     const userMessage = { id: createId(), role: "user", content: trimmed };
-    setMessages((current) => [...current, userMessage]);
+    const assistantPlaceholder = {
+      id: assistantMessageId,
+      question: trimmed,
+      role: "assistant",
+      content: "",
+      contexts: [],
+      metadata: { complexity_label: "pending", trace_steps: [] },
+      status: "streaming",
+      streaming: true,
+      streamingStatus: "Connecting to Adaptive RAG..."
+    };
+    setMessages((current) => [...current, userMessage, assistantPlaceholder]);
     setQuestion("");
     setIsLoading(true);
+    const stopStreamPolling = () => {
+      streamFinished = true;
+      if (streamPollTimer) {
+        window.clearInterval(streamPollTimer);
+        streamPollTimer = null;
+      }
+    };
+    const patchStreamingAssistant = (patchOrUpdater) => {
+      setMessages((current) => current.map((message) => {
+        const metadata = message.metadata || {};
+        const isTarget = message.id === assistantMessageId
+          || (persistedAssistantMessageId && message.id === persistedAssistantMessageId)
+          || metadata.request_id === streamRequestId
+          || (persistedAssistantMessageId && metadata.assistant_message_id === persistedAssistantMessageId);
+        if (!isTarget) return message;
+        const patch = typeof patchOrUpdater === "function" ? patchOrUpdater(message) : patchOrUpdater;
+        const { id: _ignoredId, ...safePatch } = patch || {};
+        return { ...message, ...safePatch };
+      }));
+    };
+    const startStreamPolling = (conversationId = "", assistantId = "", requestId = "") => {
+      if ((!conversationId && !requestId) || streamPollTimer) return;
+      streamPollTimer = window.setInterval(async () => {
+        if (streamFinished) return;
+        try {
+          let records = [];
+          let resolvedConversationId = conversationId || persistedConversationId;
+          if (resolvedConversationId) {
+            records = await listChatMessages(resolvedConversationId);
+          } else {
+            const conversations = await listChatConversations({ section: "recents" });
+            for (const conversation of conversations.slice(0, 6)) {
+              const candidateRecords = await listChatMessages(conversation.id);
+              const candidate = candidateRecords.find((record) => (
+                record.role === "assistant"
+                && (record.request_id === requestId || record.metadata?.request_id === requestId)
+              ));
+              if (candidate) {
+                records = candidateRecords;
+                resolvedConversationId = conversation.id;
+                persistedConversationId = conversation.id;
+                setActiveConversationId(conversation.id);
+                break;
+              }
+            }
+          }
+          const assistantRecord = records.find((record) => assistantId && record.id === assistantId)
+            || records.find((record) => record.role === "assistant" && (record.request_id === requestId || record.metadata?.request_id === requestId))
+            || [...records].reverse().find((record) => record.role === "assistant" && record.request_id);
+          if (!assistantRecord) return;
+          persistedAssistantMessageId = assistantRecord.id || persistedAssistantMessageId;
+          patchStreamingAssistant({
+            question: assistantRecord.metadata?.question || trimmed,
+            role: "assistant",
+            content: assistantRecord.content || "",
+            contexts: assistantRecord.contexts || [],
+            metadata: {
+              ...(assistantRecord.metadata || {}),
+              request_id: assistantRecord.request_id || assistantRecord.metadata?.request_id || requestId || streamRequestId,
+              assistant_message_id: assistantRecord.id || assistantRecord.metadata?.assistant_message_id
+            },
+            status: assistantRecord.status || "streaming",
+            streaming: ["pending", "streaming"].includes(assistantRecord.status || ""),
+            streamingStatus: ["pending", "streaming"].includes(assistantRecord.status || "")
+              ? "Streaming answer..."
+              : ""
+          });
+          persistedConversationId = resolvedConversationId || persistedConversationId;
+          if (["completed", "failed", "cancelled"].includes(assistantRecord.status || "")) {
+            stopStreamPolling();
+            setIsLoading(false);
+            await refreshConversationLists();
+          }
+        } catch {
+          // Polling is a fallback only; the primary SSE stream may still complete.
+        }
+      }, 1800);
+    };
     try {
-      const response = await askQuestion(trimmed, {
+      const response = await askQuestionStream(trimmed, {
+        requestId: streamRequestId,
         conversationId: activeConversationId,
         knowledgeBaseId: selectedKnowledgeBaseId,
         mode,
@@ -609,35 +807,88 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
         topK: config.topK,
         chatConfigurationId: config.chatConfigurationId || null,
         chatConfiguration: chatConfigurationPayloadFromDraft(config)
+      }, (event) => {
+        if (event.type === "started") {
+          const serverAssistantId = event.data?.assistant_message_id;
+          const serverConversationId = event.data?.conversation_id;
+          const serverRequestId = event.data?.request_id || streamRequestId;
+          if (serverConversationId) {
+            persistedConversationId = serverConversationId;
+            setActiveConversationId(serverConversationId);
+          }
+          persistedAssistantMessageId = serverAssistantId || persistedAssistantMessageId;
+          patchStreamingAssistant((message) => ({
+            metadata: {
+              ...(message.metadata || {}),
+              request_id: serverRequestId,
+              user_message_id: event.data?.user_message_id || message.metadata?.user_message_id,
+              assistant_message_id: serverAssistantId || message.metadata?.assistant_message_id
+            },
+            streamingStatus: serverAssistantId ? "Route is running..." : "Request accepted. Preparing route..."
+          }));
+          startStreamPolling(serverConversationId || persistedConversationId, serverAssistantId || persistedAssistantMessageId, serverRequestId);
+        }
+        if (event.type === "trace") {
+          patchStreamingAssistant((message) => ({
+            metadata: {
+              ...(message.metadata || {}),
+              trace_steps: [...(message.metadata?.trace_steps || []), event.data]
+            },
+            streamingStatus: event.data?.detail || event.data?.step || "Running Adaptive RAG..."
+          }));
+        }
+        if (event.type === "sources") {
+          patchStreamingAssistant({
+            contexts: event.data?.contexts || [],
+            streamingStatus: "Sources retrieved. Generating answer..."
+          });
+        }
+        if (event.type === "delta") {
+          patchStreamingAssistant((message) => ({
+            content: `${message.content || ""}${event.data?.text || ""}`,
+            streamingStatus: "Streaming answer..."
+          }));
+        }
       });
       if (response.conversation_id && response.conversation_id !== activeConversationId) {
         setActiveConversationId(response.conversation_id);
       }
-      setMessages((current) => [
-        ...current,
-        {
-          id: createId(),
+      stopStreamPolling();
+      patchStreamingAssistant({
           question: trimmed,
           role: "assistant",
           content: response.answer,
           contexts: response.contexts,
-          metadata: response.metadata
-        }
-      ]);
+        metadata: {
+          ...(response.metadata || {}),
+          request_id: response.metadata?.request_id || streamRequestId,
+          assistant_message_id: response.metadata?.assistant_message_id || persistedAssistantMessageId
+        },
+        status: "completed",
+        streaming: false,
+        streamingStatus: ""
+      });
       await refreshConversationLists();
     } catch (error) {
-      setMessages((current) => [
-        ...current,
-        {
-          id: createId(),
+      stopStreamPolling();
+      patchStreamingAssistant({
           question: trimmed,
           role: "assistant",
           content: `Answer request failed: ${error.message}`,
           contexts: [],
-          metadata: { error: error.message, complexity_label: "unknown", trace_steps: [] }
-        }
-      ]);
+        metadata: {
+          error: error.message,
+          complexity_label: "unknown",
+          trace_steps: [],
+          request_id: streamRequestId,
+          assistant_message_id: persistedAssistantMessageId
+        },
+        status: "failed",
+        streaming: false,
+        streamingStatus: ""
+      });
     } finally {
+      stopStreamPolling();
       setIsLoading(false);
     }
   }
@@ -711,7 +962,6 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
   }
 
   const selectedKnowledgeBase = knowledgeBaseOptions.find((item) => item.id === selectedKnowledgeBaseId);
-  const lastAnswer = [...messages].reverse().find((message) => message.role === "assistant" && message.metadata);
   const historyWidth = layout.historyCollapsed ? MAIN_LAYOUT_LIMITS.collapsed : layout.historyWidth;
   const configWidth = layout.configCollapsed ? MAIN_LAYOUT_LIMITS.collapsed : layout.configWidth;
 
@@ -733,6 +983,7 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
         isLoading={isHistoryLoading}
         onSelectConversation={selectConversation}
         onTogglePinned={togglePinnedConversation}
+        onRenameConversation={renameConversation}
         onDeleteConversation={removeConversation}
       />
       <PanelResizeHandle side="left" label="Resize chat history" onPointerDown={(event) => beginPanelResize("history", event)} />
@@ -755,17 +1006,20 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
         config={config}
         setConfig={setConfig}
         selectedKnowledgeBase={selectedKnowledgeBase}
-        lastAnswerMetadata={lastAnswer?.metadata}
-        chatConfigurations={chatConfigurations}
+        modelDeployments={modelDeployments}
+        onRefreshModelDeployments={refreshMainModelDeployments}
         configurationStatus={configurationStatus}
-        onSelectChatConfiguration={selectChatConfiguration}
-        onSaveConfiguration={saveChatConfigurationAsNew}
-        onUpdateConfiguration={updateSelectedChatConfiguration}
-        onResetConfiguration={resetChatConfigurationDraft}
         collapsed={layout.configCollapsed}
         onToggle={() => togglePanel("config")}
       />
-      {feedbackStatus && <div className="toast">{feedbackStatus}</div>}
+      {feedbackStatus && (
+        <div className="toast">
+          <span>{feedbackStatus}</span>
+          <button type="button" onClick={() => setFeedbackStatus("")} aria-label="Dismiss notification">
+            <IconOnly icon={X} size={14} />
+          </button>
+        </div>
+      )}
       {popup && <TraceModal popup={popup} onClose={() => setPopup(null)} />}
     </section>
   );
@@ -786,6 +1040,7 @@ function ConversationHistory({
   isLoading,
   onSelectConversation,
   onTogglePinned,
+  onRenameConversation,
   onDeleteConversation
 }) {
   if (collapsed) {
@@ -801,7 +1056,7 @@ function ConversationHistory({
     <aside className="history-panel">
       <header className="panel-titlebar">
         <div>
-          <p className="eyebrow">Notebook</p>
+          <p className="eyebrow">Explorer</p>
           <h2>Chat history</h2>
         </div>
         <button className="panel-collapse-button" type="button" onClick={onToggle} aria-label="Collapse chat history"><IconOnly icon={ChevronLeft} /></button>
@@ -824,6 +1079,7 @@ function ConversationHistory({
         activeConversationId={activeConversationId}
         onSelectConversation={onSelectConversation}
         onTogglePinned={onTogglePinned}
+        onRenameConversation={onRenameConversation}
         onDeleteConversation={onDeleteConversation}
       />
       <ConversationSection
@@ -834,6 +1090,7 @@ function ConversationHistory({
         activeConversationId={activeConversationId}
         onSelectConversation={onSelectConversation}
         onTogglePinned={onTogglePinned}
+        onRenameConversation={onRenameConversation}
         onDeleteConversation={onDeleteConversation}
       />
     </aside>
@@ -848,40 +1105,96 @@ function ConversationSection({
   activeConversationId,
   onSelectConversation,
   onTogglePinned,
+  onRenameConversation,
   onDeleteConversation
 }) {
+  const [editingConversationId, setEditingConversationId] = useState("");
+  const [editingTitle, setEditingTitle] = useState("");
+
+  function beginRename(conversation) {
+    setEditingConversationId(conversation.id);
+    setEditingTitle(conversation.title || "New chat");
+  }
+
+  function cancelRename() {
+    setEditingConversationId("");
+    setEditingTitle("");
+  }
+
+  async function saveRename(conversation) {
+    const nextTitle = editingTitle.trim();
+    if (!nextTitle || nextTitle === conversation.title) {
+      cancelRename();
+      return;
+    }
+    const saved = await onRenameConversation(conversation, nextTitle);
+    if (saved !== false) cancelRename();
+  }
+
   return (
     <section className="conversation-section">
       <h3><IconLabel icon={icon}>{title}</IconLabel></h3>
       <div className="conversation-list">
         {conversations.length === 0 ? (
           <p className="history-empty">{emptyText}</p>
-        ) : conversations.map((conversation) => (
-          <article
-            key={conversation.id}
-            className={`conversation-item ${conversation.id === activeConversationId ? "active" : ""}`}
-          >
-            <button className="conversation-main" type="button" onClick={() => onSelectConversation(conversation)}>
-              <span>
-                <strong>{conversation.title}</strong>
-                <small>{conversation.route_mode || "adaptive"} - {conversation.retrieval_mode || "hybrid"}</small>
-              </span>
-              <em>{formatShortDate(conversation.updated_at)}</em>
-            </button>
-            <div className="conversation-actions">
-              <button
-                type="button"
-                aria-label={conversation.pinned ? "Unpin chat" : "Pin chat"}
-                onClick={() => onTogglePinned(conversation)}
-              >
-                <IconOnly icon={conversation.pinned ? PinOff : Pin} size={14} />
-              </button>
-              <button type="button" aria-label="Delete chat" onClick={() => onDeleteConversation(conversation)}>
-                <IconOnly icon={Trash2} size={14} />
-              </button>
-            </div>
-          </article>
-        ))}
+        ) : conversations.map((conversation) => {
+          const isEditing = editingConversationId === conversation.id;
+          return (
+            <article
+              key={conversation.id}
+              className={`conversation-item ${conversation.id === activeConversationId ? "active" : ""} ${isEditing ? "editing" : ""}`}
+            >
+              {isEditing ? (
+                <form
+                  className="conversation-title-edit"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    saveRename(conversation);
+                  }}
+                >
+                  <input
+                    value={editingTitle}
+                    autoFocus
+                    aria-label="Chat name"
+                    onChange={(event) => setEditingTitle(event.target.value)}
+                    onBlur={() => saveRename(conversation)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        cancelRename();
+                      }
+                    }}
+                  />
+                </form>
+              ) : (
+                <button className="conversation-main" type="button" onClick={() => onSelectConversation(conversation)}>
+                  <span className="conversation-title-block">
+                    <strong title={conversation.title}>{chatHistoryDisplayTitle(conversation.title)}</strong>
+                    <small>{conversation.route_mode || "adaptive"} - {conversation.retrieval_mode || "hybrid"}</small>
+                  </span>
+                </button>
+              )}
+              <div className="conversation-side">
+                <em className="conversation-time">{formatShortDate(conversation.updated_at)}</em>
+                <div className="conversation-actions">
+                  <button
+                    type="button"
+                    aria-label={conversation.pinned ? "Unpin chat" : "Pin chat"}
+                    onClick={() => onTogglePinned(conversation)}
+                  >
+                    <IconOnly icon={conversation.pinned ? PinOff : Pin} size={14} />
+                  </button>
+                  <button type="button" aria-label="Rename chat" onClick={() => beginRename(conversation)}>
+                    <IconOnly icon={Pencil} size={14} />
+                  </button>
+                  <button type="button" aria-label="Delete chat" onClick={() => onDeleteConversation(conversation)}>
+                    <IconOnly icon={Trash2} size={14} />
+                  </button>
+                </div>
+              </div>
+            </article>
+          );
+        })}
       </div>
     </section>
   );
@@ -900,6 +1213,25 @@ function ChatPanel({
   selectedRoute,
   requiresKnowledgeBase
 }) {
+  const messageListRef = useRef(null);
+  const messageEndRef = useRef(null);
+  const selectedKnowledgeBase = knowledgeBases.find((knowledgeBase) => knowledgeBase.id === selectedKnowledgeBaseId);
+  const chatPlaceholder = selectedKnowledgeBase
+    ? `Send a message to "${selectedKnowledgeBase.name}"`
+    : "Please select a knowledge base to start the conversation.";
+  const scrollSignature = messages
+    .map((message) => `${message.id}:${message.content?.length || 0}:${message.streamingStatus || ""}:${message.status || ""}`)
+    .join("|");
+
+  useEffect(() => {
+    const list = messageListRef.current;
+    const end = messageEndRef.current;
+    if (!list || !end) return;
+    window.requestAnimationFrame(() => {
+      end.scrollIntoView({ block: "end", behavior: "smooth" });
+    });
+  }, [scrollSignature]);
+
   return (
     <section className="chat-panel">
       <header className="chat-titlebar">
@@ -909,14 +1241,28 @@ function ChatPanel({
           <p>Business Workflow Question Answering AI Chatbot</p>
         </div>
       </header>
-      <div className="message-list">
+      <div className="message-list" ref={messageListRef}>
         {messages.map((message) => (
           <article key={message.id} className={`message ${message.role}`}>
             {message.role === "assistant" && <span className="avatar"><Bot size={16} aria-hidden="true" /></span>}
             <div>
-              <p>{message.content}</p>
+              {message.content ? <p>{message.content}</p> : <p className="streaming-placeholder">{message.streamingStatus || "Preparing answer..."}</p>}
+              {message.streaming && (
+                <div className="streaming-status">
+                  <span className="streaming-dot" />
+                  <span>{message.streamingStatus || "Streaming..."}</span>
+                </div>
+              )}
+              {!message.streaming && ["failed", "cancelled", "pending", "streaming"].includes(message.status) && (
+                <div className={`message-state message-state-${message.status}`}>
+                  {message.status === "failed" && "Answer failed during streaming."}
+                  {message.status === "cancelled" && "Answer stream was cancelled."}
+                  {message.status === "pending" && "Answer is pending."}
+                  {message.status === "streaming" && "Answer was still streaming when this chat was loaded."}
+                </div>
+              )}
             </div>
-            {message.role === "assistant" && (
+            {message.role === "assistant" && !message.streaming && (
               <div className="message-actions">
                 <button onClick={() => onOpenPopup({ type: "source", message })}><IconLabel icon={Layers}>Sources</IconLabel></button>
                 <button type="button"><IconLabel icon={Copy}>Copy</IconLabel></button>
@@ -928,12 +1274,12 @@ function ChatPanel({
             )}
           </article>
         ))}
-        {isLoading && <article className="message assistant"><p>Routing query and retrieving context...</p></article>}
+        <div ref={messageEndRef} className="message-list-end" aria-hidden="true" />
       </div>
       <div className="composer">
         <textarea
           aria-label="Chat message"
-          placeholder='Send a message to brain "Wix Chatbot"'
+          placeholder={chatPlaceholder}
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
           onKeyDown={(event) => {
@@ -945,7 +1291,7 @@ function ChatPanel({
         />
         <div className="composer-tools">
           <span><IconLabel icon={Paperclip}>Attach</IconLabel></span>
-          <span><IconLabel icon={Filter}>Filter</IconLabel></span>
+          <span><IconLabel icon={Filter}>Usage</IconLabel></span>
           <span>0%</span>
           <select
             className="composer-select"
@@ -965,7 +1311,7 @@ function ChatPanel({
         </div>
       </div>
       {requiresKnowledgeBase && !selectedKnowledgeBaseId && (
-        <p className="ai-disclaimer">Select a knowledge base to run Adaptive or L2 Simple RAG.</p>
+        <p className="ai-disclaimer">Please select a knowledge base to start the conversation.</p>
       )}
       <p className="ai-disclaimer">This is an AI-powered system. Please verify answers since AI can make mistakes.</p>
     </section>
@@ -976,17 +1322,44 @@ function RagConfiguration({
   config,
   setConfig,
   selectedKnowledgeBase,
-  lastAnswerMetadata,
-  chatConfigurations = [],
+  modelDeployments = [],
+  onRefreshModelDeployments = () => {},
   configurationStatus = "",
-  onSelectChatConfiguration = () => {},
-  onSaveConfiguration = () => {},
-  onUpdateConfiguration = () => {},
-  onResetConfiguration = () => {},
   collapsed,
   onToggle
 }) {
-  const providerModels = generatorModelOptionsByProvider[config.generatorProvider] || generatorModelOptionsByProvider.Local;
+  const generatorDeployments = modelDeployments.filter((deployment) => deployment.capabilities?.includes("generation"));
+  const embeddingDeployments = modelDeployments.filter((deployment) => deployment.capabilities?.includes("embedding"));
+  const classifierDeployments = modelDeployments.filter((deployment) => deployment.capabilities?.includes("classifier"));
+  const rerankerDeployments = modelDeployments.filter((deployment) => deployment.capabilities?.includes("rerank"));
+  const plannerDeployments = modelDeployments.filter((deployment) => deployment.capabilities?.includes("planner"));
+  const activeKnowledgeConfiguration = selectedKnowledgeBase ? knowledgeConfigurationFromRecord(selectedKnowledgeBase) : {};
+  const activeEmbeddingDeploymentId = selectedKnowledgeBase ? activeKnowledgeConfiguration.embedding_deployment_id || "" : "";
+  const executedQueryEmbeddingModel = selectedKnowledgeBase
+    ? selectedKnowledgeBase.embedding_model || activeKnowledgeConfiguration.embedding_model || "Not indexed"
+    : "";
+  const selectedQueryEmbeddingDeploymentId = config.queryEmbeddingDeploymentId || activeEmbeddingDeploymentId || "";
+  const selectedQueryEmbeddingDeployment = embeddingDeployments.find((deployment) => deployment.id === selectedQueryEmbeddingDeploymentId);
+  const selectedQueryEmbeddingLabel = selectedQueryEmbeddingDeployment?.model
+    || selectedQueryEmbeddingDeployment?.name
+    || selectedQueryEmbeddingDeploymentId
+    || executedQueryEmbeddingModel;
+  const hasQueryEmbeddingOverride = Boolean(
+    config.queryEmbeddingDeploymentId
+    && activeEmbeddingDeploymentId
+    && config.queryEmbeddingDeploymentId !== activeEmbeddingDeploymentId
+  );
+  const queryEmbeddingOptions = selectedKnowledgeBase
+    ? [
+        {
+          value: activeEmbeddingDeploymentId || "",
+          label: `${executedQueryEmbeddingModel || "Active KB embedding"} (active KB model)`
+        },
+        ...embeddingDeployments
+          .filter((deployment) => deployment.id !== activeEmbeddingDeploymentId)
+          .map((deployment) => deploymentOption(deployment))
+      ]
+    : [{ value: "", label: "Select a knowledge base first", disabled: true }];
   if (collapsed) {
     return (
       <aside className="config-panel panel-rail config-rail">
@@ -998,47 +1371,89 @@ function RagConfiguration({
   }
   return (
     <aside className="config-panel">
-      <div className="config-topbar">
+      <header className="panel-titlebar">
         <div>
           <p className="eyebrow">Runtime</p>
           <h2>Configuration</h2>
         </div>
         <button className="panel-collapse-button" type="button" onClick={onToggle} aria-label="Collapse configuration"><IconOnly icon={ChevronRight} /></button>
-      </div>
-      <CurrentRouteSummary config={config} selectedKnowledgeBase={selectedKnowledgeBase} metadata={lastAnswerMetadata} />
+      </header>
+      <KnowledgeBaseSummary selectedKnowledgeBase={selectedKnowledgeBase} />
       <section className="config-section runtime-section">
         <header>
-          <h3>Adaptive RAG inputs</h3>
+          <div>
+            <h3>Adaptive RAG</h3>
+            <small>Routing, retrieval, and optional planning controls for the next answer.</small>
+          </div>
+          <button className="text-action" type="button" onClick={onRefreshModelDeployments}><IconLabel icon={RefreshCw}>Refresh AI models</IconLabel></button>
         </header>
-        <SelectField
-          label="Classifier"
-          value={config.classifier}
-          options={classifiers}
-          onChange={(classifier) => setConfig({ ...config, classifier })}
-        />
         <SelectField
           label="Route strategy"
           value={config.route}
           options={routes}
           onChange={(route) => setConfig({ ...config, route })}
         />
-        <SelectField
-          label="Retrieval mode"
-          value={config.retrievalMode}
-          options={["Hybrid", "BM25", "Dense"]}
-          onChange={(retrievalMode) => setConfig({ ...config, retrievalMode })}
-        />
-        <label>
-          Top K retrieval
-          <input
-            type="range"
-            min="1"
-            max="12"
-            value={config.topK}
-            onChange={(event) => setConfig({ ...config, topK: Number(event.target.value) })}
+        <div className="config-two-column">
+          <SelectField
+            label="Classifier model"
+            value={config.classifierDeploymentId || ""}
+            options={[
+              { value: "", label: "Built-in trained classifier" },
+              ...classifierDeployments.map((deployment) => deploymentOption(deployment))
+            ]}
+            onChange={(classifierDeploymentId) => {
+              const deployment = modelDeployments.find((item) => item.id === classifierDeploymentId);
+              setConfig({
+                ...config,
+                classifierDeploymentId,
+                classifier: deployment?.model || deployment?.name || "Built-in trained classifier"
+              });
+            }}
           />
-          <strong>{config.topK} contexts</strong>
-        </label>
+          <SelectField
+            label="Planner model"
+            value={config.plannerDeploymentId || ""}
+            options={[
+              { value: "", label: "Deterministic L3 decomposition" },
+              ...plannerDeployments.map((deployment) => deploymentOption(deployment))
+            ]}
+            onChange={(plannerDeploymentId) => setConfig({ ...config, plannerDeploymentId })}
+          />
+        </div>
+        <SelectField
+          label="Query embedding generation model"
+          value={selectedQueryEmbeddingDeploymentId}
+          options={queryEmbeddingOptions}
+          onChange={(queryEmbeddingDeploymentId) => setConfig({
+            ...config,
+            queryEmbeddingDeploymentId: queryEmbeddingDeploymentId === activeEmbeddingDeploymentId ? "" : queryEmbeddingDeploymentId
+          })}
+        />
+        {hasQueryEmbeddingOverride && (
+          <p className="config-warning-note">
+            Warning: selected query embedding model ({selectedQueryEmbeddingLabel}) is different from the active Knowledge Base embedding
+            ({executedQueryEmbeddingModel}). Dense retrieval should use matching query/document embeddings to avoid invalid similarity scores.
+          </p>
+        )}
+        <div className="config-two-column">
+          <SelectField
+            label="Retrieval mode"
+            value={config.retrievalMode}
+            options={["Hybrid", "BM25", "Dense"]}
+            onChange={(retrievalMode) => setConfig({ ...config, retrievalMode })}
+          />
+          <label>
+            Top K retrieval
+            <input
+              type="range"
+              min="1"
+              max="12"
+              value={config.topK}
+              onChange={(event) => setConfig({ ...config, topK: Number(event.target.value) })}
+            />
+            <strong>{config.topK} contexts</strong>
+          </label>
+        </div>
         <label className="check-row">
           <input
             type="checkbox"
@@ -1047,6 +1462,17 @@ function RagConfiguration({
           />
           Enable reranker
         </label>
+        {config.reranker && (
+          <SelectField
+            label="Reranker model"
+            value={config.rerankerDeploymentId || ""}
+            options={[
+              { value: "", label: "Built-in lexical reranker" },
+              ...rerankerDeployments.map((deployment) => deploymentOption(deployment))
+            ]}
+            onChange={(rerankerDeploymentId) => setConfig({ ...config, rerankerDeploymentId })}
+          />
+        )}
         <label className="check-row">
           <input
             type="checkbox"
@@ -1060,49 +1486,42 @@ function RagConfiguration({
         <header>
           <div>
             <h3>Generator target & prompts</h3>
-            <small>Supported local models execute at runtime. External providers are visible for roadmap clarity.</small>
+            <small>Generator settings are sent with each answer request. External providers execute when enabled in AI Models.</small>
           </div>
         </header>
-        <SelectField
-          label="Saved configuration"
-          value={config.chatConfigurationId}
-          options={[{ value: "", label: "Draft configuration" }, ...chatConfigurations.map((item) => ({ value: item.id, label: item.name }))]}
-          onChange={onSelectChatConfiguration}
-        />
-        <label>
-          Configuration name
-          <input
-            value={config.configurationName}
-            onChange={(event) => setConfig({ ...config, configurationName: event.target.value, chatConfigurationId: "" })}
-            placeholder="Workflow support assistant"
-          />
-        </label>
-        <label>
-          Description
-          <input
-            value={config.configurationDescription}
-            onChange={(event) => setConfig({ ...config, configurationDescription: event.target.value })}
-            placeholder="Short purpose for this preset"
-          />
-        </label>
         <div className="config-two-column">
           <SelectField
-            label="Generator provider"
-            value={config.generatorProvider}
-            options={generatorProviderOptions}
-            onChange={(generatorProvider) => setConfig({
-              ...config,
-              generatorProvider,
-              generatorModel: (generatorModelsByProvider[generatorProvider] || generatorModelsByProvider.Local)[0]
-            })}
+            label="Generator model"
+            value={config.generatorDeploymentId || ""}
+            options={[
+              { value: "", label: "Select enabled deployment" },
+              ...generatorDeployments.map((deployment) => deploymentOption(deployment))
+            ]}
+            onChange={(generatorDeploymentId) => {
+              const deployment = modelDeployments.find((item) => item.id === generatorDeploymentId);
+              setConfig({
+                ...config,
+                generatorDeploymentId,
+                generatorProvider: deployment?.provider || config.generatorProvider,
+                generatorModel: deployment?.model || config.generatorModel
+              });
+            }}
           />
           <SelectField
-            label="Generator model"
-            value={config.generatorModel}
-            options={providerModels}
-            onChange={(generatorModel) => setConfig({ ...config, generatorModel })}
+            label="Fallback deployment"
+            value={config.fallbackDeploymentIds?.[0] || ""}
+            options={[
+              { value: "", label: "No fallback" },
+              ...generatorDeployments
+                .filter((deployment) => deployment.id !== config.generatorDeploymentId)
+                .map((deployment) => deploymentOption(deployment))
+            ]}
+            onChange={(fallbackDeploymentId) => setConfig({ ...config, fallbackDeploymentIds: fallbackDeploymentId ? [fallbackDeploymentId] : [] })}
           />
         </div>
+        {generatorDeployments.length === 0 && (
+          <p className="config-status-note">No enabled generator deployment found. Add or enable one in AI Models.</p>
+        )}
         <SelectField
           label="Response structure"
           value={config.responseStructure}
@@ -1142,38 +1561,37 @@ function RagConfiguration({
             onChange={(event) => setConfig({ ...config, predefinedPrompt: event.target.value })}
           />
         </label>
-        <div className="config-actions-row">
-          <button className="secondary-action" type="button" onClick={onResetConfiguration}><IconLabel icon={RefreshCw}>Reset</IconLabel></button>
-          <button className="secondary-action" type="button" onClick={onSaveConfiguration}><IconLabel icon={Plus}>Save as new</IconLabel></button>
-          <button className="primary-action" type="button" onClick={onUpdateConfiguration}><IconLabel icon={Save}>Update selected</IconLabel></button>
-        </div>
         {configurationStatus && <p className="config-status-note">{configurationStatus}</p>}
       </section>
     </aside>
   );
 }
-function CurrentRouteSummary({ config, selectedKnowledgeBase, metadata }) {
-  const routeLabel = metadata?.route_label || config.route;
-  const routeLevel = metadata?.route_level || answerModeFromRoute(config.route);
+function KnowledgeBaseSummary({ selectedKnowledgeBase }) {
+  const configuration = selectedKnowledgeBase ? knowledgeConfigurationFromRecord(selectedKnowledgeBase) : {};
+  const queryEmbedding = selectedKnowledgeBase?.embedding_model || configuration.embedding_model || "Select a Knowledge Base";
   return (
-    <section className="route-summary-card">
+    <section className="route-summary-card knowledge-summary-card">
       <header>
         <div>
-          <p className="eyebrow">Current route</p>
-          <h3>{routeLabel}</h3>
+          <p className="eyebrow">Knowledge base</p>
+          <h3>{selectedKnowledgeBase?.name || "No Knowledge Base selected"}</h3>
         </div>
-        <span className={`status-pill ${metadata?.retrieval_used ? "status-completed" : ""}`}>
-          {metadata?.retrieval_used ? "Retrieval on" : "No retrieval"}
+        <span className={`status-pill ${selectedKnowledgeBase?.status === "ready" ? "status-completed" : ""}`}>
+          {selectedKnowledgeBase?.status || "Not selected"}
         </span>
       </header>
       <dl className="route-summary-list">
         <div>
-          <dt>Mode</dt>
-          <dd>{routeLevel}</dd>
-        </div>
-        <div>
           <dt>Knowledge base</dt>
           <dd>{selectedKnowledgeBase ? selectedKnowledgeBase.name : "Not selected"}</dd>
+        </div>
+        <div>
+          <dt>Status</dt>
+          <dd>{selectedKnowledgeBase?.status || "-"}</dd>
+        </div>
+        <div className="route-summary-wide">
+          <dt>Description</dt>
+          <dd>{selectedKnowledgeBase?.description || "No description"}</dd>
         </div>
         <div>
           <dt>Documents / chunks</dt>
@@ -1181,19 +1599,11 @@ function CurrentRouteSummary({ config, selectedKnowledgeBase, metadata }) {
         </div>
         <div>
           <dt>Query embedding</dt>
-          <dd>{selectedKnowledgeBase?.embedding_model || "Select a KB"}</dd>
+          <dd>{queryEmbedding}</dd>
         </div>
         <div>
-          <dt>Complexity</dt>
-          <dd>{metadata?.complexity_label || "Waiting for answer"}</dd>
-        </div>
-        <div>
-          <dt>Retrieval</dt>
-          <dd>{metadata?.retrieval_mode || retrievalModeValue(config.retrievalMode)}</dd>
-        </div>
-        <div>
-          <dt>Latency</dt>
-          <dd>{metadata?.latency_ms ? `${metadata.latency_ms} ms` : "-"}</dd>
+          <dt>Last indexed</dt>
+          <dd>{formatDateTime(selectedKnowledgeBase?.updated_at)}</dd>
         </div>
       </dl>
     </section>
@@ -1390,11 +1800,13 @@ function TraceSummary({ metadata }) {
     </section>
   );
 }
-function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }) {
+function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAction }) {
   const [items, setItems] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [chunks, setChunks] = useState([]);
   const [processingTrace, setProcessingTrace] = useState([]);
+  const [indexVersions, setIndexVersions] = useState([]);
+  const [embeddingDeployments, setEmbeddingDeployments] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingDocuments, setIsLoadingDocuments] = useState(false);
   const [error, setError] = useState("");
@@ -1408,6 +1820,9 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
     try {
       const nextItems = await listKnowledgeBases();
       setItems(nextItems);
+      listModelDeployments({ capability: "embedding", enabled: true })
+        .then(setEmbeddingDeployments)
+        .catch(() => setEmbeddingDeployments([]));
       if (!selectedKnowledgeBaseId && nextItems.length > 0) {
         onSelectKnowledgeBase(nextItems[0].id);
       }
@@ -1423,18 +1838,21 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
       setDocuments([]);
       setChunks([]);
       setProcessingTrace([]);
+      setIndexVersions([]);
       return;
     }
     setIsLoadingDocuments(true);
     try {
-      const [nextDocuments, nextChunks, nextTrace] = await Promise.all([
+      const [nextDocuments, nextChunks, nextTrace, nextVersions] = await Promise.all([
         listKnowledgeDocuments(knowledgeBaseId),
         listKnowledgeChunks(knowledgeBaseId),
-        getKnowledgeProcessingTrace(knowledgeBaseId)
+        getKnowledgeProcessingTrace(knowledgeBaseId),
+        listKnowledgeIndexVersions(knowledgeBaseId).catch(() => [])
       ]);
       setDocuments(nextDocuments);
       setChunks(nextChunks);
       setProcessingTrace(nextTrace);
+      setIndexVersions(nextVersions);
     } catch (requestError) {
       setActionStatus(`Document load failed: ${requestError.message}`);
     } finally {
@@ -1465,7 +1883,12 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
   async function handleDeleteDocument(documentId) {
     if (!selectedKnowledgeBaseId) return;
     const document = documents.find((item) => item.id === documentId);
-    const confirmed = window.confirm(`Delete "${document?.title || "this document"}" and all of its chunks?`);
+    const confirmed = await confirmAction({
+      title: "Delete document?",
+      message: `Delete "${document?.title || "this document"}"?`,
+      detail: "All chunks, embeddings, and processing trace linked to this document will be removed.",
+      confirmLabel: "Delete document"
+    });
     if (!confirmed) return;
     setActionStatus("Deleting document...");
     try {
@@ -1480,7 +1903,12 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
 
   async function handleDeleteKnowledgeBase() {
     if (!selectedKnowledgeBase) return;
-    const confirmed = window.confirm(`Delete "${selectedKnowledgeBase.name}" and all of its documents?`);
+    const confirmed = await confirmAction({
+      title: "Delete knowledge base?",
+      message: `Delete "${selectedKnowledgeBase.name}" and all of its documents?`,
+      detail: "This removes the knowledge base, documents, chunks, embeddings, and active index metadata.",
+      confirmLabel: "Delete knowledge base"
+    });
     if (!confirmed) return;
     setActionStatus("Deleting knowledge base and all documents...");
     try {
@@ -1490,6 +1918,7 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
       setDocuments([]);
       setChunks([]);
       setProcessingTrace([]);
+      setIndexVersions([]);
       await refreshKnowledgeBases();
     } catch (requestError) {
       setActionStatus(`Delete knowledge base failed: ${requestError.message}`);
@@ -1600,6 +2029,15 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
                 <IconLabel icon={FileText}>Documents</IconLabel>
               </button>
               <button
+                className={detailTab === "indexes" ? "active" : ""}
+                type="button"
+                role="tab"
+                aria-selected={detailTab === "indexes"}
+                onClick={() => setDetailTab("indexes")}
+              >
+                <IconLabel icon={Layers}>Index versions</IconLabel>
+              </button>
+              <button
                 className={detailTab === "trace" ? "active" : ""}
                 type="button"
                 role="tab"
@@ -1614,7 +2052,7 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
                 {isLoadingDocuments && <p className="muted-text">Loading documents...</p>}
                 {!isLoadingDocuments && documents.length === 0 && <p className="muted-text">No documents yet. Use Modify KB to add local files or website sources.</p>}
                 {documents.map((document, index) => (
-                  <details key={document.id} className="document-card document-accordion" defaultOpen={index === 0}>
+                  <details key={document.id} className="document-card document-accordion" open={index === 0}>
                     <summary className="document-card-top">
                       <div>
                         <strong>{document.title}</strong>
@@ -1640,6 +2078,8 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
                   </details>
                 ))}
               </div>
+            ) : detailTab === "indexes" ? (
+              <IndexVersionPanel versions={indexVersions} />
             ) : (
               <div className="detail-tab-panel">
                 <ProcessingTracePanel steps={processingTrace} />
@@ -1652,6 +2092,7 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase }
         <AddKnowledgeBaseModal
           mode={knowledgeBaseModal.mode}
           knowledgeBase={knowledgeBaseModal.knowledgeBase}
+          embeddingDeployments={embeddingDeployments}
           onClose={() => setKnowledgeBaseModal(null)}
           onCreated={async () => {
             setKnowledgeBaseModal(null);
@@ -1731,6 +2172,42 @@ function DocumentChunkList({ chunks = [] }) {
   );
 }
 
+function IndexVersionPanel({ versions = [] }) {
+  if (!versions.length) {
+    return <div className="empty-state"><strong>No index versions yet</strong><p>Index versions appear after upload, website ingestion, or re-indexing.</p></div>;
+  }
+  return (
+    <div className="table-panel compact-table detail-tab-panel">
+      <table>
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Embedding deployment</th>
+            <th>Model</th>
+            <th>Dimension</th>
+            <th>Documents</th>
+            <th>Chunks</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {versions.map((version) => (
+            <tr key={version.id}>
+              <td><span className={`status-pill status-${version.status}`}>{version.status}</span></td>
+              <td>{version.embedding_deployment_id || "-"}</td>
+              <td>{version.embedding_model || "-"}</td>
+              <td>{version.embedding_dimension || "-"}</td>
+              <td>{version.document_count}</td>
+              <td>{version.chunk_count}</td>
+              <td>{formatDateTime(version.created_at)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function ProcessingTracePanel({ steps = [] }) {
   return (
     <section className="processing-trace-panel">
@@ -1776,6 +2253,7 @@ function ProcessingTracePanel({ steps = [] }) {
 function AddKnowledgeBaseModal({
   mode = "create",
   knowledgeBase,
+  embeddingDeployments = [],
   onClose,
   onCreated
 }) {
@@ -1892,42 +2370,45 @@ function AddKnowledgeBaseModal({
             </div>
             <div className="kb-config-grid">
               <label>
-                Embedding provider
+                Embedding deployment
                 <select
-                  value={configuration.embedding_provider}
+                  value={configuration.embedding_deployment_id || ""}
                   onChange={(event) => {
-                    const provider = event.target.value === supportedEmbeddingProvider
-                      ? supportedEmbeddingProvider
-                      : defaultKnowledgeConfiguration.embedding_provider;
+                    const deployment = embeddingDeployments.find((item) => item.id === event.target.value);
                     setConfiguration((current) => ({
                       ...current,
-                      embedding_provider: provider,
-                      embedding_model: supportedLocalEmbeddingModels[0] || current.embedding_model
+                      embedding_deployment_id: event.target.value,
+                      embedding_provider: deployment?.provider || current.embedding_provider,
+                      embedding_model: deployment?.model || current.embedding_model
                     }));
                   }}
                 >
-                  {embeddingProviders.map((provider) => (
-                    <option key={provider} value={provider} disabled={provider !== supportedEmbeddingProvider}>
-                      {provider}{provider !== supportedEmbeddingProvider ? " (coming soon)" : ""}
+                  <option value="">Select enabled embedding deployment</option>
+                  {configuration.embedding_deployment_id && !embeddingDeployments.some((deployment) => deployment.id === configuration.embedding_deployment_id) && (
+                    <option value={configuration.embedding_deployment_id}>{configuration.embedding_deployment_id} (current)</option>
+                  )}
+                  {embeddingDeployments.map((deployment) => (
+                    <option key={deployment.id} value={deployment.id}>
+                      {shortDeploymentLabel(deployment)}
                     </option>
                   ))}
                 </select>
               </label>
               <label>
-                Embedding model
-                <select
-                  value={configuration.embedding_model}
-                  onChange={(event) => setConfiguration((current) => ({ ...current, embedding_model: event.target.value }))}
-                >
-                  {supportedLocalEmbeddingModels.map((model) => (
-                    <option key={model} value={model}>{model}</option>
-                  ))}
-                </select>
+                Resolved embedding model
+                <input value={`${configuration.embedding_provider} / ${configuration.embedding_model}`} readOnly />
               </label>
             </div>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={Boolean(configuration.external_processing_allowed)}
+                onChange={(event) => setConfiguration((current) => ({ ...current, external_processing_allowed: event.target.checked }))}
+              />
+              Allow remote model processing for this knowledge base
+            </label>
             <p className="muted-text compact-muted">
-              V1 executes Local embeddings only. `hash-embedding-384` works with the base API install; MiniLM requires `python -m pip install -e ".[ml]"`.
-              External providers stay visible for the roadmap and are disabled until provider adapters and API-key handling are added.
+              Embeddings come from the active AI Models deployment. Remote deployments require this knowledge base to explicitly allow external processing.
             </p>
           </section>
           <div className="source-selector">
@@ -1980,15 +2461,529 @@ function AddKnowledgeBaseModal({
   );
 }
 
-function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOpenDetail }) {
+function AIModelsScreen({ confirmAction }) {
+  const [templates, setTemplates] = useState([]);
+  const [deployments, setDeployments] = useState([]);
+  const [usageSummary, setUsageSummary] = useState({});
+  const [capabilityFilter, setCapabilityFilter] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [providerSearch, setProviderSearch] = useState("");
+  const [providerTab, setProviderTab] = useState("provider");
+  const [isAddOpen, setIsAddOpen] = useState(false);
+  const [addStage, setAddStage] = useState("select");
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [wizard, setWizard] = useState(() => emptyModelFarmWizard());
+  const [endpointDraft, setEndpointDraft] = useState(() => emptyEndpointDraft());
+  const [createdDeploymentId, setCreatedDeploymentId] = useState("");
+  const [showEndpointSecret, setShowEndpointSecret] = useState(false);
+  const [status, setStatus] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+
+  useEffect(() => {
+    refreshModelFarm();
+  }, [capabilityFilter]);
+
+  async function refreshModelFarm() {
+    setIsLoading(true);
+    try {
+      const [nextTemplates, nextDeployments, nextSummary] = await Promise.all([
+        listModelProviders(),
+        listModelDeployments(),
+        getModelUsageSummary()
+      ]);
+      setTemplates(nextTemplates);
+      setDeployments(capabilityFilter
+        ? nextDeployments.filter((deployment) => deployment.capabilities?.includes(capabilityFilter))
+        : nextDeployments
+      );
+      setUsageSummary(nextSummary || {});
+      setStatus("");
+    } catch (error) {
+      setTemplates([]);
+      setDeployments([]);
+      setStatus(`AI Models load failed: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  function openAddModel() {
+    setIsAddOpen(true);
+    setAddStage("select");
+    setProviderTab("provider");
+    setProviderSearch("");
+    setSelectedTemplateId("");
+    setCreatedDeploymentId("");
+    setEndpointDraft(emptyEndpointDraft());
+    setWizard(emptyModelFarmWizard());
+    setStatus("");
+  }
+
+  function closeAddModel() {
+    setIsAddOpen(false);
+    setAddStage("select");
+    setSelectedTemplateId("");
+    setCreatedDeploymentId("");
+    setEndpointDraft(emptyEndpointDraft());
+    setShowEndpointSecret(false);
+  }
+
+  function applyTemplate(template) {
+    if (!template) return;
+    const defaults = template.deployment_defaults || {};
+    setSelectedTemplateId(template.id);
+    setCreatedDeploymentId("");
+    setEndpointDraft(emptyEndpointDraft(defaults));
+    setWizard({
+      ...emptyModelFarmWizard(),
+      name: uniqueDeploymentName(defaults.name || template.provider_label || template.label || "AI model", deployments),
+      model: defaults.model || template.model || "",
+      capabilities: [...(defaults.capabilities || template.capabilities || [])],
+      apiBase: defaults.api_base || "",
+      credentialEnvRefs: cleanCredentialRefs(defaults.credential_env_refs || {}),
+      defaultParameters: objectOrEmpty(defaults.default_parameters),
+      limits: objectOrEmpty(defaults.limits),
+      pricing: objectOrEmpty(defaults.pricing),
+      monthlyBudgetUsd: Number(defaults.monthly_budget_usd || 0),
+      hardBudget: defaults.hard_budget !== false,
+      temperature: Number(defaults.default_parameters?.temperature ?? 0.2),
+      maxTokens: Number(defaults.default_parameters?.max_tokens ?? defaults.limits?.max_output_tokens ?? 800),
+      timeoutSeconds: Number(defaults.limits?.timeout_seconds || 60),
+      dimension: Number(defaults.limits?.dimension || 0),
+      inputPrice: Number(defaults.pricing?.input_per_million_tokens_usd || 0),
+      outputPrice: Number(defaults.pricing?.output_per_million_tokens_usd || 0),
+      metadata: objectOrEmpty(defaults.metadata)
+    });
+  }
+
+  function confirmProvider() {
+    const template = selectedTemplate;
+    if (!template) {
+      setStatus("Select an AI model provider first.");
+      return;
+    }
+    if (!template.creatable) {
+      closeAddModel();
+      setStatus(`${template.label} is already available as a local AI model.`);
+      return;
+    }
+    setAddStage("details");
+  }
+
+  async function createEndpointDeployment({ testAfter = false } = {}) {
+    const template = selectedTemplate;
+    if (!template) {
+      setStatus("Select an AI model provider first.");
+      return null;
+    }
+    const modelId = endpointDraft.modelId.trim() || wizard.model;
+    const apiBase = endpointDraft.url.trim() || wizard.apiBase;
+    const apiKey = endpointDraft.apiKey.trim();
+    if (!wizard.name.trim()) {
+      setStatus("Enter an AI model name.");
+      return null;
+    }
+    if (!modelId) {
+      setStatus("Enter the endpoint model ID.");
+      return null;
+    }
+    if (requiresEndpointUrl(template) && !apiBase) {
+      setStatus("Enter the endpoint URL.");
+      return null;
+    }
+    if (template.credential_fields?.includes("api_key") && !apiKey && !wizard.credentialEnvRefs?.api_key) {
+      setStatus("Enter the endpoint API key.");
+      return null;
+    }
+    setIsSaving(true);
+    setStatus(testAfter ? `Saving and testing ${wizard.name}...` : `Adding ${wizard.name}...`);
+    try {
+      const deployment = await createModelDeploymentFromTemplate(modelFarmWizardPayload(selectedTemplateId, {
+        ...wizard,
+        model: modelId,
+        apiBase,
+        credentialSecrets: apiKey ? { api_key: apiKey } : {},
+        metadata: {
+          ...(wizard.metadata || {}),
+          description: wizard.description || "",
+          endpoint_name: endpointDraft.name || "",
+          endpoint_url_configured: Boolean(apiBase)
+        }
+      }));
+      setCreatedDeploymentId(deployment.id);
+      await refreshModelFarm();
+      if (testAfter) {
+        setIsTesting(true);
+        const result = await testModelDeployment(deployment.id);
+        setStatus(`${deployment.name} endpoint test ${result.status || "completed"}.`);
+        await refreshModelFarm();
+      } else {
+        setStatus("AI model added. Test it before enabling for runtime use.");
+      }
+      return deployment;
+    } catch (error) {
+      setStatus(error.message);
+      return null;
+    } finally {
+      setIsSaving(false);
+      setIsTesting(false);
+    }
+  }
+
+  async function testEndpointDraft() {
+    if (createdDeploymentId) {
+      const deployment = deployments.find((item) => item.id === createdDeploymentId);
+      if (deployment) {
+        await runDeploymentTest(deployment);
+        return;
+      }
+    }
+    await createEndpointDeployment({ testAfter: true });
+  }
+
+  async function addEndpointAndClose() {
+    const deployment = await createEndpointDeployment();
+    if (deployment) {
+      setIsAddOpen(false);
+      setStatus("AI model added. Enable it from the card list when ready.");
+    }
+  }
+
+  async function saveProviderDetails() {
+    if (createdDeploymentId) {
+      closeAddModel();
+      setStatus("AI model saved. Enable it from the card list when ready.");
+      return;
+    }
+    if (!endpointDraft.modelId.trim()) {
+      setStatus("Add at least one endpoint before saving this AI model.");
+      setAddStage("endpoint");
+      return;
+    }
+    await addEndpointAndClose();
+  }
+
+  async function runDeploymentTest(deployment) {
+    setStatus(`Testing ${deployment.name}...`);
+    try {
+      const result = await testModelDeployment(deployment.id);
+      setStatus(`${deployment.name} test ${result.status || "completed"}.`);
+      await refreshModelFarm();
+    } catch (error) {
+      setStatus(error.message);
+    }
+  }
+
+  async function toggleDeployment(deployment) {
+    setStatus(`${deployment.enabled ? "Disabling" : "Enabling"} ${deployment.name}...`);
+    try {
+      await updateModelDeployment(deployment.id, { enabled: !deployment.enabled });
+      setStatus("AI model updated.");
+      await refreshModelFarm();
+    } catch (error) {
+      setStatus(error.message);
+    }
+  }
+
+  async function removeDeployment(deployment) {
+    const confirmed = await confirmAction({
+      title: "Delete AI model?",
+      message: `Delete "${deployment.name}"?`,
+      detail: "Deployments with usage history cannot be deleted by the backend; disable them instead if deletion is blocked.",
+      confirmLabel: "Delete AI model"
+    });
+    if (!confirmed) return;
+    setStatus(`Deleting ${deployment.name}...`);
+    try {
+      await deleteModelDeployment(deployment.id);
+      setStatus("AI model deleted.");
+      await refreshModelFarm();
+    } catch (error) {
+      setStatus(error.message);
+    }
+  }
+
+  const selectedTemplate = templates.find((template) => template.id === selectedTemplateId);
+  const providerOptions = providerTemplatesForTab(templates, providerTab, providerSearch);
+  const visibleDeployments = deployments.filter((deployment) => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return true;
+    return [
+      deployment.name,
+      deployment.provider,
+      deployment.model,
+      deployment.locality,
+      ...(deployment.capabilities || [])
+    ].join(" ").toLowerCase().includes(query);
+  });
+
+  return (
+    <section className="page-stack ai-models-page">
+      <header className="ai-models-header">
+        <div>
+          <h1>AI models</h1>
+          <p>
+            Power up apps with large language models and configure multiple endpoints under any supported provider.
+            {" "}
+            <a href="https://docs.litellm.ai/" target="_blank" rel="noreferrer">Learn more <IconOnly icon={ExternalLink} size={16} /></a>
+          </p>
+        </div>
+        <button className="primary-action add-ai-model-button" type="button" onClick={openAddModel}>
+          <IconLabel icon={Plus}>Add AI model</IconLabel>
+        </button>
+      </header>
+
+      <div className="model-farm-summary ai-models-summary">
+        <Metric label="Deployments" value={String(visibleDeployments.length)} />
+        <Metric label="Monthly cost" value={`$${Number(usageSummary?.estimated_cost_usd || 0).toFixed(4)}`} />
+        <Metric label="Attempts" value={String(usageSummary?.calls || 0)} />
+        <Metric label="Failures" value={String(usageSummary?.failed_calls || 0)} />
+      </div>
+
+      <div className="ai-models-toolbar">
+        <label className="ai-model-search">
+          <IconOnly icon={Search} size={18} />
+          <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search" aria-label="Search AI models" />
+        </label>
+        <SelectField
+          value={capabilityFilter}
+          options={[{ value: "", label: "All capabilities" }, ...modelCapabilities.map((capability) => ({ value: capability, label: capability }))]}
+          onChange={setCapabilityFilter}
+        />
+        <button className="secondary-action" type="button" onClick={refreshModelFarm}><IconLabel icon={RefreshCw}>Refresh</IconLabel></button>
+      </div>
+
+      {status && <div className="inline-status">{status}</div>}
+
+      <section className="ai-model-card-grid">
+        {isLoading && <p className="muted-text">Loading AI models...</p>}
+        {!isLoading && visibleDeployments.length === 0 && <p className="muted-text">No AI models match this search.</p>}
+        {visibleDeployments.map((deployment) => (
+          <article className="ai-model-card" key={deployment.id}>
+            <header>
+              <div className={`ai-model-icon ${deployment.locality === "local" ? "local" : ""}`}>{providerLogoText(deployment)}</div>
+              <div>
+                <h2>{deployment.name}</h2>
+                <p>{providerLabelFromDeployment(deployment)}</p>
+              </div>
+              <button className="ai-model-menu" type="button" aria-label={`Actions for ${deployment.name}`}>...</button>
+            </header>
+            <p className="ai-model-description">
+              {deployment.metadata?.description
+                || (deployment.metadata?.builtin
+                  ? "Built-in local model available for development and offline demos."
+                  : `Configured ${deployment.locality} endpoint for ${deployment.capabilities.join(", ")}.`)}
+            </p>
+            <p className="ai-model-version">Model: {truncateMiddle(deployment.model, 54)}</p>
+            <div className="deployment-chip-row">
+              {deployment.capabilities.slice(0, 4).map((capability) => <span key={capability}>{capability}</span>)}
+            </div>
+            <footer>
+              <span className={`ai-model-badge ${deployment.enabled ? "enabled" : "disabled"}`}>{deployment.enabled ? "Enabled" : "Disabled"}</span>
+              <div className="deployment-actions">
+                <button className="secondary-action" type="button" onClick={() => runDeploymentTest(deployment)}><IconLabel icon={Activity}>Test</IconLabel></button>
+                <button
+                  className="secondary-action"
+                  type="button"
+                  disabled={!deployment.enabled && deployment.locality !== "local" && deployment.health_status !== "healthy"}
+                  onClick={() => toggleDeployment(deployment)}
+                >
+                  <IconLabel icon={CheckCircle2}>{deployment.enabled ? "Disable" : "Enable"}</IconLabel>
+                </button>
+                <button className="secondary-action danger-action" type="button" onClick={() => removeDeployment(deployment)} disabled={deployment.metadata?.builtin}>
+                  <IconLabel icon={Trash2}>Delete</IconLabel>
+                </button>
+              </div>
+            </footer>
+          </article>
+        ))}
+      </section>
+
+      <div className="ai-models-footer">
+        <span>{visibleDeployments.length ? `1 to ${visibleDeployments.length} of ${visibleDeployments.length} items` : "0 items"}</span>
+        <span className="ai-models-page-number">1</span>
+      </div>
+
+      {isAddOpen && (
+        <div className="ai-model-modal-backdrop">
+          {addStage === "select" && (
+            <section className="ai-provider-picker" role="dialog" aria-modal="true" aria-label="Select an AI model provider">
+              <header>
+                <div>
+                  <h2>Select a provider</h2>
+                  <p className="ai-model-stepper">1. Select provider / 2. Provider details / 3. Add endpoint</p>
+                </div>
+                <button className="panel-collapse-button" type="button" onClick={closeAddModel} aria-label="Close provider picker">
+                  <IconOnly icon={X} />
+                </button>
+              </header>
+              <div className="ai-provider-picker-toolbar">
+                <label className="ai-model-search">
+                  <IconOnly icon={Search} size={18} />
+                  <input value={providerSearch} onChange={(event) => setProviderSearch(event.target.value)} placeholder="Search" aria-label="Search providers" />
+                </label>
+                <div className="ai-provider-tabs" role="tablist" aria-label="AI model source">
+                  <button type="button" className={providerTab === "provider" ? "active" : ""} onClick={() => setProviderTab("provider")}>LLM Provider</button>
+                  <button type="button" className={providerTab === "local" ? "active" : ""} onClick={() => setProviderTab("local")}>Local LLM</button>
+                </div>
+              </div>
+              <div className="ai-provider-picker-body">
+                <p>{providerTab === "provider" ? "Add your own model from supported providers." : "Use built-in local models already registered for offline demos."}</p>
+                <div className="ai-provider-grid">
+                  {providerOptions.map((template) => (
+                    <button
+                      className={`ai-provider-option ${template.id === selectedTemplateId ? "selected" : ""}`}
+                      key={template.id}
+                      type="button"
+                      onClick={() => applyTemplate(template)}
+                    >
+                      <span className={`ai-provider-logo ${providerLogoClass(template)}`}>{providerLogoText(template)}</span>
+                      <strong>{template.provider_label || template.label}</strong>
+                    </button>
+                  ))}
+                  {!providerOptions.length && <p className="muted-text">No providers match this search.</p>}
+                </div>
+              </div>
+              <footer>
+                <button className="secondary-action" type="button" onClick={closeAddModel}>Cancel</button>
+                <button className="primary-action" type="button" disabled={!selectedTemplateId} onClick={confirmProvider}>Confirm</button>
+              </footer>
+            </section>
+          )}
+
+          {addStage === "details" && selectedTemplate && (
+            <section className="ai-model-detail-panel" role="dialog" aria-modal="true" aria-label={`Configure ${selectedTemplate.provider_label || selectedTemplate.label}`}>
+              <header className="ai-model-detail-header">
+                <div>
+                  <button className="text-action" type="button" onClick={() => setAddStage("select")}><IconLabel icon={ChevronLeft}>AI models</IconLabel></button>
+                  <h2><span className={`ai-provider-logo ${providerLogoClass(selectedTemplate)}`}>{providerLogoText(selectedTemplate)}</span>{selectedTemplate.provider_label || selectedTemplate.label}</h2>
+                  <a href="https://docs.litellm.ai/docs/providers" target="_blank" rel="noreferrer">Learn more about AI models <IconOnly icon={ExternalLink} size={16} /></a>
+                  <p className="ai-model-stepper">1. Select provider / 2. Provider details / 3. Add endpoint</p>
+                </div>
+                <div className="ai-model-detail-actions">
+                  <button className="secondary-action" type="button" onClick={closeAddModel}>Cancel</button>
+                  <button className="primary-action" type="button" onClick={saveProviderDetails} disabled={isSaving}>
+                    <IconLabel icon={Save}>{isSaving ? "Saving..." : "Save"}</IconLabel>
+                  </button>
+                </div>
+              </header>
+
+              <section className="ai-model-detail-card">
+                <h3>Details</h3>
+                <label>
+                  Name <span className="required-marker">*</span>
+                  <input value={wizard.name} onChange={(event) => setWizard({ ...wizard, name: event.target.value })} />
+                </label>
+                <label>
+                  Description
+                  <textarea value={wizard.description || ""} onChange={(event) => setWizard({ ...wizard, description: event.target.value })} />
+                </label>
+              </section>
+
+              <section className="ai-model-detail-card">
+                <h3>Configuration</h3>
+                <div className="ai-model-dev-tab">Development</div>
+                <div className="ai-model-endpoints">
+                  <h4>Endpoints</h4>
+                  <p>Add at least 1 endpoint for the selected model or multiples to manage model load balancing.</p>
+                  {createdDeploymentId || endpointDraft.modelId ? (
+                    <div className="ai-model-endpoint-row">
+                      <div>
+                        <strong>{endpointDraft.name || wizard.name || "Primary endpoint"}</strong>
+                        <span>{endpointDraft.modelId || wizard.model}</span>
+                      </div>
+                      <button className="secondary-action" type="button" onClick={() => setAddStage("endpoint")}>
+                        <IconLabel icon={Pencil}>Edit</IconLabel>
+                      </button>
+                    </div>
+                  ) : (
+                    <button className="text-action endpoint-add-button" type="button" onClick={() => setAddStage("endpoint")}>
+                      <IconLabel icon={Plus}>Add</IconLabel>
+                    </button>
+                  )}
+                </div>
+                <div className="ai-model-usage-limit">
+                  <h4>Usage limit</h4>
+                  <p>Optionally, set a monthly budget to control the model consumption.</p>
+                  <label>
+                    <input type="number" min="0" step="0.01" value={wizard.monthlyBudgetUsd} onChange={(event) => setWizard({ ...wizard, monthlyBudgetUsd: Number(event.target.value) })} placeholder="Enter limit" />
+                    <span>/ month</span>
+                  </label>
+                </div>
+              </section>
+            </section>
+          )}
+
+          {addStage === "endpoint" && selectedTemplate && (
+            <section className="ai-endpoint-modal" role="dialog" aria-modal="true" aria-label="Add endpoint">
+              <header>
+                <div>
+                  <button className="text-action" type="button" onClick={() => setAddStage("details")}><IconLabel icon={ChevronLeft}>{selectedTemplate.provider_label || selectedTemplate.label}</IconLabel></button>
+                  <h2>Add endpoint</h2>
+                  <a href="https://docs.litellm.ai/docs/providers" target="_blank" rel="noreferrer">Learn about {selectedTemplate.provider_label || selectedTemplate.label} connection <IconOnly icon={ExternalLink} size={16} /></a>
+                  <p className="ai-model-stepper">1. Select provider / 2. Provider details / 3. Add endpoint</p>
+                </div>
+                <button className="panel-collapse-button" type="button" onClick={closeAddModel} aria-label="Close endpoint setup"><IconOnly icon={X} /></button>
+              </header>
+              <div className="ai-endpoint-form">
+                <label>
+                  Name <span className="required-marker">*</span>
+                  <input value={endpointDraft.name} onChange={(event) => setEndpointDraft({ ...endpointDraft, name: event.target.value })} />
+                </label>
+                <label>
+                  Model ID <span className="required-marker">*</span>
+                  <input value={endpointDraft.modelId} onChange={(event) => setEndpointDraft({ ...endpointDraft, modelId: event.target.value })} />
+                  <span>Enter the model unique identifier.</span>
+                </label>
+                <label>
+                  URL {requiresEndpointUrl(selectedTemplate) && <span className="required-marker">*</span>}
+                  <input value={endpointDraft.url} onChange={(event) => setEndpointDraft({ ...endpointDraft, url: event.target.value })} placeholder={selectedTemplate.deployment_defaults?.api_base || "Optional provider base URL"} />
+                </label>
+                <label>
+                  API key {selectedTemplate.credential_fields?.includes("api_key") && <span className="required-marker">*</span>}
+                  <div className="secret-input">
+                    <input
+                      type={showEndpointSecret ? "text" : "password"}
+                      value={endpointDraft.apiKey}
+                      onChange={(event) => setEndpointDraft({ ...endpointDraft, apiKey: event.target.value })}
+                      autoComplete="off"
+                    />
+                    <button type="button" onClick={() => setShowEndpointSecret(!showEndpointSecret)} aria-label={showEndpointSecret ? "Hide API key" : "Show API key"}>
+                      <IconOnly icon={showEndpointSecret ? EyeOff : Eye} size={18} />
+                    </button>
+                  </div>
+                </label>
+              </div>
+              <footer>
+                <button className="secondary-action" type="button" onClick={() => setAddStage("details")}>Back</button>
+                <button className="secondary-action" type="button" onClick={testEndpointDraft} disabled={isSaving || isTesting}>
+                  <IconLabel icon={Activity}>{isTesting ? "Testing..." : "Test endpoint"}</IconLabel>
+                </button>
+                <button className="primary-action" type="button" onClick={addEndpointAndClose} disabled={isSaving}>
+                  <IconLabel icon={Plus}>{isSaving ? "Adding..." : "Add"}</IconLabel>
+                </button>
+              </footer>
+            </section>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOpenDetail, confirmAction }) {
   const [knowledgeBases, setKnowledgeBases] = useState([]);
   const [chatConfigurations, setChatConfigurations] = useState([]);
+  const [judgeDeployments, setJudgeDeployments] = useState([]);
   const [runs, setRuns] = useState([]);
   const [cases, setCases] = useState([]);
   const [selectedRunId, setSelectedRunId] = useState("");
   const [form, setForm] = useState({
     knowledgeBaseId: selectedKnowledgeBaseId || "",
     chatConfigurationId: "",
+    judgeDeploymentId: "",
     retrievalMode: "hybrid",
     topK: 4,
     limit: 20,
@@ -2004,19 +2999,22 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
     async function loadEvaluationData() {
       setIsLoading(true);
       try {
-        const [nextKnowledgeBases, nextConfigurations, nextRuns] = await Promise.all([
+        const [nextKnowledgeBases, nextConfigurations, nextRuns, nextJudges] = await Promise.all([
           listKnowledgeBases(),
           listChatConfigurations(),
-          listEvaluationRuns()
+          listEvaluationRuns(),
+          listModelDeployments({ capability: "judge", enabled: true }).catch(() => [])
         ]);
         if (cancelled) return;
         setKnowledgeBases(nextKnowledgeBases);
         setChatConfigurations(nextConfigurations);
         setRuns(nextRuns);
+        setJudgeDeployments(nextJudges);
         setForm((current) => ({
           ...current,
           knowledgeBaseId: current.knowledgeBaseId || selectedKnowledgeBaseId || nextKnowledgeBases[0]?.id || "",
-          chatConfigurationId: current.chatConfigurationId || nextConfigurations[0]?.id || ""
+          chatConfigurationId: current.chatConfigurationId || nextConfigurations[0]?.id || "",
+          judgeDeploymentId: current.judgeDeploymentId || nextJudges[0]?.id || ""
         }));
         setSelectedRunId((current) => current || nextRuns[0]?.id || "");
       } catch (error) {
@@ -2068,6 +3066,7 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
         name: `Adaptive vs Static L2 - ${new Date().toLocaleString()}`,
         knowledge_base_id: form.knowledgeBaseId,
         chat_configuration_id: form.chatConfigurationId || null,
+        judge_deployment_id: form.judgeDeploymentId || "",
         retrieval_mode: form.retrievalMode,
         top_k: Number(form.topK),
         limit: Number(form.limit),
@@ -2092,7 +3091,12 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
 
   async function removeSelectedRun() {
     if (!selectedRun) return;
-    const confirmed = window.confirm(`Delete evaluation run "${selectedRun.name}"?`);
+    const confirmed = await confirmAction({
+      title: "Delete evaluation run?",
+      message: `Delete evaluation run "${selectedRun.name}"?`,
+      detail: "Stored case results, trace metadata, and RAGXplain artifacts for this run will be removed.",
+      confirmLabel: "Delete run"
+    });
     if (!confirmed) return;
     try {
       await deleteEvaluationRun(selectedRun.id);
@@ -2127,6 +3131,15 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
             value={form.chatConfigurationId}
             options={[{ value: "", label: "Default configuration" }, ...chatConfigurations.map((item) => ({ value: item.id, label: item.name }))]}
             onChange={(chatConfigurationId) => setForm({ ...form, chatConfigurationId })}
+          />
+          <SelectField
+            label="Judge deployment"
+            value={form.judgeDeploymentId}
+            options={[
+              { value: "", label: "No registered judge selected" },
+              ...judgeDeployments.map((deployment) => deploymentOption(deployment))
+            ]}
+            onChange={(judgeDeploymentId) => setForm({ ...form, judgeDeploymentId })}
           />
           <div className="config-two-column">
             <SelectField
@@ -2396,23 +3409,82 @@ function RagxplainInsightsScreen({ run, onBack }) {
 
 function AnalyticsScreen() {
   const [tab, setTab] = useState("tokens");
+  const [usage, setUsage] = useState([]);
+  const [summary, setSummary] = useState({});
+  const [status, setStatus] = useState("");
+
+  useEffect(() => {
+    async function loadAnalytics() {
+      try {
+        const [nextUsage, nextSummary] = await Promise.all([
+          listModelUsage({ limit: 200 }),
+          getModelUsageSummary()
+        ]);
+        setUsage(nextUsage);
+        setSummary(nextSummary);
+        setStatus("");
+      } catch (error) {
+        setStatus(`Analytics unavailable: ${error.message}`);
+      }
+    }
+    loadAnalytics();
+  }, []);
+
+  const realTokenStats = [
+    { label: "Total attempts", value: summary.calls || usage.length, delta: "AI Models recorded calls" },
+    { label: "Tokens", value: summary.total_tokens || usage.reduce((sum, event) => sum + Number(event.total_tokens || 0), 0), delta: "input + output" },
+    { label: "Estimated cost", value: `$${formatNumber(summary.estimated_cost_usd || usage.reduce((sum, event) => sum + Number(event.estimated_cost_usd || 0), 0), 4)}`, delta: "current month" },
+    { label: "Failures", value: summary.failed_calls || usage.filter((event) => event.status !== "completed").length, delta: "provider/runtime errors" }
+  ];
   return (
     <section className="page-stack">
       <PanelHeader eyebrow="Usage Analytics" title="Analytics" />
+      {status && <div className="inline-status">{status}</div>}
       <div className="tabs">
         <button className={tab === "tokens" ? "active" : ""} onClick={() => setTab("tokens")}><IconLabel icon={BarChart3}>Token statistics</IconLabel></button>
         <button className={tab === "feedback" ? "active" : ""} onClick={() => setTab("feedback")}><IconLabel icon={ThumbsUp}>Detailed Statistics & Feedbacks</IconLabel></button>
       </div>
       {tab === "tokens" ? (
-        <div className="metrics-grid">
-          {tokenStats.map((stat) => (
-            <article className="metric-card" key={stat.label}>
-              <small>{stat.label}</small>
-              <strong>{stat.value}</strong>
-              <span>{stat.delta}</span>
-            </article>
-          ))}
-        </div>
+        <>
+          <div className="metrics-grid">
+            {realTokenStats.map((stat) => (
+              <article className="metric-card" key={stat.label}>
+                <small>{stat.label}</small>
+                <strong>{stat.value}</strong>
+                <span>{stat.delta}</span>
+              </article>
+            ))}
+          </div>
+          <div className="table-panel">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Purpose</th>
+                  <th>Provider</th>
+                  <th>Model</th>
+                  <th>Status</th>
+                  <th>Tokens</th>
+                  <th>Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {usage.slice(0, 50).map((event) => (
+                  <tr key={event.id}>
+                    <td>{formatDateTime(event.created_at)}</td>
+                    <td>{event.purpose}</td>
+                    <td>{event.provider}</td>
+                    <td>{event.model}</td>
+                    <td>{event.status}</td>
+                    <td>{event.total_tokens}</td>
+                    <td>${formatNumber(event.estimated_cost_usd, 5)}</td>
+                  </tr>
+                ))}
+                {usage.length === 0 && <tr><td colSpan="7">No model usage recorded yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </>
       ) : (
         <div className="table-panel">
           <table>
@@ -2472,7 +3544,7 @@ function SelectField({ label, value, options, onChange }) {
       {label}
       <select value={value} onChange={(event) => onChange(event.target.value)}>
         {normalizedOptions.map((option) => (
-          <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>
+          <option key={option.value} value={option.value} disabled={option.disabled} title={option.title || option.label}>{option.label}</option>
         ))}
       </select>
     </label>
@@ -2542,7 +3614,8 @@ function messagesFromChatRecords(records = []) {
         role: "user",
         content: record.content,
         contexts: [],
-        metadata: record.metadata || {}
+        metadata: record.metadata || {},
+        status: record.status || "completed"
       };
     }
     return {
@@ -2551,8 +3624,18 @@ function messagesFromChatRecords(records = []) {
       question: record.metadata?.question || previousUserQuestion,
       content: record.content,
       contexts: record.contexts || [],
-      metadata: record.metadata || {}
+      metadata: record.metadata || {},
+      status: record.status || "completed",
+      streaming: false
     };
+  });
+}
+
+function updateMessage(messages, messageId, patchOrUpdater) {
+  return messages.map((message) => {
+    if (message.id !== messageId) return message;
+    const patch = typeof patchOrUpdater === "function" ? patchOrUpdater(message) : patchOrUpdater;
+    return { ...message, ...patch };
   });
 }
 
@@ -2564,11 +3647,19 @@ function applyChatConfigurationSnapshotToDraft(current, snapshot = {}, configura
   const provider = generatorProviders.includes(snapshot.generator_provider) ? snapshot.generator_provider : defaultChatConfigurationDraft.generatorProvider;
   const models = generatorModelsByProvider[provider] || generatorModelsByProvider.Local;
   const model = models.includes(snapshot.generator_model) ? snapshot.generator_model : models[0];
+  const metadata = snapshot.metadata || {};
   return {
     ...current,
     chatConfigurationId: configurationId || snapshot.id || "",
     configurationName: snapshot.name || defaultChatConfigurationDraft.configurationName,
     configurationDescription: snapshot.description || "",
+    generatorDeploymentId: snapshot.generator_deployment_id || metadata.generator_deployment_id || defaultChatConfigurationDraft.generatorDeploymentId,
+    fallbackDeploymentIds: Array.isArray(snapshot.fallback_deployment_ids) ? snapshot.fallback_deployment_ids : [],
+    rerankerDeploymentId: snapshot.reranker_deployment_id || "",
+    plannerDeploymentId: snapshot.planner_deployment_id || "",
+    generationParameters: snapshot.generation_parameters || defaultChatConfigurationDraft.generationParameters,
+    citationsEnabled: typeof snapshot.citations_enabled === "boolean" ? snapshot.citations_enabled : defaultChatConfigurationDraft.citationsEnabled,
+    citations: typeof snapshot.citations_enabled === "boolean" ? snapshot.citations_enabled : current.citations,
     generatorProvider: provider,
     generatorModel: model,
     responseStructure: responseStructures.includes(snapshot.response_structure) ? snapshot.response_structure : defaultChatConfigurationDraft.responseStructure,
@@ -2591,6 +3682,12 @@ function chatConfigurationSnapshotFromRecord(record = {}) {
     humor_level: record.humor_level,
     system_prompt: record.system_prompt,
     predefined_prompt: record.predefined_prompt,
+    generator_deployment_id: record.generator_deployment_id,
+    fallback_deployment_ids: record.fallback_deployment_ids || [],
+    reranker_deployment_id: record.reranker_deployment_id || "",
+    planner_deployment_id: record.planner_deployment_id || "",
+    generation_parameters: record.generation_parameters || {},
+    citations_enabled: record.citations_enabled,
     metadata: record.metadata || {}
   };
 }
@@ -2606,13 +3703,24 @@ function chatConfigurationPayloadFromDraft(config) {
     humor_level: clampNumber(config.humorLevel, defaultChatConfigurationDraft.humorLevel, 0, 5),
     system_prompt: config.systemPrompt || "",
     predefined_prompt: config.predefinedPrompt || "",
-    metadata: { runtime: "configuration-only", actual_generator: "extractive" }
+    generator_deployment_id: config.generatorDeploymentId || defaultChatConfigurationDraft.generatorDeploymentId,
+    fallback_deployment_ids: config.fallbackDeploymentIds || [],
+    reranker_deployment_id: config.rerankerDeploymentId || "",
+    planner_deployment_id: config.plannerDeploymentId || "",
+    generation_parameters: config.generationParameters || defaultChatConfigurationDraft.generationParameters,
+    citations_enabled: Boolean(config.citations),
+    metadata: {
+      runtime: "model-farm",
+      actual_generator: "deployment",
+      generator_deployment_id: config.generatorDeploymentId || defaultChatConfigurationDraft.generatorDeploymentId
+    }
   };
 }
 
 function isValidChatConfigurationDraft(config) {
   return Boolean(
     (config.chatConfigurationId || config.configurationName?.trim()) &&
+    config.generatorDeploymentId &&
     config.generatorProvider &&
     config.generatorModel &&
     config.responseStructure &&
@@ -2666,6 +3774,190 @@ function formatMetadataValue(value) {
   return String(value);
 }
 
+function modelDeploymentLabel(deployment = {}) {
+  const status = deployment.enabled ? deployment.health_status || "enabled" : "disabled";
+  const capabilityText = Array.isArray(deployment.capabilities) ? deployment.capabilities.join(", ") : "";
+  return `${deployment.name || deployment.id} - ${deployment.provider || "provider"} / ${deployment.model || "model"} (${status}${capabilityText ? `, ${capabilityText}` : ""})`;
+}
+
+function shortDeploymentLabel(deployment = {}) {
+  const name = deployment.name || deployment.id || "Deployment";
+  const model = deployment.model || "model";
+  return truncateMiddle(`${name} - ${model}`, 58);
+}
+
+function deploymentOption(deployment = {}) {
+  return {
+    value: deployment.id,
+    label: shortDeploymentLabel(deployment),
+    title: modelDeploymentLabel(deployment)
+  };
+}
+
+function truncateMiddle(value, maxLength = 58) {
+  const text = String(value || "");
+  if (text.length <= maxLength) return text;
+  const keep = Math.max(Math.floor((maxLength - 3) / 2), 8);
+  return `${text.slice(0, keep)}...${text.slice(-keep)}`;
+}
+
+function uniqueDeploymentName(baseName, deployments = []) {
+  const normalizedBaseName = String(baseName || "Model deployment").trim().replace(/\s+/g, " ") || "Model deployment";
+  const existingNames = new Set((deployments || []).map((deployment) => String(deployment.name || "").trim().toLowerCase()));
+  if (!existingNames.has(normalizedBaseName.toLowerCase())) return normalizedBaseName;
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${normalizedBaseName} ${index}`;
+    if (!existingNames.has(candidate.toLowerCase())) return candidate;
+  }
+  return `${normalizedBaseName} ${Date.now()}`;
+}
+
+function emptyModelFarmWizard() {
+  return {
+    name: "",
+    description: "",
+    model: "",
+    capabilities: [],
+    apiBase: "",
+    credentialEnvRefs: {},
+    credentialSecrets: {},
+    defaultParameters: {},
+    limits: {},
+    pricing: {},
+    monthlyBudgetUsd: 0,
+    hardBudget: true,
+    temperature: 0.2,
+    maxTokens: 800,
+    timeoutSeconds: 60,
+    dimension: 0,
+    inputPrice: 0,
+    outputPrice: 0,
+    metadata: {}
+  };
+}
+
+function emptyEndpointDraft(defaults = {}) {
+  return {
+    name: "",
+    modelId: defaults.model || "",
+    url: defaults.api_base || "",
+    apiKey: ""
+  };
+}
+
+function modelFarmWizardPayload(templateId, wizard) {
+  const defaultParameters = { ...(wizard.defaultParameters || {}) };
+  const limits = { ...(wizard.limits || {}) };
+  const pricing = { ...(wizard.pricing || {}) };
+  if (wizard.capabilities.includes("generation") || wizard.capabilities.includes("judge") || wizard.capabilities.includes("planner")) {
+    defaultParameters.temperature = Number(wizard.temperature || 0);
+    defaultParameters.max_tokens = Number(wizard.maxTokens || 0);
+    limits.max_output_tokens = Number(wizard.maxTokens || 0);
+  }
+  if (Number(wizard.timeoutSeconds || 0) > 0) limits.timeout_seconds = Number(wizard.timeoutSeconds);
+  if (wizard.capabilities.includes("embedding") && Number(wizard.dimension || 0) > 0) {
+    limits.dimension = Number(wizard.dimension);
+  }
+  if (Number(wizard.inputPrice || 0) > 0) pricing.input_per_million_tokens_usd = Number(wizard.inputPrice);
+  if (Number(wizard.outputPrice || 0) > 0) pricing.output_per_million_tokens_usd = Number(wizard.outputPrice);
+  return {
+    template_id: templateId,
+    name: wizard.name,
+    model: wizard.model,
+    api_base: wizard.apiBase || "",
+    capabilities: wizard.capabilities || [],
+    credential_env_refs: cleanCredentialRefs(wizard.credentialEnvRefs || {}),
+    credential_secrets: cleanCredentialSecrets(wizard.credentialSecrets || {}),
+    default_parameters: defaultParameters,
+    limits,
+    pricing,
+    monthly_budget_usd: Number(wizard.monthlyBudgetUsd || 0),
+    hard_budget: Boolean(wizard.hardBudget),
+    enabled: false,
+    metadata: wizard.metadata || {}
+  };
+}
+
+function providerTemplatesForTab(templates, tab, query) {
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  const filtered = templates.filter((template) => {
+    const isLocal = template.locality === "local" || !template.creatable;
+    if (tab === "local" && !isLocal) return false;
+    if (tab !== "local" && isLocal) return false;
+    const searchable = [
+      template.label,
+      template.provider_label,
+      template.provider,
+      template.model
+    ].join(" ").toLowerCase();
+    return !normalizedQuery || searchable.includes(normalizedQuery);
+  });
+  if (tab === "local") return filtered;
+  const seen = new Set();
+  return filtered.filter((template) => {
+    const key = (template.provider_label || template.provider || template.label || template.id).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function providerLogoText(item) {
+  const label = providerLabelFromDeployment(item);
+  const normalized = label.toLowerCase();
+  if (normalized.includes("openai")) return "AI";
+  if (normalized.includes("azure")) return "AZ";
+  if (normalized.includes("bedrock") || normalized.includes("aws")) return "AWS";
+  if (normalized.includes("cohere")) return "C";
+  if (normalized.includes("hugging")) return "HF";
+  if (normalized.includes("mistral")) return "M";
+  if (normalized.includes("gemini") || normalized.includes("google")) return "G";
+  if (normalized.includes("anthropic")) return "A";
+  if (normalized.includes("local")) return "L";
+  return label.slice(0, 2).toUpperCase();
+}
+
+function providerLogoClass(item) {
+  return providerLabelFromDeployment(item).toLowerCase().replace(/[^a-z0-9]+/g, "-");
+}
+
+function providerLabelFromDeployment(item) {
+  return item?.provider_label || item?.metadata?.provider_label || item?.provider || item?.label || "AI";
+}
+
+function requiresEndpointUrl(template) {
+  const provider = String(template?.provider || "").toLowerCase();
+  return provider === "custom" || provider.includes("azure") || provider.includes("databricks") || provider.includes("watsonx");
+}
+
+function chatHistoryDisplayTitle(value, maxLength = 30) {
+  const normalized = String(value || "New chat").trim().replace(/\s+/g, " ") || "New chat";
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+function cleanCredentialSecrets(secrets = {}) {
+  const cleaned = {};
+  Object.entries(secrets || {}).forEach(([key, value]) => {
+    const secret = String(value || "").trim();
+    if (secret) cleaned[key] = secret;
+  });
+  return cleaned;
+}
+
+function cleanCredentialRefs(refs = {}) {
+  const cleaned = {};
+  Object.entries(refs || {}).forEach(([key, value]) => {
+    const envName = String(value || "").trim();
+    if (envName) cleaned[key] = envName;
+  });
+  return cleaned;
+}
+
+function objectOrEmpty(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
 function knowledgeConfigurationFromRecord(knowledgeBase) {
   return sanitizeKnowledgeConfiguration(knowledgeBase?.metadata?.configuration || defaultKnowledgeConfiguration);
 }
@@ -2676,17 +3968,16 @@ function sanitizeKnowledgeConfiguration(configuration) {
   const strategy = chunkingStrategies.some((item) => item.value === raw.chunking_strategy)
     ? raw.chunking_strategy
     : defaultKnowledgeConfiguration.chunking_strategy;
-  const provider = String(raw.embedding_provider || "").toLowerCase() === supportedEmbeddingProvider.toLowerCase()
-    ? supportedEmbeddingProvider
-    : defaultKnowledgeConfiguration.embedding_provider;
-  const models = supportedLocalEmbeddingModels;
-  const embeddingModel = models.includes(raw.embedding_model) ? raw.embedding_model : models[0];
+  const provider = raw.embedding_provider || defaultKnowledgeConfiguration.embedding_provider;
+  const embeddingModel = raw.embedding_model || defaultKnowledgeConfiguration.embedding_model;
   return {
     chunking_strategy: strategy,
     chunk_size: chunkSize,
     chunk_overlap: chunkingStrategyUsesOverlap(strategy)
       ? clampNumber(raw.chunk_overlap, 120, 0, Math.max(chunkSize - 1, 0))
       : 0,
+    embedding_deployment_id: raw.embedding_deployment_id || defaultKnowledgeConfiguration.embedding_deployment_id,
+    external_processing_allowed: Boolean(raw.external_processing_allowed),
     embedding_provider: provider,
     embedding_model: embeddingModel
   };
