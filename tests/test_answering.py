@@ -137,3 +137,25 @@ def test_l2_hybrid_combines_bm25_and_dense_scores(tmp_path):
     assert result.metadata["retrieval_mode"] == "hybrid"
     assert len(result.contexts) == 2
     assert all(context.mode == "hybrid" for context in result.contexts)
+
+
+def test_l2_retrieval_can_be_filtered_to_selected_documents(tmp_path):
+    service, kb = build_service(tmp_path, label="moderate")
+    documents = service.knowledge_service.list_documents(kb.id)
+    invoice_document = next(document for document in documents if document.title == "Invoice runbook")
+
+    result = service.answer(
+        "payments verification accept payments",
+        AnswerOptions(
+            mode="simple_rag",
+            knowledge_base_id=kb.id,
+            document_ids=[invoice_document.id],
+            retrieval_mode="bm25",
+            top_k=3,
+        ),
+    )
+
+    assert result.metadata["document_filter_ids"] == [invoice_document.id]
+    assert result.metadata["document_filter_count"] == 1
+    assert result.contexts
+    assert {context.document.metadata["document_id"] for context in result.contexts} == {invoice_document.id}

@@ -45,9 +45,11 @@ import {
 import {
   askQuestion,
   askQuestionStream,
+  createChatConfiguration,
   createEvaluationRun,
   createKnowledgeBase,
   createModelDeploymentFromTemplate,
+  deleteChatConfiguration,
   deleteChatConversation,
   deleteEvaluationRun,
   deleteKnowledgeBase,
@@ -72,6 +74,7 @@ import {
   reindexKnowledgeBase,
   submitFeedback,
   testModelDeployment,
+  updateChatConfiguration,
   updateChatConversation,
   updateKnowledgeBase,
   updateModelDeployment,
@@ -80,7 +83,6 @@ import {
 import {
   architectureLayers,
   feedbackRows,
-  seedMessages,
   tokenStats
 } from "./data.js";
 
@@ -134,10 +136,23 @@ const chatbotTones = ["Professional", "Friendly", "Formal", "Technical", "Coachi
 const modelCapabilities = ["generation", "embedding", "rerank", "judge", "planner", "classifier"];
 const defaultGeneratorDeploymentId = "model-local-extractive";
 const defaultEmbeddingDeploymentId = "model-local-hash-384";
+const COMPOSER_MAX_CHARACTERS = 10000;
+const CONFIGURATION_DISPLAY_ID_LENGTH = 12;
+const CONFIGURATION_DISPLAY_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+const AI_LOGOS_PATH = "/AdaptiveRAG/img/logo_ai_models/";
 const defaultChatConfigurationDraft = {
   chatConfigurationId: "",
+  configurationCode: createConfigurationCode(),
+  configurationCreatedAt: "",
+  configurationUpdatedAt: "",
   configurationName: "Balanced workflow assistant",
   configurationDescription: "Default configuration for concise business workflow answers.",
+  welcomeMessage: "Welcome to Adaptive RAG Studio. Ask a workflow question and I will route it through the selected classifier, retriever, and generator path.",
+  conversationStarters: [
+    "What are the main steps in this workflow?",
+    "Summarize the selected knowledge base.",
+    "Which documents explain this process best?"
+  ],
   generatorDeploymentId: defaultGeneratorDeploymentId,
   fallbackDeploymentIds: [],
   rerankerDeploymentId: "",
@@ -498,12 +513,13 @@ function ConfirmationDialog({ confirmation, onCancel, onConfirm }) {
 
 function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAction }) {
   const mainGridRef = useRef(null);
-  const [messages, setMessages] = useState(seedMessages);
+  const [messages, setMessages] = useState(() => welcomeMessagesFromConfig(defaultChatConfigurationDraft));
   const [question, setQuestion] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [feedbackStatus, setFeedbackStatus] = useState("");
   const [popup, setPopup] = useState(null);
   const [knowledgeBaseOptions, setKnowledgeBaseOptions] = useState([]);
+  const [selectedFilterDocumentIds, setSelectedFilterDocumentIds] = useState([]);
   const [activeConversationId, setActiveConversationId] = useState("");
   const [historyQuery, setHistoryQuery] = useState("");
   const [recentConversations, setRecentConversations] = useState([]);
@@ -543,6 +559,19 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
     refreshChatConfigurations();
     refreshMainModelDeployments();
   }, []);
+
+  useEffect(() => {
+    if (activeConversationId) return;
+    setMessages((current) => (
+      current.length === 0 || current.every(isWelcomeMessage)
+        ? welcomeMessagesFromConfig(config)
+        : current
+    ));
+  }, [activeConversationId, config.welcomeMessage]);
+
+  useEffect(() => {
+    setSelectedFilterDocumentIds([]);
+  }, [selectedKnowledgeBaseId]);
 
   async function refreshMainModelDeployments() {
     try {
@@ -613,9 +642,88 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
     }
   }
 
+  function selectChatConfiguration(configurationId) {
+    const selected = chatConfigurations.find((item) => item.id === configurationId);
+    if (!selected) {
+      setConfig((current) => ({
+        ...current,
+        chatConfigurationId: "",
+        configurationCode: createConfigurationCode(existingConfigurationCodes(chatConfigurations)),
+        configurationCreatedAt: "",
+        configurationUpdatedAt: "",
+        configurationName: defaultChatConfigurationDraft.configurationName,
+        configurationDescription: defaultChatConfigurationDraft.configurationDescription
+      }));
+      setConfigurationStatus("Using unsaved draft configuration");
+      return;
+    }
+    setConfig((current) => applyChatConfigurationToDraft(current, selected));
+    setConfigurationStatus(`Loaded "${selected.name}"`);
+  }
+
+  async function saveChatConfigurationAsNew() {
+    try {
+      const created = await createChatConfiguration(chatConfigurationPayloadFromDraft({
+        ...config,
+        chatConfigurationId: "",
+        configurationCode: createConfigurationCode(existingConfigurationCodes(chatConfigurations))
+      }));
+      await refreshChatConfigurations(created.id);
+      setConfig((current) => applyChatConfigurationToDraft(current, created));
+      setConfigurationStatus(`Saved "${created.name}"`);
+    } catch (error) {
+      setConfigurationStatus(`Save configuration failed: ${error.message}`);
+    }
+  }
+
+  async function updateSelectedChatConfiguration() {
+    if (!config.chatConfigurationId) {
+      await saveChatConfigurationAsNew();
+      return;
+    }
+    try {
+      const updated = await updateChatConfiguration(config.chatConfigurationId, chatConfigurationPayloadFromDraft(config));
+      await refreshChatConfigurations(updated.id);
+      setConfig((current) => applyChatConfigurationToDraft(current, updated));
+      setConfigurationStatus(`Updated "${updated.name}"`);
+    } catch (error) {
+      setConfigurationStatus(`Update configuration failed: ${error.message}`);
+    }
+  }
+
+  async function deleteSelectedChatConfiguration() {
+    if (!config.chatConfigurationId) {
+      setConfigurationStatus("Select a saved configuration before deleting.");
+      return;
+    }
+    const confirmed = await confirmAction({
+      title: "Delete configuration",
+      message: `Delete "${config.configurationName}" (${config.configurationCode})? Existing conversations keep their saved snapshots, but this preset will no longer be selectable.`,
+      confirmLabel: "Delete",
+      tone: "danger"
+    });
+    if (!confirmed) return;
+    try {
+      await deleteChatConfiguration(config.chatConfigurationId);
+      const items = await refreshChatConfigurations("");
+      setConfig((current) => ({
+        ...current,
+        chatConfigurationId: "",
+        configurationCode: createConfigurationCode(existingConfigurationCodes(items)),
+        configurationCreatedAt: "",
+        configurationUpdatedAt: "",
+        configurationName: defaultChatConfigurationDraft.configurationName,
+        configurationDescription: defaultChatConfigurationDraft.configurationDescription
+      }));
+      setConfigurationStatus(`Deleted "${config.configurationName}"`);
+    } catch (error) {
+      setConfigurationStatus(`Delete configuration failed: ${error.message}`);
+    }
+  }
+
   async function startNewChat() {
     setActiveConversationId("");
-    setMessages([]);
+    setMessages(welcomeMessagesFromConfig(config));
     setQuestion("");
     setPopup(null);
   }
@@ -716,7 +824,7 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
       streaming: true,
       streamingStatus: "Connecting to Adaptive RAG..."
     };
-    setMessages((current) => [...current, userMessage, assistantPlaceholder]);
+    setMessages((current) => [...current.filter((message) => !isWelcomeMessage(message)), userMessage, assistantPlaceholder]);
     setQuestion("");
     setIsLoading(true);
     const stopStreamPolling = () => {
@@ -805,6 +913,7 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
         mode,
         retrievalMode: retrievalModeValue(config.retrievalMode),
         topK: config.topK,
+        documentIds: selectedFilterDocumentIds,
         chatConfigurationId: config.chatConfigurationId || null,
         chatConfiguration: chatConfigurationPayloadFromDraft(config)
       }, (event) => {
@@ -998,6 +1107,10 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
         knowledgeBases={knowledgeBaseOptions}
         selectedKnowledgeBaseId={selectedKnowledgeBaseId}
         onSelectKnowledgeBase={onSelectKnowledgeBase}
+        selectedFilterDocumentIds={selectedFilterDocumentIds}
+        onFilterDocumentsChange={setSelectedFilterDocumentIds}
+        welcomeMessage={config.welcomeMessage}
+        conversationStarters={config.conversationStarters}
         selectedRoute={config.route}
         requiresKnowledgeBase={answerModeFromRoute(config.route) !== "direct"}
       />
@@ -1006,9 +1119,14 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
         config={config}
         setConfig={setConfig}
         selectedKnowledgeBase={selectedKnowledgeBase}
+        chatConfigurations={chatConfigurations}
         modelDeployments={modelDeployments}
         onRefreshModelDeployments={refreshMainModelDeployments}
         configurationStatus={configurationStatus}
+        onSelectChatConfiguration={selectChatConfiguration}
+        onSaveConfiguration={saveChatConfigurationAsNew}
+        onUpdateConfiguration={updateSelectedChatConfiguration}
+        onDeleteConfiguration={deleteSelectedChatConfiguration}
         collapsed={layout.configCollapsed}
         onToggle={() => togglePanel("config")}
       />
@@ -1056,8 +1174,8 @@ function ConversationHistory({
     <aside className="history-panel">
       <header className="panel-titlebar">
         <div>
-          <p className="eyebrow">Explorer</p>
-          <h2>Chat history</h2>
+          <p className="eyebrow">Chat history</p>
+          <h2>Conversations</h2>
         </div>
         <button className="panel-collapse-button" type="button" onClick={onToggle} aria-label="Collapse chat history"><IconOnly icon={ChevronLeft} /></button>
       </header>
@@ -1210,18 +1328,45 @@ function ChatPanel({
   knowledgeBases,
   selectedKnowledgeBaseId,
   onSelectKnowledgeBase,
+  selectedFilterDocumentIds = [],
+  onFilterDocumentsChange = () => {},
+  welcomeMessage = "",
+  conversationStarters = [],
   selectedRoute,
   requiresKnowledgeBase
 }) {
   const messageListRef = useRef(null);
   const messageEndRef = useRef(null);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [filterDocuments, setFilterDocuments] = useState([]);
+  const [isFilterLoading, setIsFilterLoading] = useState(false);
+  const [filterError, setFilterError] = useState("");
+  const [filterQuery, setFilterQuery] = useState("");
+  const [draftFilterDocumentIds, setDraftFilterDocumentIds] = useState(selectedFilterDocumentIds);
   const selectedKnowledgeBase = knowledgeBases.find((knowledgeBase) => knowledgeBase.id === selectedKnowledgeBaseId);
   const chatPlaceholder = selectedKnowledgeBase
     ? `Send a message to "${selectedKnowledgeBase.name}"`
     : "Please select a knowledge base to start the conversation.";
+  const selectedFilterCount = selectedFilterDocumentIds.length;
+  const currentCharacterCount = question.length;
+  const remainingCharacterCount = Math.max(COMPOSER_MAX_CHARACTERS - currentCharacterCount, 0);
+  const characterUsagePercent = Math.min(100, Math.round((currentCharacterCount / COMPOSER_MAX_CHARACTERS) * 100));
+  const shouldShowStarters = messages.length === 0 || messages.every(isWelcomeMessage);
+  const visibleStarters = normalizeConversationStarters(conversationStarters);
   const scrollSignature = messages
     .map((message) => `${message.id}:${message.content?.length || 0}:${message.streamingStatus || ""}:${message.status || ""}`)
     .join("|");
+
+  useEffect(() => {
+    if (!isFilterOpen) setDraftFilterDocumentIds(selectedFilterDocumentIds);
+  }, [selectedFilterDocumentIds, isFilterOpen]);
+
+  useEffect(() => {
+    setIsFilterOpen(false);
+    setFilterDocuments([]);
+    setFilterQuery("");
+    setDraftFilterDocumentIds([]);
+  }, [selectedKnowledgeBaseId]);
 
   useEffect(() => {
     const list = messageListRef.current;
@@ -1231,6 +1376,45 @@ function ChatPanel({
       end.scrollIntoView({ block: "end", behavior: "smooth" });
     });
   }, [scrollSignature]);
+
+  async function openDocumentFilter() {
+    if (!selectedKnowledgeBaseId) return;
+    setIsFilterOpen(true);
+    setFilterQuery("");
+    setFilterError("");
+    setDraftFilterDocumentIds(selectedFilterDocumentIds);
+    setIsFilterLoading(true);
+    try {
+      const documents = await listKnowledgeDocuments(selectedKnowledgeBaseId);
+      setFilterDocuments(documents);
+    } catch (error) {
+      setFilterError(`Document filter load failed: ${error.message}`);
+      setFilterDocuments([]);
+    } finally {
+      setIsFilterLoading(false);
+    }
+  }
+
+  function toggleDraftFilterDocument(documentId) {
+    setDraftFilterDocumentIds((current) => (
+      current.includes(documentId)
+        ? current.filter((id) => id !== documentId)
+        : [...current, documentId]
+    ));
+  }
+
+  function applyDocumentFilter() {
+    onFilterDocumentsChange(draftFilterDocumentIds);
+    setIsFilterOpen(false);
+  }
+
+  function clearDocumentFilter() {
+    setDraftFilterDocumentIds([]);
+    onFilterDocumentsChange([]);
+    setIsFilterOpen(false);
+  }
+
+  const filteredDocuments = filterDocuments.filter((document) => documentMatchesFilterQuery(document, filterQuery));
 
   return (
     <section className="chat-panel">
@@ -1262,26 +1446,36 @@ function ChatPanel({
                 </div>
               )}
             </div>
-            {message.role === "assistant" && !message.streaming && (
+            {message.role === "assistant" && !message.streaming && !isWelcomeMessage(message) && (
               <div className="message-actions">
                 <button onClick={() => onOpenPopup({ type: "source", message })}><IconLabel icon={Layers}>Sources</IconLabel></button>
                 <button type="button"><IconLabel icon={Copy}>Copy</IconLabel></button>
                 <button onClick={() => onOpenPopup({ type: "trace", message })}><IconLabel icon={GitBranch}>Trace</IconLabel></button>
                 <button onClick={() => onFeedback(message, "up")}><IconLabel icon={ThumbsUp}>Useful</IconLabel></button>
                 <button onClick={() => onFeedback(message, "down")}><IconLabel icon={ThumbsDown}>Needs work</IconLabel></button>
-                <span>{message.metadata?.complexity_label || "pending"}</span>
+                <span><IconLabel icon={BrainCircuit}>{message.metadata?.complexity_label || "pending"}</IconLabel></span>
               </div>
             )}
           </article>
         ))}
+        {shouldShowStarters && visibleStarters.length > 0 && (
+          <div className="conversation-starters" aria-label="Conversation starters">
+            {visibleStarters.map((starter) => (
+              <button key={starter} type="button" onClick={() => setQuestion(starter)}>
+                {starter}
+              </button>
+            ))}
+          </div>
+        )}
         <div ref={messageEndRef} className="message-list-end" aria-hidden="true" />
       </div>
       <div className="composer">
         <textarea
           aria-label="Chat message"
           placeholder={chatPlaceholder}
+          maxLength={COMPOSER_MAX_CHARACTERS}
           value={question}
-          onChange={(event) => setQuestion(event.target.value)}
+          onChange={(event) => setQuestion(event.target.value.slice(0, COMPOSER_MAX_CHARACTERS))}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
@@ -1291,8 +1485,28 @@ function ChatPanel({
         />
         <div className="composer-tools">
           <span><IconLabel icon={Paperclip}>Attach</IconLabel></span>
-          <span><IconLabel icon={Filter}>Usage</IconLabel></span>
-          <span>0%</span>
+          <button
+            className={`composer-tool-button ${selectedFilterCount ? "active" : ""}`}
+            type="button"
+            onClick={openDocumentFilter}
+            disabled={!selectedKnowledgeBaseId}
+            title={selectedKnowledgeBaseId ? "Filter retrieval by selected documents" : "Select a knowledge base first"}
+          >
+            <IconLabel icon={Filter}>Filter{selectedFilterCount ? ` (${selectedFilterCount})` : ""}</IconLabel>
+          </button>
+          <span
+            className={`char-usage-meter ${characterUsagePercent >= 90 ? "warning" : ""}`}
+            tabIndex={0}
+            aria-label={`Character usage ${characterUsagePercent} percent. Maximum ${formatInteger(COMPOSER_MAX_CHARACTERS)}, current ${formatInteger(currentCharacterCount)}, remaining ${formatInteger(remainingCharacterCount)}.`}
+          >
+            {characterUsagePercent}%
+            <span className="char-usage-tooltip" role="tooltip">
+              <strong>Character usage</strong>
+              <span>Maximum: {formatInteger(COMPOSER_MAX_CHARACTERS)}</span>
+              <span>Current: {formatInteger(currentCharacterCount)}</span>
+              <span>Remaining: {formatInteger(remainingCharacterCount)}</span>
+            </span>
+          </span>
           <select
             className="composer-select"
             aria-label="Select knowledge base"
@@ -1310,8 +1524,75 @@ function ChatPanel({
           <button className="send-action" onClick={onSend} disabled={isLoading || (requiresKnowledgeBase && !selectedKnowledgeBaseId)} aria-label="Send message"><SendHorizontal size={20} aria-hidden="true" /></button>
         </div>
       </div>
-      {requiresKnowledgeBase && !selectedKnowledgeBaseId && (
-        <p className="ai-disclaimer">Please select a knowledge base to start the conversation.</p>
+      {isFilterOpen && (
+        <div className="document-filter-backdrop" role="presentation" onMouseDown={() => setIsFilterOpen(false)}>
+          <section
+            className="document-filter-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="document-filter-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <p className="eyebrow">Retrieval scope</p>
+                <h2 id="document-filter-title">Filter documents</h2>
+                <p>Search only inside selected documents from {selectedKnowledgeBase?.name || "the current Knowledge Base"}.</p>
+              </div>
+              <button className="icon-button" type="button" onClick={() => setIsFilterOpen(false)} aria-label="Close document filter">
+                <IconOnly icon={X} size={18} />
+              </button>
+            </header>
+            <label className="document-filter-search">
+              <IconOnly icon={Search} size={16} />
+              <input
+                value={filterQuery}
+                onChange={(event) => setFilterQuery(event.target.value)}
+                placeholder="Search documents"
+                aria-label="Search documents"
+              />
+            </label>
+            <div className="document-filter-status">
+              <span>{draftFilterDocumentIds.length ? `${draftFilterDocumentIds.length} selected` : "All documents included"}</span>
+              <button
+                className="text-action"
+                type="button"
+                onClick={() => setDraftFilterDocumentIds(filterDocuments.map((document) => document.id))}
+                disabled={!filterDocuments.length}
+              >
+                Select all
+              </button>
+            </div>
+            <div className="document-filter-list">
+              {isFilterLoading && <p className="muted-text">Loading documents...</p>}
+              {filterError && <p className="config-warning-note">{filterError}</p>}
+              {!isFilterLoading && !filterError && filteredDocuments.length === 0 && (
+                <p className="muted-text">{filterDocuments.length ? "No documents match your search." : "No documents found in this Knowledge Base."}</p>
+              )}
+              {!isFilterLoading && !filterError && filteredDocuments.map((document) => (
+                <label key={document.id} className="document-filter-item">
+                  <input
+                    type="checkbox"
+                    checked={draftFilterDocumentIds.includes(document.id)}
+                    onChange={() => toggleDraftFilterDocument(document.id)}
+                  />
+                  <div>
+                    <strong>{document.title || document.metadata?.filename || document.id}</strong>
+                    <span>{document.metadata?.source_type || document.metadata?.mime_type || "Document"} · {document.text?.length || 0} chars</span>
+                    <p>{compactPreview(document.text || document.metadata?.uri || document.id, 130)}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <footer>
+              <button className="secondary-action" type="button" onClick={clearDocumentFilter}>Clear filter</button>
+              <button className="secondary-action" type="button" onClick={() => setIsFilterOpen(false)}>Cancel</button>
+              <button className="primary-action" type="button" onClick={applyDocumentFilter}>
+                Apply {draftFilterDocumentIds.length ? `${draftFilterDocumentIds.length} document${draftFilterDocumentIds.length === 1 ? "" : "s"}` : "all documents"}
+              </button>
+            </footer>
+          </section>
+        </div>
       )}
       <p className="ai-disclaimer">This is an AI-powered system. Please verify answers since AI can make mistakes.</p>
     </section>
@@ -1322,9 +1603,14 @@ function RagConfiguration({
   config,
   setConfig,
   selectedKnowledgeBase,
+  chatConfigurations = [],
   modelDeployments = [],
   onRefreshModelDeployments = () => {},
   configurationStatus = "",
+  onSelectChatConfiguration = () => {},
+  onSaveConfiguration = () => {},
+  onUpdateConfiguration = () => {},
+  onDeleteConfiguration = () => {},
   collapsed,
   onToggle
 }) {
@@ -1349,6 +1635,13 @@ function RagConfiguration({
     && activeEmbeddingDeploymentId
     && config.queryEmbeddingDeploymentId !== activeEmbeddingDeploymentId
   );
+  const selectedChatConfiguration = chatConfigurations.find((item) => item.id === config.chatConfigurationId);
+  const configurationCreatedAt = selectedChatConfiguration?.created_at || config.configurationCreatedAt || "";
+  const configurationUpdatedAt = selectedChatConfiguration?.updated_at || config.configurationUpdatedAt || "";
+  const [collapsedSections, setCollapsedSections] = useState({});
+  function toggleCustomizerSection(sectionId) {
+    setCollapsedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
+  }
   const queryEmbeddingOptions = selectedKnowledgeBase
     ? [
         {
@@ -1363,8 +1656,8 @@ function RagConfiguration({
   if (collapsed) {
     return (
       <aside className="config-panel panel-rail config-rail">
-        <button className="panel-rail-button" type="button" onClick={onToggle} aria-label="Expand configuration">
-          <span>Config</span>
+        <button className="panel-rail-button" type="button" onClick={onToggle} aria-label="Expand RAG Customizer">
+          <span>RAG</span>
         </button>
       </aside>
     );
@@ -1373,20 +1666,102 @@ function RagConfiguration({
     <aside className="config-panel">
       <header className="panel-titlebar">
         <div>
-          <p className="eyebrow">Runtime</p>
-          <h2>Configuration</h2>
+          <p className="eyebrow">Runtime Configuration</p>
+          <h2>RAG Customizer</h2>
         </div>
-        <button className="panel-collapse-button" type="button" onClick={onToggle} aria-label="Collapse configuration"><IconOnly icon={ChevronRight} /></button>
+        <button className="panel-collapse-button" type="button" onClick={onToggle} aria-label="Collapse RAG Customizer"><IconOnly icon={ChevronRight} /></button>
       </header>
-      <KnowledgeBaseSummary selectedKnowledgeBase={selectedKnowledgeBase} />
-      <section className="config-section runtime-section">
-        <header>
+      <KnowledgeBaseSummary
+        selectedKnowledgeBase={selectedKnowledgeBase}
+        collapsed={Boolean(collapsedSections.knowledge)}
+        onToggle={() => toggleCustomizerSection("knowledge")}
+      />
+      <div className="rag-customizer-scroll">
+      <CollapsibleCustomizerSection
+        title="General"
+        description="Save or modify Runtime settings for General, Adaptive RAG, and Generator target & prompts."
+        collapsed={Boolean(collapsedSections.general)}
+        onToggle={() => toggleCustomizerSection("general")}
+      >
+        <SelectField
+          label="Select configuration"
+          value={config.chatConfigurationId}
+          options={[
+            { value: "", label: "New configuration" },
+            ...chatConfigurations.map((item) => chatConfigurationOption(item))
+          ]}
+          onChange={onSelectChatConfiguration}
+        />
+        <dl className="configuration-meta-row">
           <div>
-            <h3>Adaptive RAG</h3>
-            <small>Routing, retrieval, and optional planning controls for the next answer.</small>
+            <dt>Created</dt>
+            <dd>{configurationCreatedAt ? formatDateTime(configurationCreatedAt) : "Not saved yet"}</dd>
           </div>
-          <button className="text-action" type="button" onClick={onRefreshModelDeployments}><IconLabel icon={RefreshCw}>Refresh AI models</IconLabel></button>
-        </header>
+          <div>
+            <dt>Last modified</dt>
+            <dd>{configurationUpdatedAt ? formatDateTime(configurationUpdatedAt) : "Not saved yet"}</dd>
+          </div>
+        </dl>
+        <label>
+          Configuration ID
+          <input
+            value={config.configurationCode || ""}
+            readOnly
+            aria-readonly="true"
+            title="Auto-generated ID. This value is not editable."
+          />
+        </label>
+        <label>
+          Configuration name
+          <input
+            value={config.configurationName}
+            onChange={(event) => setConfig({ ...config, configurationName: event.target.value })}
+            placeholder="Balanced workflow assistant"
+          />
+        </label>
+        <label>
+          Description
+          <input
+            value={config.configurationDescription}
+            onChange={(event) => setConfig({ ...config, configurationDescription: event.target.value })}
+            placeholder="Short purpose for this runtime configuration"
+          />
+        </label>
+        <label>
+          Welcome message
+          <textarea
+            value={config.welcomeMessage}
+            onChange={(event) => setConfig({ ...config, welcomeMessage: event.target.value })}
+            placeholder="Welcome users and explain what this assistant can do."
+          />
+        </label>
+        <label>
+          Conversation starter
+          <textarea
+            value={normalizeConversationStarters(config.conversationStarters).join("\n")}
+            onChange={(event) => setConfig({ ...config, conversationStarters: parseConversationStarters(event.target.value) })}
+            placeholder={"What are the main steps in this workflow?\nSummarize the selected knowledge base."}
+          />
+          <small>Enter one starter per line. These appear as quick-start buttons in a new chat.</small>
+        </label>
+      </CollapsibleCustomizerSection>
+      <CollapsibleCustomizerSection
+        title="Adaptive RAG"
+        description="Routing, retrieval, and optional planning controls for the next answer."
+        actions={(
+          <button
+            className="icon-button section-refresh-button"
+            type="button"
+            onClick={onRefreshModelDeployments}
+            title="Refresh AI model options"
+            aria-label="Refresh AI model options"
+          >
+            <IconOnly icon={RefreshCw} size={16} />
+          </button>
+        )}
+        collapsed={Boolean(collapsedSections.adaptive)}
+        onToggle={() => toggleCustomizerSection("adaptive")}
+      >
         <SelectField
           label="Route strategy"
           value={config.route}
@@ -1481,14 +1856,13 @@ function RagConfiguration({
           />
           Citation validator
         </label>
-      </section>
-      <section className="config-section runtime-section">
-        <header>
-          <div>
-            <h3>Generator target & prompts</h3>
-            <small>Generator settings are sent with each answer request. External providers execute when enabled in AI Models.</small>
-          </div>
-        </header>
+      </CollapsibleCustomizerSection>
+      <CollapsibleCustomizerSection
+        title="Generator target & prompts"
+        description="Generator settings are sent with each answer request. External providers execute when enabled in AI Models."
+        collapsed={Boolean(collapsedSections.generator)}
+        onToggle={() => toggleCustomizerSection("generator")}
+      >
         <div className="config-two-column">
           <SelectField
             label="Generator model"
@@ -1561,51 +1935,114 @@ function RagConfiguration({
             onChange={(event) => setConfig({ ...config, predefinedPrompt: event.target.value })}
           />
         </label>
+      </CollapsibleCustomizerSection>
+      <footer className="rag-customizer-actions">
         {configurationStatus && <p className="config-status-note">{configurationStatus}</p>}
-      </section>
+        <div className="config-actions-row">
+          <button
+            className="secondary-action danger-action"
+            type="button"
+            onClick={onDeleteConfiguration}
+            disabled={!config.chatConfigurationId}
+            title={config.chatConfigurationId ? "Delete selected configuration" : "Select a saved configuration to delete"}
+          >
+            <IconLabel icon={Trash2}>Delete</IconLabel>
+          </button>
+          <button className="secondary-action" type="button" onClick={onSaveConfiguration}><IconLabel icon={Plus}>Save as new</IconLabel></button>
+          <button className="primary-action" type="button" onClick={onUpdateConfiguration}><IconLabel icon={Save}>Save</IconLabel></button>
+        </div>
+      </footer>
+      </div>
     </aside>
   );
 }
-function KnowledgeBaseSummary({ selectedKnowledgeBase }) {
+
+function CollapsibleCustomizerSection({
+  title,
+  description = "",
+  actions = null,
+  collapsed = false,
+  onToggle = () => {},
+  children
+}) {
+  return (
+    <section className={`config-section runtime-section collapsible-config-section ${collapsed ? "is-collapsed" : ""}`}>
+      <header>
+        <div>
+          <h3>{title}</h3>
+          {description && <small>{description}</small>}
+        </div>
+        <div className="section-header-actions">
+          {actions}
+          <button
+            className="section-collapse-button"
+            type="button"
+            onClick={onToggle}
+            aria-label={`${collapsed ? "Expand" : "Collapse"} ${title}`}
+            aria-expanded={!collapsed}
+          >
+            <IconOnly icon={ChevronRight} size={16} />
+          </button>
+        </div>
+      </header>
+      {!collapsed && <div className="collapsible-config-body">{children}</div>}
+    </section>
+  );
+}
+
+function KnowledgeBaseSummary({ selectedKnowledgeBase, collapsed = false, onToggle = () => {} }) {
   const configuration = selectedKnowledgeBase ? knowledgeConfigurationFromRecord(selectedKnowledgeBase) : {};
   const queryEmbedding = selectedKnowledgeBase?.embedding_model || configuration.embedding_model || "Select a Knowledge Base";
   return (
-    <section className="route-summary-card knowledge-summary-card">
+    <section className={`route-summary-card knowledge-summary-card collapsible-config-section ${collapsed ? "is-collapsed" : ""}`}>
       <header>
         <div>
           <p className="eyebrow">Knowledge base</p>
-          <h3>{selectedKnowledgeBase?.name || "No Knowledge Base selected"}</h3>
+          <h3>{selectedKnowledgeBase?.name || "No Knowledge Base"}</h3>
         </div>
-        <span className={`status-pill ${selectedKnowledgeBase?.status === "ready" ? "status-completed" : ""}`}>
-          {selectedKnowledgeBase?.status || "Not selected"}
-        </span>
+        <div className="section-header-actions">
+          <span className={`status-pill ${selectedKnowledgeBase?.status === "ready" ? "status-completed" : ""}`}>
+            {selectedKnowledgeBase?.status || "Undefined"}
+          </span>
+          <button
+            className="section-collapse-button"
+            type="button"
+            onClick={onToggle}
+            aria-label={`${collapsed ? "Expand" : "Collapse"} Knowledge base`}
+            aria-expanded={!collapsed}
+          >
+            <IconOnly icon={ChevronRight} size={16} />
+          </button>
+        </div>
       </header>
-      <dl className="route-summary-list">
-        <div>
-          <dt>Knowledge base</dt>
-          <dd>{selectedKnowledgeBase ? selectedKnowledgeBase.name : "Not selected"}</dd>
-        </div>
-        <div>
-          <dt>Status</dt>
-          <dd>{selectedKnowledgeBase?.status || "-"}</dd>
-        </div>
-        <div className="route-summary-wide">
-          <dt>Description</dt>
-          <dd>{selectedKnowledgeBase?.description || "No description"}</dd>
-        </div>
-        <div>
-          <dt>Documents / chunks</dt>
-          <dd>{selectedKnowledgeBase ? `${selectedKnowledgeBase.document_count} / ${selectedKnowledgeBase.chunk_count}` : "-"}</dd>
-        </div>
-        <div>
-          <dt>Query embedding</dt>
-          <dd>{queryEmbedding}</dd>
-        </div>
-        <div>
-          <dt>Last indexed</dt>
-          <dd>{formatDateTime(selectedKnowledgeBase?.updated_at)}</dd>
-        </div>
-      </dl>
+      {!collapsed && (
+        <dl className="route-summary-list">
+          <div>
+            <dt>Knowledge base</dt>
+            <dd>{selectedKnowledgeBase ? selectedKnowledgeBase.name : "Not selected"}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>{selectedKnowledgeBase?.status || "-"}</dd>
+          </div>
+          <div className="route-summary-wide">
+            <dt>Description</dt>
+            <dd>{selectedKnowledgeBase?.description || "No description"}</dd>
+          </div>
+          <div>
+            <dt>Documents / chunks</dt>
+            <dd>{selectedKnowledgeBase ? `${selectedKnowledgeBase.document_count} / ${selectedKnowledgeBase.chunk_count}` : "-"}</dd>
+          </div>
+          <div>
+            <dt>Query embedding</dt>
+            <dd>{queryEmbedding}</dd>
+          </div>
+          <div>
+            <dt>Last indexed</dt>
+            <dd>{formatDateTime(selectedKnowledgeBase?.updated_at)}</dd>
+          </div>
+        </dl>
+      )}
     </section>
   );
 }
@@ -2763,7 +3200,7 @@ function AIModelsScreen({ confirmAction }) {
         {visibleDeployments.map((deployment) => (
           <article className="ai-model-card" key={deployment.id}>
             <header>
-              <div className={`ai-model-icon ${deployment.locality === "local" ? "local" : ""}`}>{providerLogoText(deployment)}</div>
+              <ProviderLogo item={deployment} className={`ai-model-icon ${deployment.locality === "local" ? "local" : ""}`} />
               <div>
                 <h2>{deployment.name}</h2>
                 <p>{providerLabelFromDeployment(deployment)}</p>
@@ -2839,7 +3276,7 @@ function AIModelsScreen({ confirmAction }) {
                       type="button"
                       onClick={() => applyTemplate(template)}
                     >
-                      <span className={`ai-provider-logo ${providerLogoClass(template)}`}>{providerLogoText(template)}</span>
+                      <ProviderLogo item={template} />
                       <strong>{template.provider_label || template.label}</strong>
                     </button>
                   ))}
@@ -2858,7 +3295,7 @@ function AIModelsScreen({ confirmAction }) {
               <header className="ai-model-detail-header">
                 <div>
                   <button className="text-action" type="button" onClick={() => setAddStage("select")}><IconLabel icon={ChevronLeft}>AI models</IconLabel></button>
-                  <h2><span className={`ai-provider-logo ${providerLogoClass(selectedTemplate)}`}>{providerLogoText(selectedTemplate)}</span>{selectedTemplate.provider_label || selectedTemplate.label}</h2>
+                  <h2><ProviderLogo item={selectedTemplate} />{selectedTemplate.provider_label || selectedTemplate.label}</h2>
                   <a href="https://docs.litellm.ai/docs/providers" target="_blank" rel="noreferrer">Learn more about AI models <IconOnly icon={ExternalLink} size={16} /></a>
                   <p className="ai-model-stepper">1. Select provider / 2. Provider details / 3. Add endpoint</p>
                 </div>
@@ -3551,6 +3988,90 @@ function SelectField({ label, value, options, onChange }) {
   );
 }
 
+function chatConfigurationOption(configuration = {}) {
+  const configurationCode = configurationCodeFromRecord(configuration);
+  const name = configuration.name || "Untitled configuration";
+  return {
+    value: configuration.id,
+    label: `${name} (${configurationCode})`,
+    title: `${name} (${configurationCode})`
+  };
+}
+
+function existingConfigurationCodes(configurations = []) {
+  return new Set(configurations.map((configuration) => configurationCodeFromRecord(configuration)).filter(Boolean));
+}
+
+function configurationCodeFromRecord(configuration = {}) {
+  return normalizeConfigurationCode(configuration.metadata?.configuration_id) || fallbackConfigurationCode(configuration.id);
+}
+
+function normalizeConfigurationCode(value) {
+  const text = String(value || "").trim();
+  if (text.length === CONFIGURATION_DISPLAY_ID_LENGTH && /^[A-Za-z0-9]+$/.test(text)) return text;
+  return "";
+}
+
+function createConfigurationCode(existingCodes = new Set()) {
+  const existing = existingCodes instanceof Set ? existingCodes : new Set(existingCodes);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    let value = "";
+    const bytes = new Uint8Array(CONFIGURATION_DISPLAY_ID_LENGTH);
+    if (globalThis.crypto?.getRandomValues) {
+      globalThis.crypto.getRandomValues(bytes);
+      value = Array.from(bytes, (byte) => CONFIGURATION_DISPLAY_ID_ALPHABET[byte % CONFIGURATION_DISPLAY_ID_ALPHABET.length]).join("");
+    } else {
+      value = Array.from({ length: CONFIGURATION_DISPLAY_ID_LENGTH }, () => (
+        CONFIGURATION_DISPLAY_ID_ALPHABET[Math.floor(Math.random() * CONFIGURATION_DISPLAY_ID_ALPHABET.length)]
+      )).join("");
+    }
+    if (!existing.has(value)) return value;
+  }
+  return fallbackConfigurationCode(`${Date.now()}-${Math.random()}`);
+}
+
+function fallbackConfigurationCode(value = "") {
+  let seed = 2166136261;
+  const text = String(value || "configuration");
+  for (let index = 0; index < text.length; index += 1) {
+    seed ^= text.charCodeAt(index);
+    seed = Math.imul(seed, 16777619) >>> 0;
+  }
+  let output = "";
+  for (let index = 0; index < CONFIGURATION_DISPLAY_ID_LENGTH; index += 1) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    output += CONFIGURATION_DISPLAY_ID_ALPHABET[seed % CONFIGURATION_DISPLAY_ID_ALPHABET.length];
+  }
+  return output;
+}
+
+function documentMatchesFilterQuery(document, query) {
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  const searchable = [
+    document.title,
+    document.text,
+    document.metadata?.filename,
+    document.metadata?.source_type,
+    document.metadata?.mime_type,
+    document.metadata?.uri,
+    document.id
+  ].filter(Boolean).join(" ").toLowerCase();
+  return searchable.includes(normalizedQuery);
+}
+
+function compactPreview(value, maxLength = 120) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text || "No preview available.";
+  return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}...`;
+}
+
+function formatInteger(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0";
+  return Math.max(0, Math.trunc(number)).toLocaleString();
+}
+
 function Metric({ label, value }) {
   return (
     <div className="metric">
@@ -3604,6 +4125,18 @@ function routeLabelFromMode(mode) {
   return "Adaptive";
 }
 
+function routeValues() {
+  return routes.map((route) => route.value);
+}
+
+function defaultRuntimeRoute() {
+  return routes[0]?.value || "Adaptive";
+}
+
+function retrievalModeLabels() {
+  return ["Hybrid", "BM25", "Dense"];
+}
+
 function messagesFromChatRecords(records = []) {
   let previousUserQuestion = "";
   return records.map((record) => {
@@ -3639,6 +4172,45 @@ function updateMessage(messages, messageId, patchOrUpdater) {
   });
 }
 
+function welcomeMessagesFromConfig(config = {}) {
+  const content = String(config.welcomeMessage || "").trim();
+  if (!content) return [];
+  return [
+    {
+      id: "welcome-message",
+      role: "assistant",
+      content,
+      metadata: {
+        welcome: true,
+        complexity_label: "ready",
+        retrieval_mode: "none",
+        top_k: 0,
+        latency_ms: 0
+      },
+      contexts: [],
+      status: "completed"
+    }
+  ];
+}
+
+function isWelcomeMessage(message = {}) {
+  return Boolean(message.metadata?.welcome);
+}
+
+function normalizeConversationStarters(starters) {
+  if (Array.isArray(starters)) {
+    return starters.map((starter) => String(starter || "").trim()).filter(Boolean);
+  }
+  return parseConversationStarters(starters);
+}
+
+function parseConversationStarters(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 function applyChatConfigurationToDraft(current, record) {
   return applyChatConfigurationSnapshotToDraft(current, chatConfigurationSnapshotFromRecord(record), record.id);
 }
@@ -3648,11 +4220,25 @@ function applyChatConfigurationSnapshotToDraft(current, snapshot = {}, configura
   const models = generatorModelsByProvider[provider] || generatorModelsByProvider.Local;
   const model = models.includes(snapshot.generator_model) ? snapshot.generator_model : models[0];
   const metadata = snapshot.metadata || {};
+  const route = routeValues().includes(metadata.route_strategy) ? metadata.route_strategy : current.route;
+  const retrievalMode = retrievalModeLabels().includes(metadata.retrieval_mode_label)
+    ? metadata.retrieval_mode_label
+    : retrievalModeLabel(metadata.retrieval_mode || current.retrievalMode);
   return {
     ...current,
     chatConfigurationId: configurationId || snapshot.id || "",
+    configurationCode: normalizeConfigurationCode(metadata.configuration_id) || fallbackConfigurationCode(configurationId || snapshot.id),
+    configurationCreatedAt: snapshot.created_at || "",
+    configurationUpdatedAt: snapshot.updated_at || "",
     configurationName: snapshot.name || defaultChatConfigurationDraft.configurationName,
     configurationDescription: snapshot.description || "",
+    route,
+    classifier: metadata.classifier || current.classifier,
+    classifierDeploymentId: metadata.classifier_deployment_id || "",
+    queryEmbeddingDeploymentId: metadata.query_embedding_deployment_id || "",
+    retrievalMode,
+    topK: clampNumber(metadata.top_k, current.topK || 6, 1, 50),
+    reranker: typeof metadata.reranker_enabled === "boolean" ? metadata.reranker_enabled : current.reranker,
     generatorDeploymentId: snapshot.generator_deployment_id || metadata.generator_deployment_id || defaultChatConfigurationDraft.generatorDeploymentId,
     fallbackDeploymentIds: Array.isArray(snapshot.fallback_deployment_ids) ? snapshot.fallback_deployment_ids : [],
     rerankerDeploymentId: snapshot.reranker_deployment_id || "",
@@ -3665,6 +4251,10 @@ function applyChatConfigurationSnapshotToDraft(current, snapshot = {}, configura
     responseStructure: responseStructures.includes(snapshot.response_structure) ? snapshot.response_structure : defaultChatConfigurationDraft.responseStructure,
     tone: chatbotTones.includes(snapshot.tone) ? snapshot.tone : defaultChatConfigurationDraft.tone,
     humorLevel: clampNumber(snapshot.humor_level, defaultChatConfigurationDraft.humorLevel, 0, 5),
+    welcomeMessage: metadata.welcome_message || defaultChatConfigurationDraft.welcomeMessage,
+    conversationStarters: Array.isArray(metadata.conversation_starters)
+      ? metadata.conversation_starters
+      : defaultChatConfigurationDraft.conversationStarters,
     systemPrompt: snapshot.system_prompt || "",
     predefinedPrompt: snapshot.predefined_prompt || ""
   };
@@ -3688,6 +4278,8 @@ function chatConfigurationSnapshotFromRecord(record = {}) {
     planner_deployment_id: record.planner_deployment_id || "",
     generation_parameters: record.generation_parameters || {},
     citations_enabled: record.citations_enabled,
+    created_at: record.created_at || "",
+    updated_at: record.updated_at || "",
     metadata: record.metadata || {}
   };
 }
@@ -3712,6 +4304,19 @@ function chatConfigurationPayloadFromDraft(config) {
     metadata: {
       runtime: "model-farm",
       actual_generator: "deployment",
+      route_strategy: config.route || defaultRuntimeRoute(),
+      route_mode: answerModeFromRoute(config.route || defaultRuntimeRoute()),
+      classifier: config.classifier || "Built-in trained classifier",
+      classifier_deployment_id: config.classifierDeploymentId || "",
+      planner_deployment_id: config.plannerDeploymentId || "",
+      query_embedding_deployment_id: config.queryEmbeddingDeploymentId || "",
+      retrieval_mode: retrievalModeValue(config.retrievalMode),
+      retrieval_mode_label: config.retrievalMode || "Hybrid",
+      top_k: clampNumber(config.topK, 6, 1, 50),
+      reranker_enabled: Boolean(config.reranker),
+      configuration_id: normalizeConfigurationCode(config.configurationCode) || createConfigurationCode(),
+      welcome_message: config.welcomeMessage || defaultChatConfigurationDraft.welcomeMessage,
+      conversation_starters: normalizeConversationStarters(config.conversationStarters),
       generator_deployment_id: config.generatorDeploymentId || defaultChatConfigurationDraft.generatorDeploymentId
     }
   };
@@ -3900,6 +4505,44 @@ function providerTemplatesForTab(templates, tab, query) {
     seen.add(key);
     return true;
   });
+}
+
+function ProviderLogo({ item, className = "" }) {
+  const source = providerLogoSource(item);
+  const label = providerLabelFromDeployment(item);
+  const classes = [
+    "ai-provider-logo",
+    providerLogoClass(item),
+    className,
+    source ? "has-image" : ""
+  ].filter(Boolean).join(" ");
+  return (
+    <span className={classes} role="img" aria-label={`${label} logo`} title={label}>
+      {source ? <img src={source} alt="" aria-hidden="true" /> : providerLogoText(item)}
+    </span>
+  );
+}
+
+function providerLogoSource(item) {
+  if (item?.locality === "local" || providerLabelFromDeployment(item).toLowerCase().includes("local")) {
+    return "";
+  }
+  const provider = String(item?.provider || "").toLowerCase();
+  const templateId = String(item?.metadata?.template_id || item?.id || "").toLowerCase();
+  const model = String(item?.model || "").toLowerCase();
+  if (templateId === "openai-compatible" || provider === "custom") return `${AI_LOGOS_PATH}openrouter.svg`;
+  if (provider === "openai") return `${AI_LOGOS_PATH}openai.svg`;
+  if (provider === "azure") return `${AI_LOGOS_PATH}azure-openai.svg`;
+  if (provider === "bedrock") return `${AI_LOGOS_PATH}${model.includes("nova") ? "amazon nova-color.svg" : "bedrock-color.svg"}`;
+  if (provider === "cohere") return `${AI_LOGOS_PATH}cohere-color.svg`;
+  if (provider === "huggingface") return `${AI_LOGOS_PATH}hugging-face.svg`;
+  if (provider === "mistral") return `${AI_LOGOS_PATH}mistral-color.svg`;
+  if (provider === "gemini") return `${AI_LOGOS_PATH}google-gemini.svg`;
+  if (provider === "anthropic") return `${AI_LOGOS_PATH}anthropic.svg`;
+  if (provider === "databricks") return `${AI_LOGOS_PATH}databricks.svg`;
+  if (provider === "ai21") return `${AI_LOGOS_PATH}ai21.svg`;
+  if (provider === "watsonx") return `${AI_LOGOS_PATH}IBM_watsonx_logo.svg`;
+  return "";
 }
 
 function providerLogoText(item) {

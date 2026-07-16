@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
 import json
+import secrets
+import string
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,6 +13,9 @@ from aragbiz.knowledge import KnowledgeProcessingError, utc_now
 ChatSection = Literal["recents", "library"]
 ChatRole = Literal["user", "assistant"]
 ChatMessageStatus = Literal["pending", "streaming", "completed", "failed", "cancelled"]
+CONFIGURATION_DISPLAY_ID_KEY = "configuration_id"
+CONFIGURATION_DISPLAY_ID_LENGTH = 12
+CONFIGURATION_DISPLAY_ID_ALPHABET = string.ascii_letters + string.digits
 
 
 @dataclass
@@ -269,6 +274,7 @@ class ChatService:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> ChatConfigurationRecord:
         self.repository.initialize()
+        base_metadata = _ensure_configuration_display_id(metadata or {}, self.repository.list_configurations())
         return self.repository.create_configuration(
             _clean_title(name),
             description=description,
@@ -280,7 +286,7 @@ class ChatService:
             system_prompt=system_prompt,
             predefined_prompt=predefined_prompt,
             metadata={
-                **(metadata or {}),
+                **base_metadata,
                 "generator_deployment_id": generator_deployment_id,
                 "fallback_deployment_ids": list(fallback_deployment_ids or []),
                 "reranker_deployment_id": reranker_deployment_id,
@@ -292,18 +298,38 @@ class ChatService:
 
     def list_configurations(self) -> List[ChatConfigurationRecord]:
         self.repository.initialize()
-        return self.repository.list_configurations()
+        return self._list_configurations_with_display_ids()
 
     def get_configuration(self, configuration_id: str) -> ChatConfigurationRecord:
         self.repository.initialize()
-        return self.repository.get_configuration(configuration_id)
+        record = self.repository.get_configuration(configuration_id)
+        metadata = _ensure_configuration_display_id(record.metadata, self.repository.list_configurations(), exclude_id=configuration_id)
+        if metadata != record.metadata:
+            record = self.repository.update_configuration(configuration_id, metadata=metadata)
+        return record
 
     def default_configuration(self) -> ChatConfigurationRecord:
         self.repository.initialize()
-        configurations = self.repository.list_configurations()
+        configurations = self._list_configurations_with_display_ids()
         if configurations:
             return configurations[0]
-        return self.repository.create_configuration(**_default_chat_configuration_payload())
+        return self.create_configuration(**_default_chat_configuration_payload())
+
+    def _list_configurations_with_display_ids(self) -> List[ChatConfigurationRecord]:
+        configurations = self.repository.list_configurations()
+        used: set[str] = set()
+        updated = False
+        for record in configurations:
+            metadata = dict(record.metadata)
+            current = metadata.get(CONFIGURATION_DISPLAY_ID_KEY)
+            if not _is_configuration_display_id(current) or str(current) in used:
+                metadata[CONFIGURATION_DISPLAY_ID_KEY] = _new_configuration_display_id(used)
+                self.repository.update_configuration(record.id, metadata=metadata)
+                updated = True
+            used.add(str(metadata[CONFIGURATION_DISPLAY_ID_KEY]))
+        if updated:
+            return self.repository.list_configurations()
+        return configurations
 
     def update_configuration(
         self,
@@ -342,6 +368,11 @@ class ChatService:
         for key, value in updates.items():
             if value is not None:
                 model_metadata[key] = value
+        model_metadata = _ensure_configuration_display_id(
+            model_metadata,
+            self.repository.list_configurations(),
+            exclude_id=configuration_id,
+        )
         return self.repository.update_configuration(
             configuration_id,
             name=_clean_title(name) if name is not None else None,
@@ -1248,6 +1279,35 @@ def _clean_humor_level(value: int) -> int:
     return max(0, min(parsed, 5))
 
 
+def _is_configuration_display_id(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == CONFIGURATION_DISPLAY_ID_LENGTH and value.isalnum()
+
+
+def _new_configuration_display_id(existing: set[str]) -> str:
+    while True:
+        value = "".join(secrets.choice(CONFIGURATION_DISPLAY_ID_ALPHABET) for _ in range(CONFIGURATION_DISPLAY_ID_LENGTH))
+        if value not in existing:
+            return value
+
+
+def _ensure_configuration_display_id(
+    metadata: Dict[str, Any],
+    configurations: List[ChatConfigurationRecord],
+    *,
+    exclude_id: str = "",
+) -> Dict[str, Any]:
+    normalized = dict(metadata or {})
+    existing = {
+        str(record.metadata.get(CONFIGURATION_DISPLAY_ID_KEY))
+        for record in configurations
+        if record.id != exclude_id and _is_configuration_display_id(record.metadata.get(CONFIGURATION_DISPLAY_ID_KEY))
+    }
+    current = normalized.get(CONFIGURATION_DISPLAY_ID_KEY)
+    if not _is_configuration_display_id(current) or str(current) in existing:
+        normalized[CONFIGURATION_DISPLAY_ID_KEY] = _new_configuration_display_id(existing)
+    return normalized
+
+
 def _clean_message_status(value: Optional[str]) -> ChatMessageStatus:
     status = str(value or "completed")
     if status in {"pending", "streaming", "completed", "failed", "cancelled"}:
@@ -1287,6 +1347,7 @@ def _default_chat_configuration_payload() -> Dict[str, Any]:
         "system_prompt": "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
         "predefined_prompt": "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.",
         "metadata": {
+            CONFIGURATION_DISPLAY_ID_KEY: "DefaultCfg01",
             "runtime": "local-generator",
             "actual_generator": "extractive",
             "generator_deployment_id": "model-local-extractive",

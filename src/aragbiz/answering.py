@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple
 
 from aragbiz.generation import (
@@ -33,6 +33,7 @@ class AnsweringError(ValueError):
 class AnswerOptions:
     mode: AnswerMode = "adaptive"
     knowledge_base_id: Optional[str] = None
+    document_ids: List[str] = field(default_factory=list)
     retrieval_mode: RetrievalMode = "hybrid"
     top_k: int = 4
     chat_configuration: Optional[Dict[str, Any]] = None
@@ -51,6 +52,7 @@ class PreparedAnswer:
     complexity_label: ComplexityLabel
     route_level: RouteLevel
     knowledge_base: Optional[KnowledgeBaseRecord]
+    document_ids: List[str]
     contexts: List[RetrievedContext]
     retrieval_mode: str
     retrieval_used: bool
@@ -150,6 +152,7 @@ class AdaptiveRAGAnswerService:
         options = options or AnswerOptions()
         start = time.perf_counter()
         top_k = max(1, min(int(options.top_k), 50))
+        selected_document_ids = _normalize_document_ids(options.document_ids)
         chat_configuration = dict(options.chat_configuration or {})
         complexity_label = self.router.classifier.predict(query)
         route_level = self._resolve_route(options.mode, complexity_label)
@@ -160,6 +163,10 @@ class AdaptiveRAGAnswerService:
             raise AnsweringError("Select a knowledge base before using L2 Simple RAG.")
         if route_level == "l3_complex_rag" and knowledge_base is None:
             raise AnsweringError("Select a knowledge base before using L3 Complex RAG.")
+        if route_level in {"l2_simple_rag", "l3_complex_rag"}:
+            selected_document_ids = self._validate_document_filter(knowledge_base, selected_document_ids)
+        else:
+            selected_document_ids = []
 
         trace_steps = [
             _trace_step("Chat input", "completed", query, {"characters": len(query)}),
@@ -191,6 +198,7 @@ class AdaptiveRAGAnswerService:
                 knowledge_base_id=knowledge_base.id,
                 top_k=top_k,
                 mode=options.retrieval_mode,
+                document_ids=selected_document_ids,
             )
             trace_steps.append(
                 _trace_step(
@@ -202,6 +210,8 @@ class AdaptiveRAGAnswerService:
                         "knowledge_base_name": knowledge_base.name,
                         "retrieval_mode": options.retrieval_mode,
                         "top_k": top_k,
+                        "document_filter_ids": selected_document_ids,
+                        "document_filter_count": len(selected_document_ids),
                         "context_ids": [context.document.id for context in contexts],
                     },
                 )
@@ -223,6 +233,7 @@ class AdaptiveRAGAnswerService:
                 knowledge_base=knowledge_base,
                 top_k=top_k,
                 mode=options.retrieval_mode,
+                document_ids=selected_document_ids,
             )
             trace_steps.append(
                 _trace_step(
@@ -233,6 +244,8 @@ class AdaptiveRAGAnswerService:
                         "knowledge_base_id": knowledge_base.id,
                         "knowledge_base_name": knowledge_base.name,
                         "retrieval_mode": options.retrieval_mode,
+                        "document_filter_ids": selected_document_ids,
+                        "document_filter_count": len(selected_document_ids),
                         "retrieval_steps": retrieval_steps,
                     },
                 )
@@ -313,6 +326,7 @@ class AdaptiveRAGAnswerService:
             complexity_label=complexity_label,
             route_level=route_level,
             knowledge_base=knowledge_base,
+            document_ids=selected_document_ids,
             contexts=contexts,
             retrieval_mode=retrieval_mode,
             retrieval_used=retrieval_used,
@@ -424,6 +438,8 @@ class AdaptiveRAGAnswerService:
             "retrieval_used": prepared.retrieval_used,
             "retrieval_mode": prepared.retrieval_mode,
             "top_k": prepared.top_k,
+            "document_filter_ids": prepared.document_ids,
+            "document_filter_count": len(prepared.document_ids),
             "multi_step": prepared.route_level == "l3_complex_rag",
             "decomposed_queries": prepared.decomposed_queries,
             "retrieval_steps": prepared.retrieval_steps,
@@ -466,6 +482,7 @@ class AdaptiveRAGAnswerService:
         knowledge_base: KnowledgeBaseRecord,
         top_k: int,
         mode: RetrievalMode,
+        document_ids: Optional[List[str]] = None,
     ) -> Tuple[List[RetrievedContext], List[Dict[str, Any]], Dict[str, Any]]:
         per_step_top_k = max(2, min(top_k, 8))
         candidates: Dict[str, Dict[str, Any]] = {}
@@ -478,6 +495,7 @@ class AdaptiveRAGAnswerService:
                 knowledge_base_id=knowledge_base.id,
                 top_k=per_step_top_k,
                 mode=mode,
+                document_ids=document_ids,
             )
             total_retrieved += len(step_contexts)
             retrieval_steps.append(
@@ -486,6 +504,7 @@ class AdaptiveRAGAnswerService:
                     "subquery_index": subquery_index,
                     "query": subquery,
                     "retrieved_count": len(step_contexts),
+                    "document_filter_count": len(document_ids or []),
                     "context_ids": [context.document.id for context in step_contexts],
                 }
             )
@@ -572,6 +591,21 @@ class AdaptiveRAGAnswerService:
             "selected_context_ids": [context.document.id for context in selected],
         }
         return selected, retrieval_steps, aggregation_summary
+
+    def _validate_document_filter(
+        self,
+        knowledge_base: Optional[KnowledgeBaseRecord],
+        document_ids: List[str],
+    ) -> List[str]:
+        if not document_ids:
+            return []
+        if knowledge_base is None:
+            return []
+        available = {document.id for document in self.knowledge_service.list_documents(knowledge_base.id)}
+        selected = [document_id for document_id in document_ids if document_id in available]
+        if not selected:
+            raise AnsweringError("Selected document filter does not match any document in the knowledge base.")
+        return selected
 
     def _resolve_route(self, mode: AnswerMode, complexity_label: ComplexityLabel) -> RouteLevel:
         if mode == "direct":
@@ -661,17 +695,31 @@ class KnowledgeBaseRetriever:
         self.bm25_weight = bm25_weight
         self.dense_weight = dense_weight
 
-    def search(self, query: str, knowledge_base_id: str, top_k: int = 4, mode: RetrievalMode = "hybrid") -> List[RetrievedContext]:
+    def search(
+        self,
+        query: str,
+        knowledge_base_id: str,
+        top_k: int = 4,
+        mode: RetrievalMode = "hybrid",
+        document_ids: Optional[List[str]] = None,
+    ) -> List[RetrievedContext]:
+        document_ids = _normalize_document_ids(document_ids)
         if mode == "bm25":
-            return self._bm25_search(query, knowledge_base_id, top_k)
+            return self._bm25_search(query, knowledge_base_id, top_k, document_ids=document_ids)
         if mode == "dense":
-            return self._dense_search(query, knowledge_base_id, top_k)
+            return self._dense_search(query, knowledge_base_id, top_k, document_ids=document_ids)
         if mode == "hybrid":
-            return self._hybrid_search(query, knowledge_base_id, top_k)
+            return self._hybrid_search(query, knowledge_base_id, top_k, document_ids=document_ids)
         raise AnsweringError(f"Unsupported retrieval mode: {mode}")
 
-    def _bm25_search(self, query: str, knowledge_base_id: str, top_k: int) -> List[RetrievedContext]:
-        chunks = self.knowledge_service.list_chunks(knowledge_base_id, limit=10000)
+    def _bm25_search(
+        self,
+        query: str,
+        knowledge_base_id: str,
+        top_k: int,
+        document_ids: Optional[List[str]] = None,
+    ) -> List[RetrievedContext]:
+        chunks = self._filtered_chunks(knowledge_base_id, document_ids)
         if not chunks:
             return []
         retriever = InMemoryHybridRetriever(
@@ -681,25 +729,42 @@ class KnowledgeBaseRetriever:
         )
         return retriever.search(query, top_k=min(top_k, len(chunks)), mode="bm25")
 
-    def _dense_search(self, query: str, knowledge_base_id: str, top_k: int) -> List[RetrievedContext]:
+    def _dense_search(
+        self,
+        query: str,
+        knowledge_base_id: str,
+        top_k: int,
+        document_ids: Optional[List[str]] = None,
+    ) -> List[RetrievedContext]:
         if not self.knowledge_service.list_chunks(knowledge_base_id, limit=1):
             return []
         query_embedding, embedding_model = self.knowledge_service.embed_query(knowledge_base_id, query)
+        document_id_set = set(_normalize_document_ids(document_ids))
         matches = self.knowledge_service.repository.search_chunks_by_embedding(
             knowledge_base_id,
             query_embedding,
-            limit=top_k,
+            limit=10000 if document_id_set else top_k,
         )
         contexts: List[RetrievedContext] = []
-        for rank, (chunk, score) in enumerate(matches, start=1):
+        for chunk, score in matches:
+            if document_id_set and chunk.document_id not in document_id_set:
+                continue
             document = _document_from_chunk(chunk, {"query_embedding_model": embedding_model})
-            contexts.append(RetrievedContext(document=document, score=score, rank=rank, mode="dense"))
+            contexts.append(RetrievedContext(document=document, score=score, rank=len(contexts) + 1, mode="dense"))
+            if len(contexts) >= top_k:
+                break
         return contexts
 
-    def _hybrid_search(self, query: str, knowledge_base_id: str, top_k: int) -> List[RetrievedContext]:
+    def _hybrid_search(
+        self,
+        query: str,
+        knowledge_base_id: str,
+        top_k: int,
+        document_ids: Optional[List[str]] = None,
+    ) -> List[RetrievedContext]:
         candidate_limit = max(top_k * 4, 25)
-        bm25_contexts = self._bm25_search(query, knowledge_base_id, candidate_limit)
-        dense_contexts = self._dense_search(query, knowledge_base_id, candidate_limit)
+        bm25_contexts = self._bm25_search(query, knowledge_base_id, candidate_limit, document_ids=document_ids)
+        dense_contexts = self._dense_search(query, knowledge_base_id, candidate_limit, document_ids=document_ids)
         bm25_scores = {context.document.id: context.score for context in bm25_contexts}
         dense_scores = {context.document.id: context.score for context in dense_contexts}
         documents = {context.document.id: context.document for context in [*bm25_contexts, *dense_contexts]}
@@ -714,6 +779,13 @@ class KnowledgeBaseRetriever:
             RetrievedContext(document=document, score=score, rank=rank, mode="hybrid")
             for rank, (score, document) in enumerate(ranked[:top_k], start=1)
         ]
+
+    def _filtered_chunks(self, knowledge_base_id: str, document_ids: Optional[List[str]] = None) -> List[StoredKnowledgeChunk]:
+        chunks = self.knowledge_service.list_chunks(knowledge_base_id, limit=10000)
+        document_id_set = set(_normalize_document_ids(document_ids))
+        if not document_id_set:
+            return chunks
+        return [chunk for chunk in chunks if chunk.document_id in document_id_set]
 
 
 def _document_from_chunk(chunk: StoredKnowledgeChunk, extra_metadata: Optional[Dict[str, Any]] = None) -> Document:
@@ -733,6 +805,18 @@ def _document_from_chunk(chunk: StoredKnowledgeChunk, extra_metadata: Optional[D
             "has_embedding": chunk.has_embedding,
         },
     )
+
+
+def _normalize_document_ids(document_ids: Optional[List[str]]) -> List[str]:
+    selected: List[str] = []
+    seen: set[str] = set()
+    for document_id in document_ids or []:
+        cleaned = str(document_id or "").strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        selected.append(cleaned)
+    return selected
 
 
 def _normalize_scores(scores: Dict[str, float]) -> Dict[str, float]:

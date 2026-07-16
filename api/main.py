@@ -114,6 +114,7 @@ class AnswerRequest(BaseModel):
     question: str = Field(..., min_length=1)
     conversation_id: Optional[str] = None
     knowledge_base_id: Optional[str] = None
+    document_ids: List[str] = Field(default_factory=list)
     chat_configuration_id: Optional[str] = None
     chat_configuration: Optional[ChatConfigurationRequest] = None
     mode: Literal["adaptive", "direct", "simple_rag", "complex_rag"] = "adaptive"
@@ -650,6 +651,7 @@ def answer(request: AnswerRequest, authorization: str = Header(default="")) -> A
             AnswerOptions(
                 mode=request.mode,
                 knowledge_base_id=request.knowledge_base_id,
+                document_ids=request.document_ids,
                 retrieval_mode=request.retrieval_mode,
                 top_k=request.top_k,
                 chat_configuration=chat_configuration,
@@ -794,6 +796,7 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                 AnswerOptions(
                     mode=request.mode,
                     knowledge_base_id=request.knowledge_base_id,
+                    document_ids=request.document_ids,
                     retrieval_mode=request.retrieval_mode,
                     top_k=request.top_k,
                     chat_configuration=chat_configuration,
