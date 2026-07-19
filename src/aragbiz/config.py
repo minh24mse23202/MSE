@@ -28,7 +28,7 @@ class AppConfig:
     chat_json_store: str = "data/knowledge/chat_store.json"
     evaluation_json_store: str = "data/knowledge/evaluation_store.json"
     model_farm_json_store: str = "data/knowledge/model_farm_store.json"
-    model_secret_key: str = "aragbiz-local-development-secret"
+    model_secret_key: str = ""
     auth_json_store: str = "data/knowledge/auth_store.json"
     jobs_json_store: str = "data/knowledge/jobs_store.json"
     blob_store: str = "data/uploads"
@@ -95,7 +95,7 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
         ),
         model_secret_key=os.getenv(
             "ARAGBIZ_MODEL_SECRET_KEY",
-            raw.get("model_farm", {}).get("secret_key", raw.get("auth", {}).get("jwt_secret", AppConfig.model_secret_key)),
+            raw.get("model_farm", {}).get("secret_key", AppConfig.model_secret_key),
         ),
         auth_json_store=os.getenv(
             "ARAGBIZ_AUTH_STORE",

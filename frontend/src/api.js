@@ -11,6 +11,22 @@ export function setAuthToken(token) {
   else window.localStorage.removeItem(AUTH_STORAGE_KEY);
 }
 
+export function hasAuthToken() {
+  return Boolean(window.localStorage.getItem(AUTH_STORAGE_KEY));
+}
+
+export function clearAuthToken() {
+  setAuthToken("");
+}
+
+export async function getCurrentUser() {
+  const response = await fetch(`${API_BASE_URL}/auth/me`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Authentication check failed");
+  return response.json();
+}
+
 export async function login(payload) {
   const response = await fetch(`${API_BASE_URL}/auth/login`, {
     method: "POST",
@@ -38,7 +54,7 @@ export async function signup(payload) {
 export async function askQuestion(question, options = {}) {
   const response = await fetch(`${API_BASE_URL}/answer`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       question,
       conversation_id: options.conversationId || null,
@@ -137,7 +153,7 @@ export async function listChatConversations({ query = "", section = "" } = {}) {
 export async function createChatConversation(payload = {}) {
   const response = await fetch(`${API_BASE_URL}/chat/conversations`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload)
   });
   await assertOk(response, "Create chat conversation failed");
@@ -147,7 +163,7 @@ export async function createChatConversation(payload = {}) {
 export async function updateChatConversation(conversationId, payload) {
   const response = await fetch(`${API_BASE_URL}/chat/conversations/${conversationId}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload)
   });
   await assertOk(response, "Update chat conversation failed");
@@ -156,7 +172,8 @@ export async function updateChatConversation(conversationId, payload) {
 
 export async function deleteChatConversation(conversationId) {
   const response = await fetch(`${API_BASE_URL}/chat/conversations/${conversationId}`, {
-    method: "DELETE"
+    method: "DELETE",
+    headers: authHeaders()
   });
   await assertOk(response, "Delete chat conversation failed");
   return response.json();
@@ -171,7 +188,9 @@ export async function listChatMessages(conversationId) {
 }
 
 export async function listChatConfigurations() {
-  const response = await fetch(`${API_BASE_URL}/chat/configurations`);
+  const response = await fetch(`${API_BASE_URL}/chat/configurations`, {
+    headers: authHeaders()
+  });
   await assertOk(response, "Chat configurations request failed");
   return response.json();
 }
@@ -179,7 +198,7 @@ export async function listChatConfigurations() {
 export async function createChatConfiguration(payload) {
   const response = await fetch(`${API_BASE_URL}/chat/configurations`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload)
   });
   await assertOk(response, "Create chat configuration failed");
@@ -189,7 +208,7 @@ export async function createChatConfiguration(payload) {
 export async function updateChatConfiguration(configurationId, payload) {
   const response = await fetch(`${API_BASE_URL}/chat/configurations/${configurationId}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload)
   });
   await assertOk(response, "Update chat configuration failed");
@@ -198,7 +217,8 @@ export async function updateChatConfiguration(configurationId, payload) {
 
 export async function deleteChatConfiguration(configurationId) {
   const response = await fetch(`${API_BASE_URL}/chat/configurations/${configurationId}`, {
-    method: "DELETE"
+    method: "DELETE",
+    headers: authHeaders()
   });
   await assertOk(response, "Delete chat configuration failed");
   return response.json();
@@ -224,6 +244,64 @@ export async function listModelDeployments({ capability = "", enabled = "" } = {
   return response.json();
 }
 
+export async function listModelConnections({ provider = "", enabled = "" } = {}) {
+  const params = new URLSearchParams();
+  if (provider) params.set("provider", provider);
+  if (enabled !== "") params.set("enabled", String(enabled));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(`${API_BASE_URL}/model-farm/connections${suffix}`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Model connections request failed");
+  return response.json();
+}
+
+export async function createModelConnection(payload) {
+  const response = await fetch(`${API_BASE_URL}/model-farm/connections`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload)
+  });
+  await assertOk(response, "Create model connection failed");
+  return response.json();
+}
+
+export async function updateModelConnection(connectionId, payload) {
+  const response = await fetch(`${API_BASE_URL}/model-farm/connections/${connectionId}`, {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload)
+  });
+  await assertOk(response, "Update model connection failed");
+  return response.json();
+}
+
+export async function deleteModelConnection(connectionId) {
+  const response = await fetch(`${API_BASE_URL}/model-farm/connections/${connectionId}`, {
+    method: "DELETE",
+    headers: authHeaders()
+  });
+  await assertOk(response, "Delete model connection failed");
+  return response.json();
+}
+
+export async function testModelConnection(connectionId) {
+  const response = await fetch(`${API_BASE_URL}/model-farm/connections/${connectionId}/test`, {
+    method: "POST",
+    headers: authHeaders()
+  });
+  await assertOk(response, "Test model connection failed");
+  return response.json();
+}
+
+export async function listConnectionModels(connectionId) {
+  const response = await fetch(`${API_BASE_URL}/model-farm/connections/${connectionId}/available-models`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Available models request failed");
+  return response.json();
+}
+
 export async function createModelDeploymentFromTemplate(payload) {
   const response = await fetch(`${API_BASE_URL}/model-farm/deployments/from-template`, {
     method: "POST",
@@ -241,6 +319,16 @@ export async function updateModelDeployment(deploymentId, payload) {
     body: JSON.stringify(payload)
   });
   await assertOk(response, "Update model deployment failed");
+  return response.json();
+}
+
+export async function testModelDeploymentDraft(payload) {
+  const response = await fetch(`${API_BASE_URL}/model-farm/deployments/test-draft`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload)
+  });
+  await assertOk(response, "Test endpoint failed");
   return response.json();
 }
 
@@ -292,7 +380,9 @@ export async function listJobs({ status = "", limit = 100 } = {}) {
 }
 
 export async function listEvaluationRuns() {
-  const response = await fetch(`${API_BASE_URL}/evaluation/runs`);
+  const response = await fetch(`${API_BASE_URL}/evaluation/runs`, {
+    headers: authHeaders()
+  });
   await assertOk(response, "Evaluation runs request failed");
   return response.json();
 }
@@ -300,7 +390,7 @@ export async function listEvaluationRuns() {
 export async function createEvaluationRun(payload) {
   const response = await fetch(`${API_BASE_URL}/evaluation/runs`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload)
   });
   await assertOk(response, "Create evaluation run failed");
@@ -308,20 +398,25 @@ export async function createEvaluationRun(payload) {
 }
 
 export async function getEvaluationRun(runId) {
-  const response = await fetch(`${API_BASE_URL}/evaluation/runs/${runId}`);
+  const response = await fetch(`${API_BASE_URL}/evaluation/runs/${runId}`, {
+    headers: authHeaders()
+  });
   await assertOk(response, "Evaluation run request failed");
   return response.json();
 }
 
 export async function listEvaluationCases(runId) {
-  const response = await fetch(`${API_BASE_URL}/evaluation/runs/${runId}/cases`);
+  const response = await fetch(`${API_BASE_URL}/evaluation/runs/${runId}/cases`, {
+    headers: authHeaders()
+  });
   await assertOk(response, "Evaluation cases request failed");
   return response.json();
 }
 
 export async function deleteEvaluationRun(runId) {
   const response = await fetch(`${API_BASE_URL}/evaluation/runs/${runId}`, {
-    method: "DELETE"
+    method: "DELETE",
+    headers: authHeaders()
   });
   await assertOk(response, "Delete evaluation run failed");
   return response.json();
@@ -335,7 +430,7 @@ export function getRagxplainViewerUrl(runId) {
 export async function submitFeedback(payload) {
   const response = await fetch(`${API_BASE_URL}/feedback`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload)
   });
   await assertOk(response, "Feedback request failed");
@@ -343,7 +438,9 @@ export async function submitFeedback(payload) {
 }
 
 export async function listKnowledgeBases() {
-  const response = await fetch(`${API_BASE_URL}/knowledge-bases`);
+  const response = await fetch(`${API_BASE_URL}/knowledge-bases`, {
+    headers: authHeaders()
+  });
   await assertOk(response, "Knowledge base request failed");
   return response.json();
 }
@@ -351,7 +448,7 @@ export async function listKnowledgeBases() {
 export async function createKnowledgeBase(payload) {
   const response = await fetch(`${API_BASE_URL}/knowledge-bases`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload)
   });
   await assertOk(response, "Create knowledge base failed");
@@ -361,7 +458,7 @@ export async function createKnowledgeBase(payload) {
 export async function updateKnowledgeBase(knowledgeBaseId, payload) {
   const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload)
   });
   await assertOk(response, "Update knowledge base failed");
@@ -370,7 +467,8 @@ export async function updateKnowledgeBase(knowledgeBaseId, payload) {
 
 export async function deleteKnowledgeBase(knowledgeBaseId) {
   const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}`, {
-    method: "DELETE"
+    method: "DELETE",
+    headers: authHeaders()
   });
   await assertOk(response, "Delete knowledge base failed");
   return response.json();
@@ -381,6 +479,7 @@ export async function uploadKnowledgeSource(knowledgeBaseId, files) {
   Array.from(files).forEach((file) => body.append("files", file));
   const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/sources/upload`, {
     method: "POST",
+    headers: authHeaders(),
     body
   });
   await assertOk(response, "Upload source failed");
@@ -390,7 +489,7 @@ export async function uploadKnowledgeSource(knowledgeBaseId, files) {
 export async function ingestWebsiteSource(knowledgeBaseId, url) {
   const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/sources/website`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ url })
   });
   await assertOk(response, "Website ingestion failed");
@@ -399,32 +498,41 @@ export async function ingestWebsiteSource(knowledgeBaseId, url) {
 
 export async function reindexKnowledgeBase(knowledgeBaseId) {
   const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/reindex`, {
-    method: "POST"
+    method: "POST",
+    headers: authHeaders()
   });
   await assertOk(response, "Reindex failed");
   return response.json();
 }
 
 export async function listKnowledgeDocuments(knowledgeBaseId) {
-  const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/documents`);
+  const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/documents`, {
+    headers: authHeaders()
+  });
   await assertOk(response, "Documents request failed");
   return response.json();
 }
 
 export async function listKnowledgeChunks(knowledgeBaseId, limit = 1000) {
-  const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/chunks?limit=${limit}`);
+  const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/chunks?limit=${limit}`, {
+    headers: authHeaders()
+  });
   await assertOk(response, "Chunks request failed");
   return response.json();
 }
 
 export async function getKnowledgeProcessingTrace(knowledgeBaseId) {
-  const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/processing-trace`);
+  const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/processing-trace`, {
+    headers: authHeaders()
+  });
   await assertOk(response, "Processing trace request failed");
   return response.json();
 }
 
 export async function listKnowledgeIndexVersions(knowledgeBaseId) {
-  const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/index-versions`);
+  const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/index-versions`, {
+    headers: authHeaders()
+  });
   await assertOk(response, "Index versions request failed");
   return response.json();
 }
@@ -432,7 +540,7 @@ export async function listKnowledgeIndexVersions(knowledgeBaseId) {
 export async function createKnowledgeDocument(knowledgeBaseId, payload) {
   const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/documents`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload)
   });
   await assertOk(response, "Create document failed");
@@ -442,7 +550,7 @@ export async function createKnowledgeDocument(knowledgeBaseId, payload) {
 export async function updateKnowledgeDocument(knowledgeBaseId, documentId, payload) {
   const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/documents/${documentId}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload)
   });
   await assertOk(response, "Update document failed");
@@ -451,7 +559,8 @@ export async function updateKnowledgeDocument(knowledgeBaseId, documentId, paylo
 
 export async function deleteKnowledgeDocument(knowledgeBaseId, documentId) {
   const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/documents/${documentId}`, {
-    method: "DELETE"
+    method: "DELETE",
+    headers: authHeaders()
   });
   await assertOk(response, "Delete document failed");
   return response.json();

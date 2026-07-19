@@ -6,7 +6,10 @@ import socket
 import sys
 import time
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Dict
+
+from dotenv import load_dotenv
 
 from aragbiz.config import load_config
 from aragbiz.factory import (
@@ -85,6 +88,7 @@ def main() -> None:
     parser.add_argument("--poll-seconds", type=float, default=1.5)
     parser.add_argument("--quiet", action="store_true", help="Suppress idle/startup status messages.")
     args = parser.parse_args()
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
     config = load_config()
     farm = build_model_farm_service(config)
     gateway = build_model_gateway(config, model_farm_service=farm)

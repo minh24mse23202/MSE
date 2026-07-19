@@ -89,7 +89,7 @@ def build_model_farm_service(config: Optional[AppConfig] = None) -> ModelFarmSer
     return ModelFarmService(
         repository,
         global_monthly_budget_usd=config.global_model_budget_usd,
-        secret_key=config.model_secret_key or config.jwt_secret,
+        secret_key=config.model_secret_key,
     )
 
 

@@ -13,6 +13,7 @@ build/
 *.egg-info/
 .env
 .env.*
+!.env.example
 data/raw/*
 data/processed/*
 data/artifacts/*

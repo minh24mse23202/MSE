@@ -42,8 +42,8 @@ chunk_overlap = 120
 [model_farm]
 json_store = "data/knowledge/model_farm_store.json"
 global_monthly_budget_usd = 0
-# Override with ARAGBIZ_MODEL_SECRET_KEY in real deployments.
-secret_key = "aragbiz-local-development-secret"
+# Set ARAGBIZ_MODEL_SECRET_KEY in the environment before storing provider credentials.
+secret_key = ""
 
 [auth]
 json_store = "data/knowledge/auth_store.json"

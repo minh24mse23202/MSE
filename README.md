@@ -30,8 +30,11 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -U pip
 python -m pip install -e ".[dev,api,app,ml,models]"
+Copy-Item .env.example .env
 python -m pytest
 ```
+
+Before starting the API, replace the placeholder JWT secret, administrator password, and model credential encryption key in `.env`. The React login and signup screens use the FastAPI JWT endpoints; the administrator account configured by `ARAGBIZ_BOOTSTRAP_ADMIN_EMAIL` is required to manage AI Model connections.
 
 
 ### PyTorch DLL repair
@@ -41,7 +44,7 @@ If MiniLM re-indexing fails on Windows with `c10.dll` or `[WinError 1114]`, rein
 ```powershell
 python -m pip install --force-reinstall "torch>=2.2,<2.6" --index-url https://download.pytorch.org/whl/cpu
 python -m pip install -e ".[dev,api,app,ml]"
-python -m uvicorn api.main:app --reload
+python -m uvicorn api.main:app --reload --env-file .env
 ```
 
 Start local PostgreSQL + pgVector for the Knowledge & data processing layer:
@@ -59,7 +62,7 @@ alembic upgrade head
 Run the API:
 
 ```powershell
-python -m uvicorn api.main:app --reload
+python -m uvicorn api.main:app --reload --env-file .env
 ```
 
 Run the background worker for queued ingestion, indexing, and evaluation jobs:
@@ -102,7 +105,15 @@ AI Models is the provider-neutral runtime layer for generation, embeddings, rera
 - `model-local-distilbert`
 - `model-local-t5-classifier`
 
-Remote deployments are registered from the React **AI Models** screen or the `/model-farm/deployments` API. Deployment records store only environment-variable names with the `ARAGBIZ_MODEL_*` prefix; secrets stay in `.env` or the host environment. Paid deployments should be tested before enabling and should have pricing/budget values configured.
+The React **AI Models** wizard separates reusable provider connections from model deployments:
+
+- **Experimentation:** OpenRouter.
+- **Production direct:** OpenAI and Gemini, using their own credentials and billing.
+- **Local:** Ollama, vLLM, and the in-process built-ins above.
+
+Provider-native model IDs are stored in deployments and translated to LiteLLM IDs only at runtime. Credentials may reference `ARAGBIZ_MODEL_*` environment variables or be entered in the wizard. Entered values are stored in a versioned AES-GCM envelope and are never returned by the API. Configure `ARAGBIZ_MODEL_SECRET_KEY` before storing credentials; keep this key stable so existing credentials remain decryptable.
+
+Run `alembic upgrade head` after pulling this version. Existing deployment IDs are preserved and assigned to migrated connection records. Remote connections and deployments must pass health tests before they can be enabled. Paid models require LiteLLM-known pricing or a positive administrator pricing override, and all calls remain subject to deployment/global budgets.
 
 Knowledge bases select an embedding deployment and keep query embeddings tied to the active index version. Chat configurations select generator, fallback, planner, and reranker deployments. Evaluation runs can select a registered judge deployment and persist that choice with the run metadata.
 

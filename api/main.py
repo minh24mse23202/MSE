@@ -40,7 +40,7 @@ from aragbiz.knowledge import (
 )
 from aragbiz.ragxplain import RagxplainError, RagxplainUnavailableError
 from aragbiz.jobs import BackgroundJob, JobError, job_idempotency_key
-from aragbiz.model_farm import ModelDeployment, ModelFarmError, ModelUsageEvent
+from aragbiz.model_farm import ModelConnection, ModelDeployment, ModelFarmError, ModelUsageEvent, _gateway_model_name
 
 config = load_config()
 pipeline = build_sample_pipeline(config)
@@ -376,8 +376,10 @@ class AuthTokenResponse(BaseModel):
 
 class ModelDeploymentFromTemplateRequest(BaseModel):
     template_id: str = Field(..., min_length=1)
+    connection_id: str = ""
     name: str = ""
     model: str = ""
+    model_id: str = ""
     api_base: str = ""
     capabilities: List[str] = Field(default_factory=list)
     credential_env_refs: Dict[str, str] = Field(default_factory=dict)
@@ -389,6 +391,10 @@ class ModelDeploymentFromTemplateRequest(BaseModel):
     hard_budget: bool = True
     enabled: bool = False
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelDeploymentDraftTestRequest(ModelDeploymentFromTemplateRequest):
+    deployment_id: str = ""
 
 
 class ModelDeploymentPatchRequest(BaseModel):
@@ -410,7 +416,12 @@ class ModelDeploymentResponse(BaseModel):
     name: str
     provider: str
     model: str
+    model_id: str
     capabilities: List[str]
+    connection_id: str
+    connection_name: str
+    access_path: str
+    gateway_model: str
     api_base: str
     credential_status: Dict[str, Any]
     default_parameters: Dict[str, Any]
@@ -428,20 +439,63 @@ class ModelDeploymentResponse(BaseModel):
     updated_at: str
 
 
+class ModelConnectionCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+    provider: Literal["openrouter", "openai", "gemini", "ollama", "vllm"]
+    access_path: Literal["experimentation", "production", "local"]
+    api_base: str = ""
+    credential_env_refs: Dict[str, str] = Field(default_factory=dict)
+    credential_secrets: Dict[str, str] = Field(default_factory=dict)
+    locality: Literal["local", "remote"] = "remote"
+    enabled: bool = False
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelConnectionPatchRequest(BaseModel):
+    name: Optional[str] = None
+    api_base: Optional[str] = None
+    credential_env_refs: Optional[Dict[str, str]] = None
+    credential_secrets: Optional[Dict[str, str]] = None
+    enabled: Optional[bool] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class ModelConnectionResponse(BaseModel):
+    id: str
+    name: str
+    provider: str
+    access_path: str
+    api_base: str
+    credential_status: Dict[str, Any]
+    locality: str
+    enabled: bool
+    health_status: str
+    last_health_check: str
+    last_error: str
+    metadata: Dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
 class ModelUsageResponse(BaseModel):
     id: str
     deployment_id: str
     provider: str
     model: str
+    connection_id: str
+    access_path: str
+    gateway_model: str
     capability: str
     purpose: str
     status: str
+    fallback_index: int
     input_tokens: int
     output_tokens: int
     total_tokens: int
     latency_ms: float
     estimated_cost_usd: float
     error_code: str
+    error_category: str
     error: str
     created_at: str
 
@@ -512,6 +566,91 @@ def list_model_providers(authorization: str = Header(default="")) -> List[Dict[s
     return model_farm_service.providers()
 
 
+@app.get("/model-farm/connections", response_model=List[ModelConnectionResponse])
+def list_model_connections(
+    provider: str = "",
+    enabled: Optional[bool] = None,
+    authorization: str = Header(default=""),
+) -> List[ModelConnectionResponse]:
+    _require_admin(authorization)
+    return [
+        _model_connection_response(item)
+        for item in model_farm_service.list_connections(provider=provider, enabled=enabled)
+    ]
+
+
+@app.post("/model-farm/connections", response_model=ModelConnectionResponse)
+def create_model_connection(
+    request: ModelConnectionCreateRequest,
+    authorization: str = Header(default=""),
+) -> ModelConnectionResponse:
+    _require_admin(authorization)
+    try:
+        payload = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+        return _model_connection_response(model_farm_service.create_connection(payload))
+    except ModelFarmError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/model-farm/connections/{connection_id}", response_model=ModelConnectionResponse)
+def get_model_connection(connection_id: str, authorization: str = Header(default="")) -> ModelConnectionResponse:
+    _require_admin(authorization)
+    try:
+        return _model_connection_response(model_farm_service.get_connection(connection_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.patch("/model-farm/connections/{connection_id}", response_model=ModelConnectionResponse)
+def update_model_connection(
+    connection_id: str,
+    request: ModelConnectionPatchRequest,
+    authorization: str = Header(default=""),
+) -> ModelConnectionResponse:
+    _require_admin(authorization)
+    try:
+        payload = request.model_dump(exclude_unset=True) if hasattr(request, "model_dump") else request.dict(exclude_unset=True)
+        return _model_connection_response(model_farm_service.update_connection(connection_id, payload))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ModelFarmError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/model-farm/connections/{connection_id}")
+def delete_model_connection(connection_id: str, authorization: str = Header(default="")) -> Dict[str, str]:
+    _require_admin(authorization)
+    try:
+        model_farm_service.delete_connection(connection_id)
+        return {"status": "deleted"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ModelFarmError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/model-farm/connections/{connection_id}/test", response_model=Dict[str, Any])
+async def test_model_connection(connection_id: str, authorization: str = Header(default="")) -> Dict[str, Any]:
+    _require_admin(authorization)
+    try:
+        result = await asyncio.to_thread(model_farm_service.test_connection, connection_id)
+        result["connection"] = _model_connection_response(result["connection"])
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/model-farm/connections/{connection_id}/available-models", response_model=List[Dict[str, Any]])
+async def list_connection_models(connection_id: str, authorization: str = Header(default="")) -> List[Dict[str, Any]]:
+    _require_admin(authorization)
+    try:
+        return await asyncio.to_thread(model_farm_service.available_models, connection_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ModelFarmError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/model-farm/deployments", response_model=List[ModelDeploymentResponse])
 def list_model_deployments(
     capability: str = "",
@@ -531,7 +670,38 @@ def create_model_deployment_from_template(
     try:
         payload = request.model_dump() if hasattr(request, "model_dump") else request.dict()
         template_id = str(payload.pop("template_id"))
+        model_id = str(payload.pop("model_id", "") or "")
+        if model_id:
+            payload["model"] = model_id
         return _model_deployment_response(model_farm_service.create_deployment_from_template(template_id, payload))
+    except ModelFarmError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/model-farm/deployments/test-draft", response_model=Dict[str, Any])
+async def test_model_deployment_draft(
+    request: ModelDeploymentDraftTestRequest,
+    authorization: str = Header(default=""),
+) -> Dict[str, Any]:
+    _require_admin(authorization)
+    try:
+        payload = request.model_dump(exclude_unset=True) if hasattr(request, "model_dump") else request.dict(exclude_unset=True)
+        deployment_id = str(payload.pop("deployment_id", "") or "")
+        template_id = str(payload.pop("template_id", "") or "")
+        model_id = str(payload.pop("model_id", "") or "")
+        if model_id:
+            payload["model"] = model_id
+        if deployment_id:
+            payload.pop("model", None)
+            payload.pop("capabilities", None)
+            deployment = model_farm_service.draft_update_deployment(deployment_id, payload)
+        else:
+            deployment = model_farm_service.draft_deployment_from_template(template_id, payload)
+        result = await model_gateway.test_draft_deployment(deployment)
+        result["deployment"] = _model_deployment_response(result["deployment"])
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ModelFarmError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1625,10 +1795,19 @@ def _user_response(user: UserRecord) -> UserResponse:
 
 
 def _model_deployment_response(deployment: ModelDeployment) -> ModelDeploymentResponse:
+    try:
+        connection = model_farm_service.connection_for_deployment(deployment, require_enabled=False)
+    except (KeyError, ModelFarmError):
+        connection = None
     return ModelDeploymentResponse(
-        id=deployment.id, name=deployment.name, provider=deployment.provider, model=deployment.model,
-        capabilities=deployment.capabilities, api_base=deployment.api_base,
-        credential_status=model_farm_service.credential_status(deployment),
+        id=deployment.id, name=deployment.name, provider=deployment.provider,
+        model=deployment.model, model_id=deployment.model,
+        capabilities=deployment.capabilities, connection_id=deployment.connection_id,
+        connection_name=connection.name if connection else "",
+        access_path=connection.access_path if connection else "",
+        gateway_model=_gateway_model_name(connection.provider, deployment.model, connection.api_base) if connection else deployment.model,
+        api_base=connection.api_base if connection else deployment.api_base,
+        credential_status=model_farm_service.credential_status(connection or deployment),
         default_parameters=deployment.default_parameters, limits=deployment.limits, pricing=deployment.pricing,
         monthly_budget_usd=deployment.monthly_budget_usd, hard_budget=deployment.hard_budget,
         locality=deployment.locality, enabled=deployment.enabled, health_status=deployment.health_status,
@@ -1637,13 +1816,35 @@ def _model_deployment_response(deployment: ModelDeployment) -> ModelDeploymentRe
     )
 
 
+def _model_connection_response(connection: ModelConnection) -> ModelConnectionResponse:
+    return ModelConnectionResponse(
+        id=connection.id,
+        name=connection.name,
+        provider=connection.provider,
+        access_path=connection.access_path,
+        api_base=connection.api_base,
+        credential_status=model_farm_service.credential_status(connection),
+        locality=connection.locality,
+        enabled=connection.enabled,
+        health_status=connection.health_status,
+        last_health_check=connection.last_health_check,
+        last_error=connection.last_error,
+        metadata=connection.metadata,
+        created_at=connection.created_at,
+        updated_at=connection.updated_at,
+    )
+
+
 def _model_usage_response(event: ModelUsageEvent) -> ModelUsageResponse:
     return ModelUsageResponse(
         id=event.id, deployment_id=event.deployment_id, provider=event.provider, model=event.model,
+        connection_id=event.connection_id, access_path=event.access_path, gateway_model=event.gateway_model,
         capability=event.capability, purpose=event.purpose, status=event.status,
+        fallback_index=event.fallback_index,
         input_tokens=event.input_tokens, output_tokens=event.output_tokens, total_tokens=event.total_tokens,
         latency_ms=event.latency_ms, estimated_cost_usd=event.estimated_cost_usd,
-        error_code=event.error_code, error=event.error, created_at=event.created_at,
+        error_code=event.error_code, error_category=str(event.metadata.get("error_category") or ""),
+        error=event.error, created_at=event.created_at,
     )
 
 

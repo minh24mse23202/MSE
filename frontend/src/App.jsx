@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   Activity,
   AlertTriangle,
@@ -25,6 +27,7 @@ import {
   Home,
   Layers,
   LogIn,
+  LogOut,
   MessageSquarePlus,
   Paperclip,
   Pencil,
@@ -48,6 +51,7 @@ import {
   createChatConfiguration,
   createEvaluationRun,
   createKnowledgeBase,
+  createModelConnection,
   createModelDeploymentFromTemplate,
   deleteChatConfiguration,
   deleteChatConversation,
@@ -56,6 +60,7 @@ import {
   deleteKnowledgeDocument,
   deleteModelDeployment,
   getModelUsageSummary,
+  getCurrentUser,
   getKnowledgeProcessingTrace,
   getRagxplainViewerUrl,
   ingestWebsiteSource,
@@ -69,15 +74,24 @@ import {
   listKnowledgeBases,
   listKnowledgeIndexVersions,
   listModelDeployments,
+  listModelConnections,
   listModelProviders,
   listModelUsage,
+  clearAuthToken,
+  hasAuthToken,
+  login as loginUser,
   reindexKnowledgeBase,
   submitFeedback,
   testModelDeployment,
+  testModelDeploymentDraft,
+  testModelConnection,
+  listConnectionModels,
+  signup as signupUser,
   updateChatConfiguration,
   updateChatConversation,
   updateKnowledgeBase,
   updateModelDeployment,
+  updateModelConnection,
   uploadKnowledgeSource
 } from "./api.js";
 import {
@@ -100,31 +114,6 @@ const routes = [
   { value: "L2 Simple RAG", label: "L2 Simple RAG" },
   { value: "L3 Complex RAG", label: "L3 Complex RAG" }
 ];
-const generatorProviderOptions = [
-  { value: "Local", label: "Local" },
-  { value: "OpenAI", label: "OpenAI (coming soon)", disabled: true },
-  { value: "Hugging Face", label: "Hugging Face hosted (coming soon)", disabled: true },
-  { value: "Cohere", label: "Cohere (coming soon)", disabled: true },
-  { value: "AWS Bedrock", label: "AWS Bedrock (coming soon)", disabled: true }
-];
-const generatorProviders = generatorProviderOptions.map((option) => option.value);
-const generatorModelsByProvider = {
-  Local: ["extractive", "google/flan-t5-small"],
-  OpenAI: ["gpt-4.1-mini", "gpt-4.1", "o4-mini"],
-  "Hugging Face": ["mistralai/Mistral-7B-Instruct-v0.3", "meta-llama/Llama-3.2-3B-Instruct"],
-  Cohere: ["command-r", "command-r-plus"],
-  "AWS Bedrock": ["anthropic.claude-3-haiku", "amazon.nova-lite", "meta.llama3-8b-instruct"]
-};
-const generatorModelOptionsByProvider = {
-  Local: [
-    { value: "extractive", label: "extractive (supported)" },
-    { value: "google/flan-t5-small", label: "google/flan-t5-small (local optional)" }
-  ],
-  OpenAI: generatorModelsByProvider.OpenAI.map((model) => ({ value: model, label: `${model} (coming soon)`, disabled: true })),
-  "Hugging Face": generatorModelsByProvider["Hugging Face"].map((model) => ({ value: model, label: `${model} (coming soon)`, disabled: true })),
-  Cohere: generatorModelsByProvider.Cohere.map((model) => ({ value: model, label: `${model} (coming soon)`, disabled: true })),
-  "AWS Bedrock": generatorModelsByProvider["AWS Bedrock"].map((model) => ({ value: model, label: `${model} (coming soon)`, disabled: true }))
-};
 const responseStructures = [
   "Concise answer with bullets and cited workflow context",
   "Step-by-step workflow guidance",
@@ -234,23 +223,60 @@ const DEFAULT_MAIN_LAYOUT = {
 export default function App() {
   const [screen, setScreen] = useState(() => (hasSeenSplash() ? "login" : "splash"));
   const [signedIn, setSignedIn] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
   const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState("");
   const [selectedEvaluationDetail, setSelectedEvaluationDetail] = useState(null);
   const [confirmation, setConfirmation] = useState(null);
   const confirmationResolverRef = useRef(null);
 
   useEffect(() => {
-    if (screen !== "splash") return undefined;
+    let active = true;
+    if (!hasAuthToken()) {
+      setAuthReady(true);
+      return () => {
+        active = false;
+      };
+    }
+    getCurrentUser()
+      .then((user) => {
+        if (!active) return;
+        setCurrentUser(user);
+        setSignedIn(true);
+        if (hasSeenSplash()) setScreen("main");
+      })
+      .catch(() => {
+        clearAuthToken();
+      })
+      .finally(() => {
+        if (active) setAuthReady(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (screen !== "splash" || !authReady) return undefined;
     const timer = window.setTimeout(() => {
       markSplashSeen();
-      setScreen("login");
+      setScreen(signedIn ? "main" : "login");
     }, SPLASH_DURATION_MS);
     return () => window.clearTimeout(timer);
-  }, [screen]);
+  }, [authReady, screen, signedIn]);
 
-  function enterStudio() {
+  async function enterStudio(mode, payload) {
+    const result = mode === "signup" ? await signupUser(payload) : await loginUser(payload);
+    setCurrentUser(result.user);
     setSignedIn(true);
     setScreen("main");
+  }
+
+  function leaveStudio() {
+    clearAuthToken();
+    setCurrentUser(null);
+    setSignedIn(false);
+    setScreen("login");
   }
 
   function confirmAction(options = {}) {
@@ -275,20 +301,20 @@ export default function App() {
     setConfirmation(null);
   }
 
-  if (screen === "splash") {
+  if (!authReady || screen === "splash") {
     return <Splash />;
   }
 
   if (!signedIn && screen === "login") {
-    return <AuthScreen mode="login" onSubmit={enterStudio} onSwitch={() => setScreen("signup")} />;
+    return <AuthScreen mode="login" onSubmit={(payload) => enterStudio("login", payload)} onSwitch={() => setScreen("signup")} />;
   }
 
   if (!signedIn && screen === "signup") {
-    return <AuthScreen mode="signup" onSubmit={enterStudio} onSwitch={() => setScreen("login")} />;
+    return <AuthScreen mode="signup" onSubmit={(payload) => enterStudio("signup", payload)} onSwitch={() => setScreen("login")} />;
   }
 
   return (
-    <Shell activeScreen={screen} onNavigate={setScreen}>
+    <Shell activeScreen={screen} onNavigate={setScreen} user={currentUser} onSignOut={leaveStudio}>
       {screen === "main" && (
         <MainScreen
           selectedKnowledgeBaseId={selectedKnowledgeBaseId}
@@ -356,12 +382,30 @@ function Splash() {
 
 function AuthScreen({ mode, onSubmit, onSwitch }) {
   const isSignup = mode === "signup";
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   if (isSignup) {
     return <SignupScreen onSubmit={onSubmit} onSwitch={onSwitch} />;
   }
+
+  async function submitLogin(event) {
+    event.preventDefault();
+    setError("");
+    setSubmitting(true);
+    try {
+      await onSubmit({ email: email.trim(), password });
+    } catch (submitError) {
+      setError(submitError.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <main className="auth-layout login-screen">
-      <section className="auth-card login-form">
+      <form className="auth-card login-form" onSubmit={submitLogin}>
         <div className="auth-logo">
           <span className="logo-dot" />
           <strong className="eyebrow">Adaptive RAG Studio</strong>
@@ -369,25 +413,65 @@ function AuthScreen({ mode, onSubmit, onSwitch }) {
         <h1>Login</h1>
         <label>
           Email
-          <input defaultValue="quangminhrt@gmail.com" type="email" />
+          <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" required />
         </label>
         <label>
           Password
-          <input defaultValue="adaptive-rag" type="password" />
+          <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" required />
         </label>
-        <button className="primary-action" onClick={onSubmit}><IconLabel icon={LogIn} size={20}>Login</IconLabel></button>
-        <button className="text-action" onClick={onSwitch}>
+        {error && <p className="auth-error" role="alert">{error}</p>}
+        <button className="primary-action" type="submit" disabled={submitting}>
+          <IconLabel icon={LogIn} size={20}>{submitting ? "Signing in..." : "Login"}</IconLabel>
+        </button>
+        <button className="text-action" type="button" onClick={onSwitch}>
           <IconLabel icon={UserPlus}>Need an account? Sign up</IconLabel>
         </button>
-      </section>
+      </form>
     </main>
   );
 }
 
 function SignupScreen({ onSubmit, onSwitch }) {
+  const [form, setForm] = useState({
+    firstName: "",
+    lastName: "",
+    email: "",
+    password: "",
+    captcha: false,
+    consent: false
+  });
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  function updateField(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function submitSignup(event) {
+    event.preventDefault();
+    if (!form.captcha || !form.consent) {
+      setError("Confirm the verification and consent fields before creating an account.");
+      return;
+    }
+    setError("");
+    setSubmitting(true);
+    try {
+      await onSubmit({
+        first_name: form.firstName.trim(),
+        last_name: form.lastName.trim(),
+        email: form.email.trim(),
+        password: form.password
+      });
+    } catch (submitError) {
+      setError(submitError.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <main className="auth-layout signup-layout login-screen">
-      <section className="signup-card login-form">
+      <form className="signup-card login-form" onSubmit={submitSignup}>
         <div className="auth-logo">
           <span className="logo-dot" />
           <strong>Business Worklow Question Answering</strong>
@@ -396,24 +480,24 @@ function SignupScreen({ onSubmit, onSwitch }) {
         <div className="signup-row">
           <label>
             First name
-            <input type="text" autoComplete="given-name" />
+            <input value={form.firstName} onChange={(event) => updateField("firstName", event.target.value)} type="text" autoComplete="given-name" />
           </label>
           <label>
             Last name
-            <input type="text" autoComplete="family-name" />
+            <input value={form.lastName} onChange={(event) => updateField("lastName", event.target.value)} type="text" autoComplete="family-name" />
           </label>
         </div>
         <label>
           Email
-          <input type="email" autoComplete="email" />
+          <input value={form.email} onChange={(event) => updateField("email", event.target.value)} type="email" autoComplete="email" required />
         </label>
         <label>
           Password
-          <input type="password" autoComplete="new-password" />
+          <input value={form.password} onChange={(event) => updateField("password", event.target.value)} type="password" autoComplete="new-password" minLength={8} required />
         </label>
         <div className="recaptcha-box" aria-label="reCAPTCHA verification placeholder">
           <label className="captcha-check">
-            <input type="checkbox" />
+            <input checked={form.captcha} onChange={(event) => updateField("captcha", event.target.checked)} type="checkbox" />
             <span>I'm not a robot</span>
           </label>
           <div className="captcha-brand">
@@ -422,21 +506,25 @@ function SignupScreen({ onSubmit, onSwitch }) {
           </div>
         </div>
         <label className="signup-consent">
-          <input type="checkbox" />
+          <input checked={form.consent} onChange={(event) => updateField("consent", event.target.checked)} type="checkbox" />
           <span>
-            I agree to use Adaptive RAG Studio as an AI遯ｶ蜿｢owered system. I will verify answers since AI can make mistakes.
+            I agree to use Adaptive RAG Studio as an AI-powered system. I will verify answers since AI can make mistakes.
           </span>
         </label>
-        <button className="primary-action signup-submit" onClick={onSubmit}><IconLabel icon={UserPlus} size={20}>Agree and start</IconLabel></button>
-        <button className="text-action signup-login-link" onClick={onSwitch}>
+        {error && <p className="auth-error" role="alert">{error}</p>}
+        <button className="primary-action signup-submit" type="submit" disabled={submitting}>
+          <IconLabel icon={UserPlus} size={20}>{submitting ? "Creating account..." : "Agree and start"}</IconLabel>
+        </button>
+        <button className="text-action signup-login-link" type="button" onClick={onSwitch}>
           <IconLabel icon={LogIn}>Already have an account? Log in</IconLabel>
         </button>
-      </section>
+      </form>
     </main>
   );
 }
 
-function Shell({ activeScreen, onNavigate, children }) {
+function Shell({ activeScreen, onNavigate, user, onSignOut, children }) {
+  const userLabel = user?.first_name || user?.email || "User";
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -459,7 +547,12 @@ function Shell({ activeScreen, onNavigate, children }) {
           ))}
         </nav>
         <div className="topbar-actions">
-          <span className="user-chip"><IconLabel icon={CircleUserRound}>Researcher</IconLabel></span>
+          <span className="user-chip" title={user?.email || ""}>
+            <IconLabel icon={CircleUserRound}>{userLabel}</IconLabel>
+          </span>
+          <button type="button" aria-label="Sign out" title="Sign out" onClick={onSignOut}>
+            <IconOnly icon={LogOut} size={18} />
+          </button>
         </div>
       </header>
       <main className="workspace">{children}</main>
@@ -804,6 +897,31 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
     }
     if (!isValidChatConfigurationDraft(config)) {
       setFeedbackStatus("Select or save a chatbot configuration before sending.");
+      return;
+    }
+    const selectedKnowledgeConfiguration = selectedKnowledgeBase
+      ? knowledgeConfigurationFromRecord(selectedKnowledgeBase)
+      : {};
+    const configuredDeploymentIds = [
+      config.generatorDeploymentId,
+      ...(config.fallbackDeploymentIds || []),
+      config.plannerDeploymentId,
+      config.queryEmbeddingDeploymentId,
+      config.classifierDeploymentId,
+      config.reranker ? config.rerankerDeploymentId : ""
+    ].filter(Boolean);
+    const remoteDeployment = configuredDeploymentIds
+      .map((deploymentId) => modelDeployments.find((deployment) => deployment.id === deploymentId))
+      .find((deployment) => deployment && deployment.locality !== "local");
+    if (
+      selectedKnowledgeBase
+      && remoteDeployment
+      && !selectedKnowledgeConfiguration.external_processing_allowed
+    ) {
+      setFeedbackStatus(
+        `Remote model "${remoteDeployment.name}" is blocked for this knowledge base. `
+        + "Open Knowledge Bases, modify the selected knowledge base, and enable Allow remote model processing."
+      );
       return;
     }
     const assistantMessageId = createId();
@@ -1429,8 +1547,16 @@ function ChatPanel({
         {messages.map((message) => (
           <article key={message.id} className={`message ${message.role}`}>
             {message.role === "assistant" && <span className="avatar"><Bot size={16} aria-hidden="true" /></span>}
-            <div>
-              {message.content ? <p>{message.content}</p> : <p className="streaming-placeholder">{message.streamingStatus || "Preparing answer..."}</p>}
+            <div className="message-body">
+              {message.content ? (
+                message.role === "assistant" ? (
+                  <AssistantMessageContent content={message.content} />
+                ) : (
+                  <p className="user-message-content">{message.content}</p>
+                )
+              ) : (
+                <p className="streaming-placeholder">{message.streamingStatus || "Preparing answer..."}</p>
+              )}
               {message.streaming && (
                 <div className="streaming-status">
                   <span className="streaming-dot" />
@@ -2036,6 +2162,10 @@ function KnowledgeBaseSummary({ selectedKnowledgeBase, collapsed = false, onTogg
           <div>
             <dt>Query embedding</dt>
             <dd>{queryEmbedding}</dd>
+          </div>
+          <div>
+            <dt>External processing</dt>
+            <dd>{configuration.external_processing_allowed ? "Allowed" : "Blocked"}</dd>
           </div>
           <div>
             <dt>Last indexed</dt>
@@ -2900,7 +3030,9 @@ function AddKnowledgeBaseModal({
 
 function AIModelsScreen({ confirmAction }) {
   const [templates, setTemplates] = useState([]);
+  const [connections, setConnections] = useState([]);
   const [deployments, setDeployments] = useState([]);
+  const [availableModels, setAvailableModels] = useState([]);
   const [usageSummary, setUsageSummary] = useState({});
   const [capabilityFilter, setCapabilityFilter] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -2911,8 +3043,10 @@ function AIModelsScreen({ confirmAction }) {
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [wizard, setWizard] = useState(() => emptyModelFarmWizard());
   const [endpointDraft, setEndpointDraft] = useState(() => emptyEndpointDraft());
+  const [editingDeployment, setEditingDeployment] = useState(null);
   const [createdDeploymentId, setCreatedDeploymentId] = useState("");
   const [showEndpointSecret, setShowEndpointSecret] = useState(false);
+  const [endpointTestResult, setEndpointTestResult] = useState(null);
   const [status, setStatus] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -2925,12 +3059,14 @@ function AIModelsScreen({ confirmAction }) {
   async function refreshModelFarm() {
     setIsLoading(true);
     try {
-      const [nextTemplates, nextDeployments, nextSummary] = await Promise.all([
+      const [nextTemplates, nextConnections, nextDeployments, nextSummary] = await Promise.all([
         listModelProviders(),
+        listModelConnections(),
         listModelDeployments(),
         getModelUsageSummary()
       ]);
       setTemplates(nextTemplates);
+      setConnections(nextConnections);
       setDeployments(capabilityFilter
         ? nextDeployments.filter((deployment) => deployment.capabilities?.includes(capabilityFilter))
         : nextDeployments
@@ -2939,6 +3075,7 @@ function AIModelsScreen({ confirmAction }) {
       setStatus("");
     } catch (error) {
       setTemplates([]);
+      setConnections([]);
       setDeployments([]);
       setStatus(`AI Models load failed: ${error.message}`);
     } finally {
@@ -2952,8 +3089,11 @@ function AIModelsScreen({ confirmAction }) {
     setProviderTab("provider");
     setProviderSearch("");
     setSelectedTemplateId("");
+    setEditingDeployment(null);
     setCreatedDeploymentId("");
     setEndpointDraft(emptyEndpointDraft());
+    setAvailableModels([]);
+    setEndpointTestResult(null);
     setWizard(emptyModelFarmWizard());
     setStatus("");
   }
@@ -2962,9 +3102,29 @@ function AIModelsScreen({ confirmAction }) {
     setIsAddOpen(false);
     setAddStage("select");
     setSelectedTemplateId("");
+    setEditingDeployment(null);
     setCreatedDeploymentId("");
     setEndpointDraft(emptyEndpointDraft());
+    setAvailableModels([]);
+    setEndpointTestResult(null);
     setShowEndpointSecret(false);
+  }
+
+  function openEditModel(deployment) {
+    const templateId = templateIdForDeployment(deployment, templates);
+    setIsAddOpen(true);
+    setAddStage("details");
+    setProviderTab(deployment.locality === "local" ? "local" : "provider");
+    setProviderSearch("");
+    setSelectedTemplateId(templateId);
+    setEditingDeployment(deployment);
+    setCreatedDeploymentId(deployment.id);
+    setEndpointDraft(endpointDraftFromDeployment(deployment));
+    setAvailableModels([]);
+    setEndpointTestResult(null);
+    setWizard(modelFarmWizardFromDeployment(deployment));
+    setShowEndpointSecret(false);
+    setStatus("");
   }
 
   function applyTemplate(template) {
@@ -2972,7 +3132,12 @@ function AIModelsScreen({ confirmAction }) {
     const defaults = template.deployment_defaults || {};
     setSelectedTemplateId(template.id);
     setCreatedDeploymentId("");
-    setEndpointDraft(emptyEndpointDraft(defaults));
+    setEndpointDraft({
+      ...emptyEndpointDraft(defaults),
+      name: uniqueConnectionName(`${template.provider_label || template.label} connection`, connections)
+    });
+    setAvailableModels([]);
+    setEndpointTestResult(null);
     setWizard({
       ...emptyModelFarmWizard(),
       name: uniqueDeploymentName(defaults.name || template.provider_label || template.label || "AI model", deployments),
@@ -2995,6 +3160,11 @@ function AIModelsScreen({ confirmAction }) {
     });
   }
 
+  function updateEndpointDraft(patch) {
+    setEndpointDraft((current) => ({ ...current, ...patch }));
+    setEndpointTestResult(null);
+  }
+
   function confirmProvider() {
     const template = selectedTemplate;
     if (!template) {
@@ -3009,78 +3179,170 @@ function AIModelsScreen({ confirmAction }) {
     setAddStage("details");
   }
 
-  async function createEndpointDeployment({ testAfter = false } = {}) {
+  async function saveEndpointConnection() {
+    const template = selectedTemplate;
+    if (!template) throw new Error("Select an AI model provider first.");
+    const apiBase = endpointDraft.url.trim() || template.deployment_defaults?.api_base || "";
+    const apiKey = endpointDraft.apiKey.trim();
+    if (requiresEndpointUrl(template) && !apiBase) throw new Error("Enter the endpoint URL.");
+    if (!endpointDraft.connectionId && template.credential_fields?.includes("api_key") && !apiKey && !wizard.credentialEnvRefs?.api_key) {
+      throw new Error("Enter an API key or configure its ARAGBIZ_MODEL_* environment variable.");
+    }
+    const provider = connectionProviderForTemplate(template);
+    const connectionName = endpointDraft.name.trim()
+      || uniqueConnectionName(`${template.provider_label || template.label} connection`, connections);
+    const common = {
+      name: connectionName,
+      api_base: apiBase,
+      ...(apiKey ? { credential_secrets: { api_key: apiKey } } : {})
+    };
+    const connection = endpointDraft.connectionId
+      ? await updateModelConnection(endpointDraft.connectionId, common)
+      : await createModelConnection({
+          ...common,
+          provider,
+          access_path: template.access_path || (template.locality === "local" ? "local" : "production"),
+          locality: template.locality || (["ollama", "vllm"].includes(provider) ? "local" : "remote"),
+          credential_env_refs: cleanCredentialRefs(wizard.credentialEnvRefs || {}),
+          enabled: false,
+          metadata: { template_id: template.id }
+        });
+    setEndpointDraft((current) => ({
+      ...current,
+      connectionId: connection.id,
+      name: connection.name,
+      url: connection.api_base,
+      apiKey: ""
+    }));
+    setConnections((current) => [connection, ...current.filter((item) => item.id !== connection.id)]);
+    return connection;
+  }
+
+  async function createEndpointDeployment() {
     const template = selectedTemplate;
     if (!template) {
       setStatus("Select an AI model provider first.");
       return null;
     }
     const modelId = endpointDraft.modelId.trim() || wizard.model;
-    const apiBase = endpointDraft.url.trim() || wizard.apiBase;
-    const apiKey = endpointDraft.apiKey.trim();
     if (!wizard.name.trim()) {
       setStatus("Enter an AI model name.");
       return null;
     }
     if (!modelId) {
-      setStatus("Enter the endpoint model ID.");
+      setStatus("Enter the provider-native model ID.");
       return null;
     }
-    if (requiresEndpointUrl(template) && !apiBase) {
-      setStatus("Enter the endpoint URL.");
-      return null;
-    }
-    if (template.credential_fields?.includes("api_key") && !apiKey && !wizard.credentialEnvRefs?.api_key) {
-      setStatus("Enter the endpoint API key.");
+    if (!["healthy", "rate_limited"].includes(endpointTestResult?.status)) {
+      setStatus("Test the connection and model before saving the AI model.");
       return null;
     }
     setIsSaving(true);
-    setStatus(testAfter ? `Saving and testing ${wizard.name}...` : `Adding ${wizard.name}...`);
+    setStatus(`Adding ${wizard.name}...`);
     try {
+      const connection = await saveEndpointConnection();
       const deployment = await createModelDeploymentFromTemplate(modelFarmWizardPayload(selectedTemplateId, {
         ...wizard,
+        connectionId: connection.id,
         model: modelId,
-        apiBase,
-        credentialSecrets: apiKey ? { api_key: apiKey } : {},
+        apiBase: "",
+        credentialEnvRefs: {},
+        credentialSecrets: {},
         metadata: {
           ...(wizard.metadata || {}),
           description: wizard.description || "",
-          endpoint_name: endpointDraft.name || "",
-          endpoint_url_configured: Boolean(apiBase)
+          endpoint_name: connection.name,
+          endpoint_url_configured: Boolean(connection.api_base)
         }
       }));
       setCreatedDeploymentId(deployment.id);
-      await refreshModelFarm();
-      if (testAfter) {
-        setIsTesting(true);
-        const result = await testModelDeployment(deployment.id);
-        setStatus(`${deployment.name} endpoint test ${result.status || "completed"}.`);
+      if (endpointTestResult?.status === "rate_limited") {
         await refreshModelFarm();
-      } else {
-        setStatus("AI model added. Test it before enabling for runtime use.");
+        setStatus("AI model saved but not enabled because the upstream provider is temporarily rate-limited. Retry the model test later.");
+        return deployment;
       }
-      return deployment;
+      const tested = await testModelDeployment(deployment.id);
+      await refreshModelFarm();
+      setStatus(tested.status === "healthy"
+        ? "AI model saved and verified. It can now be enabled."
+        : `AI model saved, but its verification failed: ${tested.error || "unknown error"}`);
+      return tested.deployment || deployment;
     } catch (error) {
       setStatus(error.message);
       return null;
     } finally {
       setIsSaving(false);
-      setIsTesting(false);
     }
   }
 
   async function testEndpointDraft() {
-    if (createdDeploymentId) {
-      const deployment = deployments.find((item) => item.id === createdDeploymentId);
-      if (deployment) {
-        await runDeploymentTest(deployment);
-        return;
-      }
+    const modelId = endpointDraft.modelId.trim() || wizard.model;
+    if (!wizard.name.trim()) {
+      setEndpointTestResult({ status: "unavailable", error: "Enter an AI model name before testing." });
+      return;
     }
-    await createEndpointDeployment({ testAfter: true });
+    if (!modelId) {
+      setEndpointTestResult({ status: "unavailable", error: "Enter the provider-native model ID before testing." });
+      return;
+    }
+    setIsTesting(true);
+    setEndpointTestResult({ status: "testing", message: `Testing ${wizard.name}...` });
+    try {
+      const connection = await saveEndpointConnection();
+      const connectionResult = await testModelConnection(connection.id);
+      if (connectionResult.status !== "healthy") {
+        throw new Error(connectionResult.error || "Connection test failed.");
+      }
+      const discovered = await listConnectionModels(connection.id).catch(() => connectionResult.sample_models || []);
+      setAvailableModels(discovered || []);
+      const draft = {
+        ...wizard,
+        connectionId: connection.id,
+        model: modelId,
+        apiBase: "",
+        credentialEnvRefs: {},
+        credentialSecrets: {},
+        metadata: {
+          ...(wizard.metadata || {}),
+          description: wizard.description || "",
+          endpoint_name: connection.name,
+          endpoint_url_configured: Boolean(connection.api_base)
+        }
+      };
+      const deploymentId = editingDeployment?.id || createdDeploymentId;
+      const payload = deploymentId
+        ? { deployment_id: deploymentId, template_id: selectedTemplateId, ...modelFarmDeploymentPatchPayload(draft) }
+        : modelFarmWizardPayload(selectedTemplateId, draft);
+      const result = await testModelDeploymentDraft(payload);
+      const resultStatus = result.status === "healthy"
+        ? "healthy"
+        : result.status === "rate_limited"
+          ? "rate_limited"
+          : "unavailable";
+      setEndpointTestResult({
+        status: resultStatus,
+        message: resultStatus === "healthy"
+          ? "Connection and model test passed."
+          : resultStatus === "rate_limited"
+            ? "Connection passed; the selected model is temporarily rate-limited."
+            : "Model test failed.",
+        error: result.error || result.deployment?.last_error || "",
+        retryable: Boolean(result.retryable),
+        sample: result.sample || "",
+        runtime: result.runtime || ""
+      });
+    } catch (error) {
+      setEndpointTestResult({ status: "unavailable", message: "Endpoint test failed.", error: error.message });
+    } finally {
+      setIsTesting(false);
+    }
   }
 
   async function addEndpointAndClose() {
+    if (editingDeployment) {
+      await updateExistingDeployment({ closeAfter: true });
+      return;
+    }
     const deployment = await createEndpointDeployment();
     if (deployment) {
       setIsAddOpen(false);
@@ -3089,6 +3351,10 @@ function AIModelsScreen({ confirmAction }) {
   }
 
   async function saveProviderDetails() {
+    if (editingDeployment) {
+      await updateExistingDeployment({ closeAfter: true });
+      return;
+    }
     if (createdDeploymentId) {
       closeAddModel();
       setStatus("AI model saved. Enable it from the card list when ready.");
@@ -3102,11 +3368,71 @@ function AIModelsScreen({ confirmAction }) {
     await addEndpointAndClose();
   }
 
+  async function updateExistingDeployment({ testAfter = false, closeAfter = false } = {}) {
+    const deploymentId = editingDeployment?.id || createdDeploymentId;
+    if (!deploymentId) {
+      setStatus("Select an AI model before saving changes.");
+      return null;
+    }
+    if (!wizard.name.trim()) {
+      setStatus("Enter an AI model name.");
+      return null;
+    }
+    setIsSaving(true);
+    setStatus(testAfter ? `Saving and testing ${wizard.name}...` : `Saving ${wizard.name}...`);
+    try {
+      const connection = await saveEndpointConnection();
+      const payload = modelFarmDeploymentPatchPayload({
+        ...wizard,
+        connectionId: connection.id,
+        apiBase: "",
+        credentialEnvRefs: {},
+        credentialSecrets: {},
+        metadata: {
+          ...(wizard.metadata || {}),
+          description: wizard.description || "",
+          endpoint_name: connection.name,
+          endpoint_url_configured: Boolean(connection.api_base)
+        }
+      });
+      const updated = await updateModelDeployment(deploymentId, payload);
+      setEditingDeployment(updated);
+      setCreatedDeploymentId(updated.id);
+      setWizard(modelFarmWizardFromDeployment(updated));
+      setEndpointDraft((current) => ({ ...endpointDraftFromDeployment(updated), apiKey: current.apiKey }));
+      setEndpointTestResult(null);
+      await refreshModelFarm();
+      if (testAfter) {
+        setIsTesting(true);
+        const result = await testModelDeployment(updated.id);
+        setStatus(`${updated.name} endpoint test ${result.status || "completed"}.`);
+        await refreshModelFarm();
+      } else {
+        setStatus(`${updated.name} updated.`);
+      }
+      if (closeAfter) closeAddModel();
+      return updated;
+    } catch (error) {
+      setStatus(error.message);
+      return null;
+    } finally {
+      setIsSaving(false);
+      setIsTesting(false);
+    }
+  }
+
+
   async function runDeploymentTest(deployment) {
     setStatus(`Testing ${deployment.name}...`);
     try {
       const result = await testModelDeployment(deployment.id);
-      setStatus(`${deployment.name} test ${result.status || "completed"}.`);
+      if (result.status === "rate_limited") {
+        setStatus(`${deployment.name} reached a temporary upstream rate limit. The connection remains valid; retry later or select another provider model.`);
+      } else if (result.status === "healthy") {
+        setStatus(`${deployment.name} test passed.`);
+      } else {
+        setStatus(`${deployment.name} test failed: ${result.error || "unknown provider error"}`);
+      }
       await refreshModelFarm();
     } catch (error) {
       setStatus(error.message);
@@ -3128,7 +3454,7 @@ function AIModelsScreen({ confirmAction }) {
     const confirmed = await confirmAction({
       title: "Delete AI model?",
       message: `Delete "${deployment.name}"?`,
-      detail: "Deployments with usage history cannot be deleted by the backend; disable them instead if deletion is blocked.",
+      detail: "This removes the deployment and its Model Farm usage/error history. Built-in local models cannot be deleted.",
       confirmLabel: "Delete AI model"
     });
     if (!confirmed) return;
@@ -3142,8 +3468,11 @@ function AIModelsScreen({ confirmAction }) {
     }
   }
 
-  const selectedTemplate = templates.find((template) => template.id === selectedTemplateId);
+  const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) || (editingDeployment ? templateFromDeployment(editingDeployment) : null);
+  const isEditingDeployment = Boolean(editingDeployment);
   const providerOptions = providerTemplatesForTab(templates, providerTab, providerSearch);
+  const selectedConnectionProvider = connectionProviderForTemplate(selectedTemplate || {});
+  const compatibleConnections = connections.filter((connection) => connection.provider === selectedConnectionProvider);
   const visibleDeployments = deployments.filter((deployment) => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return true;
@@ -3155,6 +3484,16 @@ function AIModelsScreen({ confirmAction }) {
       ...(deployment.capabilities || [])
     ].join(" ").toLowerCase().includes(query);
   });
+  const deploymentGroups = [
+    { id: "experimentation", title: "Experimentation", description: "OpenRouter deployments for model comparison and rapid experiments." },
+    { id: "production", title: "Production direct", description: "Direct OpenAI and Gemini provider credentials and billing." },
+    { id: "local", title: "Local", description: "In-process models and self-hosted Ollama or vLLM endpoints." }
+  ].map((group) => ({
+    ...group,
+    items: visibleDeployments.filter((deployment) => (
+      (deployment.access_path || (deployment.locality === "local" ? "local" : "production")) === group.id
+    ))
+  }));
 
   return (
     <section className="page-stack ai-models-page">
@@ -3194,47 +3533,63 @@ function AIModelsScreen({ confirmAction }) {
 
       {status && <div className="inline-status">{status}</div>}
 
-      <section className="ai-model-card-grid">
+      <section className="ai-model-groups">
         {isLoading && <p className="muted-text">Loading AI models...</p>}
         {!isLoading && visibleDeployments.length === 0 && <p className="muted-text">No AI models match this search.</p>}
-        {visibleDeployments.map((deployment) => (
-          <article className="ai-model-card" key={deployment.id}>
-            <header>
-              <ProviderLogo item={deployment} className={`ai-model-icon ${deployment.locality === "local" ? "local" : ""}`} />
-              <div>
-                <h2>{deployment.name}</h2>
-                <p>{providerLabelFromDeployment(deployment)}</p>
-              </div>
-              <button className="ai-model-menu" type="button" aria-label={`Actions for ${deployment.name}`}>...</button>
+        {deploymentGroups.filter((group) => group.items.length > 0).map((group) => (
+          <section className="ai-model-group" key={group.id}>
+            <header className="ai-model-group-header">
+              <div><h2>{group.title}</h2><p>{group.description}</p></div>
+              <span>{group.items.length}</span>
             </header>
-            <p className="ai-model-description">
-              {deployment.metadata?.description
-                || (deployment.metadata?.builtin
-                  ? "Built-in local model available for development and offline demos."
-                  : `Configured ${deployment.locality} endpoint for ${deployment.capabilities.join(", ")}.`)}
-            </p>
-            <p className="ai-model-version">Model: {truncateMiddle(deployment.model, 54)}</p>
-            <div className="deployment-chip-row">
-              {deployment.capabilities.slice(0, 4).map((capability) => <span key={capability}>{capability}</span>)}
+            <div className="ai-model-card-grid">
+              {group.items.map((deployment) => (
+                <article className="ai-model-card" key={deployment.id}>
+                  <header>
+                    <ProviderLogo item={deployment} className={`ai-model-icon ${deployment.locality === "local" ? "local" : ""}`} />
+                    <div>
+                      <h2>{deployment.name}</h2>
+                      <p>{providerLabelFromDeployment(deployment)}</p>
+                    </div>
+                    <button
+                      className="ai-model-menu"
+                      type="button"
+                      disabled={Boolean(deployment.metadata?.builtin)}
+                      aria-label={`Edit ${deployment.name}`}
+                      onClick={() => openEditModel(deployment)}
+                    >...</button>
+                  </header>
+                  <p className="ai-model-description">
+                    {deployment.metadata?.description
+                      || (deployment.metadata?.builtin
+                        ? "Built-in local model available for development and offline demos."
+                        : `${deployment.connection_name || "Provider connection"} · ${deployment.health_status}`)}
+                  </p>
+                  <p className="ai-model-version">Model: {truncateMiddle(deployment.model, 44)}</p>
+                  <div className="deployment-chip-row">
+                    {deployment.capabilities.slice(0, 4).map((capability) => <span key={capability}>{capability}</span>)}
+                  </div>
+                  <footer>
+                    <span className={`ai-model-badge ${deployment.enabled ? "enabled" : "disabled"}`}>{deployment.enabled ? "Enabled" : "Disabled"}</span>
+                    <div className="deployment-actions">
+                      <button className="secondary-action" type="button" onClick={() => runDeploymentTest(deployment)}><IconLabel icon={Activity}>Test</IconLabel></button>
+                      <button
+                        className="secondary-action"
+                        type="button"
+                        disabled={!deployment.enabled && deployment.locality !== "local" && deployment.health_status !== "healthy"}
+                        onClick={() => toggleDeployment(deployment)}
+                      >
+                        <IconLabel icon={CheckCircle2}>{deployment.enabled ? "Disable" : "Enable"}</IconLabel>
+                      </button>
+                      <button className="secondary-action danger-action" type="button" onClick={() => removeDeployment(deployment)} disabled={deployment.metadata?.builtin}>
+                        <IconLabel icon={Trash2}>Delete</IconLabel>
+                      </button>
+                    </div>
+                  </footer>
+                </article>
+              ))}
             </div>
-            <footer>
-              <span className={`ai-model-badge ${deployment.enabled ? "enabled" : "disabled"}`}>{deployment.enabled ? "Enabled" : "Disabled"}</span>
-              <div className="deployment-actions">
-                <button className="secondary-action" type="button" onClick={() => runDeploymentTest(deployment)}><IconLabel icon={Activity}>Test</IconLabel></button>
-                <button
-                  className="secondary-action"
-                  type="button"
-                  disabled={!deployment.enabled && deployment.locality !== "local" && deployment.health_status !== "healthy"}
-                  onClick={() => toggleDeployment(deployment)}
-                >
-                  <IconLabel icon={CheckCircle2}>{deployment.enabled ? "Disable" : "Enable"}</IconLabel>
-                </button>
-                <button className="secondary-action danger-action" type="button" onClick={() => removeDeployment(deployment)} disabled={deployment.metadata?.builtin}>
-                  <IconLabel icon={Trash2}>Delete</IconLabel>
-                </button>
-              </div>
-            </footer>
-          </article>
+          </section>
         ))}
       </section>
 
@@ -3277,7 +3632,7 @@ function AIModelsScreen({ confirmAction }) {
                       onClick={() => applyTemplate(template)}
                     >
                       <ProviderLogo item={template} />
-                      <strong>{template.provider_label || template.label}</strong>
+                      <strong>{template.creatable ? (template.provider_label || template.label) : template.label}</strong>
                     </button>
                   ))}
                   {!providerOptions.length && <p className="muted-text">No providers match this search.</p>}
@@ -3294,10 +3649,10 @@ function AIModelsScreen({ confirmAction }) {
             <section className="ai-model-detail-panel" role="dialog" aria-modal="true" aria-label={`Configure ${selectedTemplate.provider_label || selectedTemplate.label}`}>
               <header className="ai-model-detail-header">
                 <div>
-                  <button className="text-action" type="button" onClick={() => setAddStage("select")}><IconLabel icon={ChevronLeft}>AI models</IconLabel></button>
+                  <button className="text-action" type="button" onClick={isEditingDeployment ? closeAddModel : () => setAddStage("select")}><IconLabel icon={ChevronLeft}>AI models</IconLabel></button>
                   <h2><ProviderLogo item={selectedTemplate} />{selectedTemplate.provider_label || selectedTemplate.label}</h2>
                   <a href="https://docs.litellm.ai/docs/providers" target="_blank" rel="noreferrer">Learn more about AI models <IconOnly icon={ExternalLink} size={16} /></a>
-                  <p className="ai-model-stepper">1. Select provider / 2. Provider details / 3. Add endpoint</p>
+                  <p className="ai-model-stepper">{isEditingDeployment ? "Edit AI model details and endpoint settings." : "1. Select provider / 2. Provider details / 3. Add endpoint"}</p>
                 </div>
                 <div className="ai-model-detail-actions">
                   <button className="secondary-action" type="button" onClick={closeAddModel}>Cancel</button>
@@ -3324,7 +3679,7 @@ function AIModelsScreen({ confirmAction }) {
                 <div className="ai-model-dev-tab">Development</div>
                 <div className="ai-model-endpoints">
                   <h4>Endpoints</h4>
-                  <p>Add at least 1 endpoint for the selected model or multiples to manage model load balancing.</p>
+                  <p>{isEditingDeployment ? "Modify endpoint URL or replace the stored API key. Model ID is fixed after registration." : "Add at least 1 endpoint for the selected model or multiples to manage model load balancing."}</p>
                   {createdDeploymentId || endpointDraft.modelId ? (
                     <div className="ai-model-endpoint-row">
                       <div>
@@ -3358,25 +3713,55 @@ function AIModelsScreen({ confirmAction }) {
               <header>
                 <div>
                   <button className="text-action" type="button" onClick={() => setAddStage("details")}><IconLabel icon={ChevronLeft}>{selectedTemplate.provider_label || selectedTemplate.label}</IconLabel></button>
-                  <h2>Add endpoint</h2>
+                  <h2>{isEditingDeployment ? "Edit endpoint" : "Add endpoint"}</h2>
                   <a href="https://docs.litellm.ai/docs/providers" target="_blank" rel="noreferrer">Learn about {selectedTemplate.provider_label || selectedTemplate.label} connection <IconOnly icon={ExternalLink} size={16} /></a>
-                  <p className="ai-model-stepper">1. Select provider / 2. Provider details / 3. Add endpoint</p>
+                  <p className="ai-model-stepper">{isEditingDeployment ? "Save endpoint changes or test the updated connection." : "1. Select provider / 2. Provider details / 3. Add endpoint"}</p>
                 </div>
                 <button className="panel-collapse-button" type="button" onClick={closeAddModel} aria-label="Close endpoint setup"><IconOnly icon={X} /></button>
               </header>
               <div className="ai-endpoint-form">
                 <label>
-                  Name <span className="required-marker">*</span>
-                  <input value={endpointDraft.name} onChange={(event) => setEndpointDraft({ ...endpointDraft, name: event.target.value })} />
+                  Provider connection
+                  <select
+                    value={endpointDraft.connectionId || ""}
+                    disabled={isEditingDeployment}
+                    onChange={(event) => {
+                      const connection = connections.find((item) => item.id === event.target.value);
+                      updateEndpointDraft(connection
+                        ? { connectionId: connection.id, name: connection.name, url: connection.api_base, apiKey: "" }
+                        : { connectionId: "", name: "", url: selectedTemplate.deployment_defaults?.api_base || "", apiKey: "" });
+                      setAvailableModels([]);
+                    }}
+                  >
+                    <option value="">Create a new {selectedTemplate.provider_label || selectedTemplate.label} connection</option>
+                    {compatibleConnections.map((connection) => (
+                      <option key={connection.id} value={connection.id}>
+                        {connection.name} · {connection.health_status}
+                      </option>
+                    ))}
+                  </select>
+                  <span>Connections keep endpoint credentials separate from reusable model deployments.</span>
+                </label>
+                <label>
+                  Connection name <span className="required-marker">*</span>
+                  <input value={endpointDraft.name} onChange={(event) => updateEndpointDraft({ name: event.target.value })} />
                 </label>
                 <label>
                   Model ID <span className="required-marker">*</span>
-                  <input value={endpointDraft.modelId} onChange={(event) => setEndpointDraft({ ...endpointDraft, modelId: event.target.value })} />
-                  <span>Enter the model unique identifier.</span>
+                  <input
+                    list="available-model-ids"
+                    value={endpointDraft.modelId}
+                    readOnly={isEditingDeployment}
+                    onChange={(event) => updateEndpointDraft({ modelId: event.target.value })}
+                  />
+                  <datalist id="available-model-ids">
+                    {availableModels.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}
+                  </datalist>
+                  <span>{isEditingDeployment ? "Model ID is immutable. Delete and recreate this AI model to change it." : "Use a provider-native model ID. Successful connection tests load available model suggestions."}</span>
                 </label>
                 <label>
                   URL {requiresEndpointUrl(selectedTemplate) && <span className="required-marker">*</span>}
-                  <input value={endpointDraft.url} onChange={(event) => setEndpointDraft({ ...endpointDraft, url: event.target.value })} placeholder={selectedTemplate.deployment_defaults?.api_base || "Optional provider base URL"} />
+                  <input value={endpointDraft.url} onChange={(event) => updateEndpointDraft({ url: event.target.value })} placeholder={selectedTemplate.deployment_defaults?.api_base || "Optional provider base URL"} />
                 </label>
                 <label>
                   API key {selectedTemplate.credential_fields?.includes("api_key") && <span className="required-marker">*</span>}
@@ -3384,22 +3769,40 @@ function AIModelsScreen({ confirmAction }) {
                     <input
                       type={showEndpointSecret ? "text" : "password"}
                       value={endpointDraft.apiKey}
-                      onChange={(event) => setEndpointDraft({ ...endpointDraft, apiKey: event.target.value })}
+                      onChange={(event) => updateEndpointDraft({ apiKey: event.target.value })}
+                      placeholder={isEditingDeployment ? "Leave blank to keep existing stored key" : ""}
                       autoComplete="off"
                     />
                     <button type="button" onClick={() => setShowEndpointSecret(!showEndpointSecret)} aria-label={showEndpointSecret ? "Hide API key" : "Show API key"}>
                       <IconOnly icon={showEndpointSecret ? EyeOff : Eye} size={18} />
                     </button>
                   </div>
+                  <span>The API key is encrypted by the backend and is never returned to this browser.</span>
                 </label>
+                {endpointTestResult && (
+                  <div className={`endpoint-test-result ${endpointTestResult.status === "healthy" ? "is-pass" : endpointTestResult.status === "rate_limited" ? "is-warning" : endpointTestResult.status === "testing" ? "is-testing" : "is-fail"}`}>
+                    <IconOnly icon={endpointTestResult.status === "healthy" ? CheckCircle2 : endpointTestResult.status === "testing" ? RefreshCw : AlertTriangle} size={18} />
+                    <div>
+                      <strong>{endpointTestResult.message || (endpointTestResult.status === "healthy" ? "Endpoint test passed." : "Endpoint test failed.")}</strong>
+                      {endpointTestResult.runtime && <span>Runtime: {endpointTestResult.runtime}</span>}
+                      {endpointTestResult.sample && <span>Sample: {endpointTestResult.sample}</span>}
+                      {endpointTestResult.error && <span>{endpointTestResult.error}</span>}
+                    </div>
+                  </div>
+                )}
               </div>
               <footer>
                 <button className="secondary-action" type="button" onClick={() => setAddStage("details")}>Back</button>
                 <button className="secondary-action" type="button" onClick={testEndpointDraft} disabled={isSaving || isTesting}>
                   <IconLabel icon={Activity}>{isTesting ? "Testing..." : "Test endpoint"}</IconLabel>
                 </button>
-                <button className="primary-action" type="button" onClick={addEndpointAndClose} disabled={isSaving}>
-                  <IconLabel icon={Plus}>{isSaving ? "Adding..." : "Add"}</IconLabel>
+                <button
+                  className="primary-action"
+                  type="button"
+                  onClick={addEndpointAndClose}
+                  disabled={isSaving || isTesting || !["healthy", "rate_limited"].includes(endpointTestResult?.status)}
+                >
+                  <IconLabel icon={Save}>{isSaving ? "Saving..." : "Save endpoint"}</IconLabel>
                 </button>
               </footer>
             </section>
@@ -3959,6 +4362,26 @@ function IconLabel({ icon: Icon, children, size = 16 }) {
   );
 }
 
+function AssistantMessageContent({ content }) {
+  return (
+    <div className="message-content">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        skipHtml
+        components={{
+          a: ({ children, href, title }) => (
+            <a href={href} title={title} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          )
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 function IconOnly({ icon: Icon, size = 18 }) {
   return <Icon className="button-icon" size={size} aria-hidden="true" strokeWidth={2} />;
 }
@@ -4216,9 +4639,8 @@ function applyChatConfigurationToDraft(current, record) {
 }
 
 function applyChatConfigurationSnapshotToDraft(current, snapshot = {}, configurationId = "") {
-  const provider = generatorProviders.includes(snapshot.generator_provider) ? snapshot.generator_provider : defaultChatConfigurationDraft.generatorProvider;
-  const models = generatorModelsByProvider[provider] || generatorModelsByProvider.Local;
-  const model = models.includes(snapshot.generator_model) ? snapshot.generator_model : models[0];
+  const provider = String(snapshot.generator_provider || defaultChatConfigurationDraft.generatorProvider).trim();
+  const model = String(snapshot.generator_model || defaultChatConfigurationDraft.generatorModel).trim();
   const metadata = snapshot.metadata || {};
   const route = routeValues().includes(metadata.route_strategy) ? metadata.route_strategy : current.route;
   const retrievalMode = retrievalModeLabels().includes(metadata.retrieval_mode_label)
@@ -4417,8 +4839,27 @@ function uniqueDeploymentName(baseName, deployments = []) {
   return `${normalizedBaseName} ${Date.now()}`;
 }
 
+function uniqueConnectionName(baseName, connections = []) {
+  const normalized = String(baseName || "Model connection").trim() || "Model connection";
+  const existingNames = new Set(connections.map((connection) => String(connection.name || "").trim().toLowerCase()));
+  if (!existingNames.has(normalized.toLowerCase())) return normalized;
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${normalized} ${index}`;
+    if (!existingNames.has(candidate.toLowerCase())) return candidate;
+  }
+  return `${normalized} ${Date.now()}`;
+}
+
+function connectionProviderForTemplate(template = {}) {
+  const provider = String(template.provider || "").trim().toLowerCase();
+  if (provider === "local") return "local_builtin";
+  if (provider === "google") return "gemini";
+  return provider;
+}
+
 function emptyModelFarmWizard() {
   return {
+    connectionId: "",
     name: "",
     description: "",
     model: "",
@@ -4443,10 +4884,104 @@ function emptyModelFarmWizard() {
 
 function emptyEndpointDraft(defaults = {}) {
   return {
+    connectionId: defaults.connection_id || "",
     name: "",
     modelId: defaults.model || "",
     url: defaults.api_base || "",
     apiKey: ""
+  };
+}
+
+function modelFarmWizardFromDeployment(deployment = {}) {
+  const defaultParameters = objectOrEmpty(deployment.default_parameters);
+  const limits = objectOrEmpty(deployment.limits);
+  const pricing = objectOrEmpty(deployment.pricing);
+  const metadata = objectOrEmpty(deployment.metadata);
+  return {
+    ...emptyModelFarmWizard(),
+    connectionId: deployment.connection_id || "",
+    name: deployment.name || "",
+    description: metadata.description || "",
+    model: deployment.model || "",
+    capabilities: [...(deployment.capabilities || [])],
+    apiBase: deployment.api_base || "",
+    credentialEnvRefs: cleanCredentialRefs(deployment.credential_env_refs || {}),
+    credentialSecrets: {},
+    defaultParameters,
+    limits,
+    pricing,
+    monthlyBudgetUsd: Number(deployment.monthly_budget_usd || 0),
+    hardBudget: deployment.hard_budget !== false,
+    temperature: Number(defaultParameters.temperature ?? 0.2),
+    maxTokens: Number(defaultParameters.max_tokens ?? limits.max_output_tokens ?? 800),
+    timeoutSeconds: Number(limits.timeout_seconds || 60),
+    dimension: Number(limits.dimension || 0),
+    inputPrice: Number(pricing.input_per_million_tokens_usd || 0),
+    outputPrice: Number(pricing.output_per_million_tokens_usd || 0),
+    metadata
+  };
+}
+
+function endpointDraftFromDeployment(deployment = {}) {
+  return {
+    connectionId: deployment.connection_id || "",
+    name: deployment.connection_name || deployment.metadata?.endpoint_name || deployment.name || "",
+    modelId: deployment.model || "",
+    url: deployment.api_base || "",
+    apiKey: ""
+  };
+}
+
+function modelFarmDeploymentPatchPayload(wizard) {
+  const payload = modelFarmWizardPayload("", wizard);
+  delete payload.template_id;
+  delete payload.model;
+  delete payload.capabilities;
+  delete payload.connection_id;
+  delete payload.api_base;
+  delete payload.credential_env_refs;
+  delete payload.credential_secrets;
+  return payload;
+}
+
+function templateIdForDeployment(deployment = {}, templates = []) {
+  const explicit = deployment.metadata?.template_id || "";
+  if (explicit && templates.some((template) => template.id === explicit)) return explicit;
+  const provider = String(deployment.provider || "").toLowerCase();
+  if (provider === "openrouter") return "openrouter-generation";
+  if (provider === "gemini" || provider === "google") return "gemini-generation";
+  if (provider === "ollama" || provider === "ollama_chat") return "ollama-generation";
+  if (provider === "vllm" || provider === "hosted_vllm") return "vllm-generation";
+  const match = templates.find((template) => String(template.provider || "").toLowerCase() === provider);
+  return match?.id || explicit || provider || "openai-generation";
+}
+
+function templateFromDeployment(deployment = {}) {
+  return {
+    id: templateIdForDeployment(deployment),
+    label: deployment.name || providerLabelFromDeployment(deployment),
+    provider_label: providerLabelFromDeployment(deployment),
+    provider: deployment.provider || "",
+    access_path: deployment.access_path || (deployment.locality === "local" ? "local" : "production"),
+    model: deployment.model || "",
+    capabilities: deployment.capabilities || [],
+    locality: deployment.locality || "remote",
+    creatable: deployment.locality !== "local",
+    credential_fields: deployment.credential_status?.stored_secret_keys?.includes("api_key") || deployment.credential_status?.references?.length
+      ? ["api_key"]
+      : [],
+    deployment_defaults: {
+      name: deployment.name || "",
+      model: deployment.model || "",
+      api_base: deployment.api_base || "",
+      capabilities: deployment.capabilities || [],
+      default_parameters: deployment.default_parameters || {},
+      limits: deployment.limits || {},
+      pricing: deployment.pricing || {},
+      monthly_budget_usd: deployment.monthly_budget_usd || 0,
+      hard_budget: deployment.hard_budget,
+      metadata: deployment.metadata || {}
+    }
   };
 }
 
@@ -4467,6 +5002,7 @@ function modelFarmWizardPayload(templateId, wizard) {
   if (Number(wizard.outputPrice || 0) > 0) pricing.output_per_million_tokens_usd = Number(wizard.outputPrice);
   return {
     template_id: templateId,
+    connection_id: wizard.connectionId || "",
     name: wizard.name,
     model: wizard.model,
     api_base: wizard.apiBase || "",
@@ -4530,6 +5066,7 @@ function providerLogoSource(item) {
   const provider = String(item?.provider || "").toLowerCase();
   const templateId = String(item?.metadata?.template_id || item?.id || "").toLowerCase();
   const model = String(item?.model || "").toLowerCase();
+  if (templateId === "openrouter-generation" || provider === "openrouter") return `${AI_LOGOS_PATH}openrouter.svg`;
   if (templateId === "openai-compatible" || provider === "custom") return `${AI_LOGOS_PATH}openrouter.svg`;
   if (provider === "openai") return `${AI_LOGOS_PATH}openai.svg`;
   if (provider === "azure") return `${AI_LOGOS_PATH}azure-openai.svg`;

@@ -9,7 +9,9 @@ flowchart TB
     GATEWAY["Model Gateway"]
     LOCAL["Local Adapters: extractive, FLAN-T5, hash, MiniLM, reranker"]
     LITELLM["Embedded LiteLLM SDK"]
-    PROVIDERS["Paid / Hosted / OpenAI-Compatible Providers"]
+    OR["OpenRouter: Experimentation"]
+    DIRECT["OpenAI / Gemini: Production Direct"]
+    SERVERS["Ollama / vLLM: Local Servers"]
     STORAGE["PostgreSQL + pgVector"]
     JOBS["PostgreSQL Job Queue"]
     WORKER["Ingestion / Indexing / Evaluation Worker"]
@@ -18,7 +20,10 @@ flowchart TB
     UI --> API
     API --> RAG --> POLICY --> GATEWAY
     GATEWAY --> LOCAL
-    GATEWAY --> LITELLM --> PROVIDERS
+    GATEWAY --> LITELLM
+    LITELLM --> OR
+    LITELLM --> DIRECT
+    LITELLM --> SERVERS
     RAG --> STORAGE
     API --> JOBS --> WORKER
     WORKER --> GATEWAY
@@ -31,9 +36,9 @@ flowchart TB
 - Application layer: React RAG Studio, Knowledge Bases, AI Models, Evaluation, Analytics, and API access.
 - Adaptive RAG layer: policy check, classification, L1/L2/L3 routing, retrieval, optional reranking, prompt assembly, generation, citation validation, persistence, and telemetry.
 - Knowledge processing layer: local upload and website connectors, loader registry, metadata extraction, deduplication, real chunking strategies, embedding, and active index management.
-- AI Models layer: admin-registered deployments for generation, embedding, rerank, judge, planner, and classifier capabilities.
+- AI Models layer: reusable provider connections plus admin-registered deployments for generation, embedding, rerank, judge, planner, and classifier capabilities.
 - Model Gateway layer: local adapters plus embedded LiteLLM for paid/hosted providers, normalized errors, budget checks, data-egress policy, usage events, and optional fallbacks.
-- Storage layer: PostgreSQL relational metadata, dimension-aware pgVector chunk embeddings, chat history, configurations, jobs, users, model deployments, usage, evaluation, and audit-friendly metadata.
+- Storage layer: PostgreSQL relational metadata, dimension-aware pgVector chunk embeddings, chat history, configurations, jobs, users, model connections/deployments, usage, evaluation, and audit-friendly metadata.
 - Worker layer: durable PostgreSQL jobs for ingestion, indexing, and evaluation using leases and retry metadata.
 - Governance layer: JWT-ready roles, secret redaction, external-processing controls, hard budgets, and citation validation.
 
@@ -58,7 +63,20 @@ AI Models interfaces:
 - `ModelGateway.stream(messages, deployment_id, ...) -> ModelStreamEvent`
 - `ModelGateway.embed(texts, deployment_id, ...) -> ModelEmbeddingResult`
 - `ModelGateway.rerank(query, documents, deployment_id, top_n) -> ModelRerankResult`
-- `ModelFarmService` validates capabilities, credential environment references, budgets, egress policy, health, and usage.
+- `ModelAdapter` defines provider-neutral generation, streaming, embedding, and reranking behavior.
+- `LocalBuiltinAdapter` executes in-process extractive, FLAN-T5, hash, MiniLM, and lexical implementations.
+- `LiteLLMAdapter` is the only inference HTTP boundary for OpenRouter, OpenAI, Gemini, Ollama, and vLLM.
+- `ModelFarmService` validates connection identity, capabilities, encrypted credentials, budgets, egress policy, health, and usage.
+
+Runtime model ID mapping:
+
+| Connection | Stored model ID | LiteLLM model ID |
+|---|---|---|
+| OpenRouter | `google/gemma-...` | `openrouter/google/gemma-...` |
+| OpenAI direct | `gpt-4.1-mini` | `gpt-4.1-mini` |
+| Gemini direct | `gemini-2.5-flash` | `gemini/gemini-2.5-flash` |
+| Ollama | `llama3.1` | `ollama_chat/llama3.1` |
+| vLLM | server model name | `hosted_vllm/<model>` |
 
 Indexing model:
 

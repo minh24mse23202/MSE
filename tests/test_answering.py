@@ -1,7 +1,10 @@
+import asyncio
+
 from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions
 from aragbiz.generation import ExtractiveGenerator
 from aragbiz.knowledge import HashEmbeddingModel, KnowledgeService, OverlapChunker
 from aragbiz.knowledge_store import JsonKnowledgeRepository
+from aragbiz.model_farm import ModelStreamEvent
 from aragbiz.routing import AdaptiveRouter
 
 
@@ -66,6 +69,40 @@ def test_adaptive_simple_routes_to_l1(tmp_path):
     assert result.metadata["complexity_label"] == "simple"
     assert result.metadata["route_level"] == "l1_direct"
     assert result.contexts == []
+
+
+def test_stream_trace_explains_generator_fallback(tmp_path):
+    service, _ = build_service(tmp_path, label="simple")
+    service.model_gateway = FallbackGateway()
+
+    async def collect():
+        return [
+            event
+            async for event in service.answer_stream(
+                "What is Wix Payments?",
+                AnswerOptions(
+                    mode="direct",
+                    chat_configuration={
+                        "generator_deployment_id": "remote-gemma",
+                        "generator_provider": "OpenRouter",
+                        "generator_model": "google/gemma-free",
+                        "fallback_deployment_ids": ["model-local-extractive"],
+                    },
+                ),
+            )
+        ]
+
+    events = asyncio.run(collect())
+    completed = next(event for event in events if event.type == "completed")
+    metadata = completed.data["result"].metadata
+    fallback_trace = next(step for step in metadata["trace_steps"] if step["step"] == "Generator fallback")
+    execution_trace = next(step for step in metadata["trace_steps"] if step["step"] == "Generator execution")
+
+    assert fallback_trace["metadata"]["deployment_id"] == "remote-gemma"
+    assert execution_trace["status"] == "warning"
+    assert metadata["configured_generator"]["model"] == "google/gemma-free"
+    assert metadata["actual_generator"]["model"] == "extractive"
+    assert metadata["fallback_used"] is True
 
 
 def test_adaptive_moderate_routes_to_l2_with_bm25_contexts(tmp_path):
@@ -137,6 +174,47 @@ def test_l2_hybrid_combines_bm25_and_dense_scores(tmp_path):
     assert result.metadata["retrieval_mode"] == "hybrid"
     assert len(result.contexts) == 2
     assert all(context.mode == "hybrid" for context in result.contexts)
+
+
+class FallbackGateway:
+    async def stream(self, *args, **kwargs):
+        failed_attempt = {
+            "deployment_id": "remote-gemma",
+            "deployment_name": "Google Gemma",
+            "provider": "OpenRouter",
+            "model": "google/gemma-free",
+            "fallback_index": 0,
+            "error_category": "rate_limit",
+            "retryable": True,
+            "error": "Provider returned 429",
+        }
+        yield ModelStreamEvent(
+            "model_fallback",
+            {
+                **failed_attempt,
+                "next_deployment_id": "model-local-extractive",
+                "next_deployment_name": "Local Extractive",
+                "next_provider": "Local",
+                "next_model": "extractive",
+            },
+        )
+        yield ModelStreamEvent("delta", {"text": "Fallback answer"})
+        yield ModelStreamEvent(
+            "model_completed",
+            {
+                "deployment_id": "model-local-extractive",
+                "provider": "Local",
+                "model": "extractive",
+                "status": "completed",
+                "input_tokens": 3,
+                "output_tokens": 2,
+                "metadata": {
+                    "runtime": "deterministic-extractive",
+                    "fallback_index": 1,
+                    "fallback_attempts": [failed_attempt],
+                },
+            },
+        )
 
 
 def test_l2_retrieval_can_be_filtered_to_selected_documents(tmp_path):

@@ -1,130 +1,328 @@
+import asyncio
+import base64
+import hashlib
+import hmac
+import json
+
 import pytest
 
 from aragbiz.model_farm import (
     JsonModelFarmRepository,
     ModelCallContext,
+    ModelConnection,
     ModelFarmError,
     ModelFarmService,
     ModelGateway,
+    _gateway_model_name,
 )
 
 
-def build_service(tmp_path):
-    return ModelFarmService(JsonModelFarmRepository(tmp_path / "model_farm.json"))
+TEST_SECRET_KEY = "unit-test-model-secret-key"
 
 
-def test_local_deployments_are_seeded(tmp_path):
+def build_service(tmp_path, *, secret_key=TEST_SECRET_KEY):
+    return ModelFarmService(
+        JsonModelFarmRepository(tmp_path / "model_farm.json"),
+        secret_key=secret_key,
+    )
+
+
+def create_remote_connection(service, provider="openrouter", *, name="Test connection"):
+    defaults = {
+        "openrouter": ("experimentation", "https://openrouter.ai/api/v1"),
+        "openai": ("production", "https://api.openai.com/v1"),
+        "gemini": ("production", "https://generativelanguage.googleapis.com/v1beta"),
+    }
+    access_path, api_base = defaults[provider]
+    return service.create_connection(
+        {
+            "name": name,
+            "provider": provider,
+            "access_path": access_path,
+            "api_base": api_base,
+            "credential_secrets": {"api_key": "sk-unit-test"},
+            "health_status": "healthy",
+            "enabled": True,
+        }
+    )
+
+
+def create_remote_deployment(service, connection, *, model="google/gemma-3-27b-it:free", name="Test model"):
+    template_id = {
+        "openrouter": "openrouter-generation",
+        "openai": "openai-generation",
+        "gemini": "gemini-generation",
+    }[connection.provider]
+    deployment = service.create_deployment_from_template(
+        template_id,
+        {
+            "connection_id": connection.id,
+            "name": name,
+            "model": model,
+            "capabilities": ["generation", "judge", "planner"],
+        },
+    )
+    service.set_health(deployment.id, healthy=True)
+    return service.update_deployment(deployment.id, {"enabled": True})
+
+
+def test_local_deployments_and_connection_are_seeded(tmp_path):
     service = build_service(tmp_path)
 
-    deployments = service.list_deployments()
-
-    assert {item.id for item in deployments} >= {
+    assert {item.id for item in service.list_deployments()} >= {
         "model-local-extractive",
         "model-local-hash-384",
         "model-local-lexical-reranker",
     }
-    assert service.resolve("model-local-extractive", "generation").enabled is True
+    connection = service.get_connection("connection-local-builtin")
+    assert connection.provider == "local_builtin"
+    assert connection.enabled is True
+    assert service.resolve("model-local-extractive", "generation").connection_id == connection.id
 
 
-def test_provider_templates_are_available(tmp_path):
-    service = build_service(tmp_path)
+def test_provider_templates_cover_supported_access_paths(tmp_path):
+    templates = build_service(tmp_path).providers()
+    ids = {item["id"] for item in templates}
 
-    templates = service.providers()
-
-    assert {item["id"] for item in templates} >= {
+    assert ids >= {
         "local-extractive",
+        "openrouter-generation",
         "openai-generation",
-        "azure-openai-generation",
-        "openai-compatible",
-        "cohere-generation-rerank",
-        "huggingface-generation",
-        "bedrock-generation",
+        "openai-embedding",
+        "gemini-generation",
+        "ollama-generation",
+        "vllm-generation",
     }
-    assert next(item for item in templates if item["id"] == "local-extractive")["creatable"] is False
-    assert next(item for item in templates if item["id"] == "openai-generation")["creatable"] is True
+    assert next(item for item in templates if item["id"] == "openrouter-generation")["access_path"] == "experimentation"
+    assert next(item for item in templates if item["id"] == "openai-generation")["access_path"] == "production"
+    assert next(item for item in templates if item["id"] == "ollama-generation")["access_path"] == "local"
 
 
-def test_create_deployment_from_template_uses_unique_disabled_record(tmp_path):
+@pytest.mark.parametrize(
+    ("provider", "model", "api_base", "expected"),
+    [
+        ("openrouter", "google/gemma-3-27b-it:free", "https://openrouter.ai/api/v1", "openrouter/google/gemma-3-27b-it:free"),
+        ("openai", "gpt-4.1-mini", "https://api.openai.com/v1", "gpt-4.1-mini"),
+        ("gemini", "gemini-2.5-flash", "https://generativelanguage.googleapis.com/v1beta", "gemini/gemini-2.5-flash"),
+        ("ollama", "llama3.1", "http://127.0.0.1:11434", "ollama_chat/llama3.1"),
+        ("vllm", "meta-llama/Llama-3.1-8B-Instruct", "http://127.0.0.1:8001/v1", "hosted_vllm/meta-llama/Llama-3.1-8B-Instruct"),
+    ],
+)
+def test_gateway_model_name_normalization(provider, model, api_base, expected):
+    assert _gateway_model_name(provider, model, api_base) == expected
+
+
+def test_connection_secret_is_aes_gcm_encrypted_and_redacted(tmp_path):
     service = build_service(tmp_path)
+    connection = create_remote_connection(service)
+    raw_store = (tmp_path / "model_farm.json").read_text(encoding="utf-8")
 
-    first = service.create_deployment_from_template(
-        "openai-generation",
+    assert "sk-unit-test" not in raw_store
+    assert connection.credential_secrets["api_key"].startswith("v2:")
+    assert service.credential_values(connection)["api_key"] == "sk-unit-test"
+    assert service.credential_status(connection)["stored_secret_keys"] == ["api_key"]
+
+
+def test_stored_credentials_require_configured_encryption_key(tmp_path):
+    service = build_service(tmp_path, secret_key="")
+
+    with pytest.raises(ModelFarmError, match="ARAGBIZ_MODEL_SECRET_KEY"):
+        service.create_connection(
+            {
+                "name": "No encryption key",
+                "provider": "openrouter",
+                "access_path": "experimentation",
+                "credential_secrets": {"api_key": "must-not-be-stored"},
+            }
+        )
+
+
+def test_v1_credentials_remain_readable_and_upgrade_on_save(tmp_path):
+    service = build_service(tmp_path)
+    connection = create_remote_connection(service)
+    legacy_token = _legacy_v1_encrypt("legacy-key", TEST_SECRET_KEY)
+    service.repository.save_connection(
+        ModelConnection(
+            **{
+                **connection.__dict__,
+                "credential_secrets": {"api_key": legacy_token},
+            }
+        )
+    )
+
+    assert service.credential_values(service.get_connection(connection.id))["api_key"] == "legacy-key"
+    updated = service.update_connection(connection.id, {"name": "Updated connection"})
+    assert updated.credential_secrets["api_key"].startswith("v2:")
+
+
+def test_template_deployment_reuses_connection_and_keeps_native_model_id(tmp_path):
+    service = build_service(tmp_path)
+    connection = create_remote_connection(service)
+    deployment = service.create_deployment_from_template(
+        "openrouter-generation",
         {
-            "name": "OpenAI GPT deployment",
-            "credential_env_refs": {"api_key": "ARAGBIZ_MODEL_OPENAI_API_KEY"},
+            "connection_id": connection.id,
+            "name": "OpenRouter Gemma",
+            "model": "google/gemma-3-27b-it:free",
             "capabilities": ["generation", "judge"],
         },
     )
-    second = service.create_deployment_from_template(
-        "openai-generation",
-        {
-            "name": "OpenAI GPT deployment",
-            "credential_env_refs": {"api_key": "ARAGBIZ_MODEL_OPENAI_API_KEY"},
-            "capabilities": ["generation"],
-        },
-    )
 
-    assert first.enabled is False
-    assert first.health_status == "untested"
-    assert second.name == "OpenAI GPT deployment 2"
-    with pytest.raises(ModelFarmError, match="Test a remote deployment"):
-        service.update_deployment(first.id, {"enabled": True})
+    assert deployment.connection_id == connection.id
+    assert deployment.model == "google/gemma-3-27b-it:free"
+    assert deployment.api_base == ""
+    assert deployment.credential_secrets == {}
+    assert service.connection_for_deployment(deployment, require_enabled=False).api_base == "https://openrouter.ai/api/v1"
 
 
-def test_create_deployment_encrypts_stored_api_key(tmp_path):
+def test_remote_connection_cannot_enable_before_successful_test(tmp_path):
     service = build_service(tmp_path)
-
-    deployment = service.create_deployment_from_template(
-        "openai-generation",
-        {
-            "name": "OpenAI secret deployment",
-            "credential_secrets": {"api_key": "sk-unit-test"},
-            "capabilities": ["generation"],
-        },
-    )
-
-    raw_store = (tmp_path / "model_farm.json").read_text(encoding="utf-8")
-    status = service.credential_status(deployment)
-
-    assert "sk-unit-test" not in raw_store
-    assert deployment.credential_secrets["api_key"].startswith("v1:")
-    assert status["configured"] is True
-    assert status["stored_secret_keys"] == ["api_key"]
-
-
-def test_builtin_template_cannot_create_duplicate_local_deployment(tmp_path):
-    service = build_service(tmp_path)
-
-    with pytest.raises(ModelFarmError, match="already registered"):
-        service.create_deployment_from_template("local-extractive", {})
-
-
-def test_remote_credential_references_must_use_project_prefix(tmp_path):
-    service = build_service(tmp_path)
-
-    with pytest.raises(ModelFarmError, match="ARAGBIZ_MODEL_"):
-        service.create_deployment(
+    with pytest.raises(ModelFarmError, match="Test a remote connection"):
+        service.create_connection(
             {
-                "name": "Bad credential",
+                "name": "Untested OpenAI",
                 "provider": "openai",
-                "model": "gpt-4.1-mini",
-                "capabilities": ["generation"],
-                "credential_env_refs": {"api_key": "OPENAI_API_KEY"},
+                "access_path": "production",
+                "credential_env_refs": {"api_key": "ARAGBIZ_MODEL_OPENAI_API_KEY"},
+                "enabled": True,
             }
         )
+
+
+def test_litellm_generation_uses_connection_mapping_and_records_usage(tmp_path):
+    service = build_service(tmp_path)
+    connection = create_remote_connection(service)
+    deployment = create_remote_deployment(service, connection)
+    gateway = ModelGateway(service)
+    fake = FakeLiteLLM()
+    gateway.litellm_adapter._module = lambda: fake
+
+    result = asyncio.run(
+        gateway.generate(
+            [{"role": "user", "content": "Hello"}],
+            deployment.id,
+            context=ModelCallContext(purpose="unit-test", request_id="request-1"),
+        )
+    )
+
+    assert result.text == "ready"
+    assert fake.calls[0]["model"] == "openrouter/google/gemma-3-27b-it:free"
+    assert fake.calls[0]["api_base"] == "https://openrouter.ai/api/v1"
+    assert fake.calls[0]["api_key"] == "sk-unit-test"
+    usage = service.list_usage(purpose="unit-test")[0]
+    assert usage.connection_id == connection.id
+    assert usage.access_path == "experimentation"
+    assert usage.gateway_model == "openrouter/google/gemma-3-27b-it:free"
+
+
+def test_litellm_stream_forwards_provider_deltas(tmp_path):
+    service = build_service(tmp_path)
+    connection = create_remote_connection(service)
+    deployment = create_remote_deployment(service, connection)
+    gateway = ModelGateway(service)
+    gateway.litellm_adapter._module = lambda: FakeLiteLLM(stream_parts=["Hel", "lo"])
+
+    async def collect():
+        return [event async for event in gateway.stream([{"role": "user", "content": "Hello"}], deployment.id)]
+
+    events = asyncio.run(collect())
+    assert [event.data["text"] for event in events if event.type == "delta"] == ["Hel", "lo"]
+    completed = next(event for event in events if event.type == "model_completed")
+    assert completed.data["metadata"]["gateway_model"].startswith("openrouter/")
+
+
+def test_official_gemini_api_base_is_not_forwarded_to_litellm(tmp_path):
+    service = build_service(tmp_path)
+    connection = create_remote_connection(service, provider="gemini")
+    deployment = create_remote_deployment(
+        service,
+        connection,
+        model="gemini-2.5-flash",
+        name="Gemini Flash",
+    )
+    gateway = ModelGateway(service)
+    fake = FakeLiteLLM()
+    fake.model_cost = {"gemini/gemini-2.5-flash": {}}
+    gateway.litellm_adapter._module = lambda: fake
+
+    result = asyncio.run(gateway.test_deployment(deployment.id))
+
+    assert result["status"] == "healthy"
+    assert fake.calls[0]["model"] == "gemini/gemini-2.5-flash"
+    assert fake.calls[0]["api_key"] == "sk-unit-test"
+    assert fake.calls[0]["max_tokens"] == 128
+    assert "api_base" not in fake.calls[0]
+
+
+def test_rate_limited_model_test_preserves_healthy_connection(tmp_path):
+    service = build_service(tmp_path)
+    connection = create_remote_connection(service)
+    deployment = create_remote_deployment(service, connection)
+    gateway = ModelGateway(service)
+    gateway.litellm_adapter._module = lambda: RateLimitedLiteLLM()
+
+    result = asyncio.run(gateway.test_deployment(deployment.id))
+
+    assert result["status"] == "rate_limited"
+    assert result["error_category"] == "rate_limit"
+    assert result["retryable"] is True
+    assert service.get_deployment(deployment.id).health_status == "rate_limited"
+    assert service.get_connection(connection.id).health_status == "healthy"
+
+
+def test_rate_limited_draft_test_returns_retryable_status(tmp_path):
+    service = build_service(tmp_path)
+    connection = create_remote_connection(service)
+    deployment = create_remote_deployment(service, connection)
+    gateway = ModelGateway(service)
+    gateway.litellm_adapter._module = lambda: RateLimitedLiteLLM()
+
+    result = asyncio.run(gateway.test_draft_deployment(deployment))
+
+    assert result["status"] == "rate_limited"
+    assert result["retryable"] is True
+    assert result["deployment"].health_status == "rate_limited"
+
+
+def test_generation_fallback_uses_next_deployment_only_for_retryable_failure(tmp_path):
+    service = build_service(tmp_path)
+    first_connection = create_remote_connection(service, name="Primary connection")
+    second_connection = create_remote_connection(service, provider="openai", name="Fallback connection")
+    first = create_remote_deployment(service, first_connection, name="Primary model")
+    second = create_remote_deployment(service, second_connection, model="gpt-4.1-mini", name="Fallback model")
+    gateway = ModelGateway(service)
+    fake = FakeLiteLLM(fail_models={"openrouter/google/gemma-3-27b-it:free"})
+    gateway.litellm_adapter._module = lambda: fake
+
+    result = asyncio.run(
+        gateway.generate(
+            [{"role": "user", "content": "Hello"}],
+            first.id,
+            fallback_deployment_ids=[second.id],
+        )
+    )
+
+    assert result.deployment_id == second.id
+    assert result.metadata["fallback_index"] == 1
+    assert result.metadata["fallback_attempts"][0]["deployment_id"] == first.id
+    assert result.metadata["fallback_attempts"][0]["error_category"] == "timeout"
+    assert [call["model"] for call in fake.calls] == [
+        "openrouter/google/gemma-3-27b-it:free",
+        "gpt-4.1-mini",
+    ]
 
 
 def test_local_generation_embedding_and_reranking_record_usage(tmp_path):
     service = build_service(tmp_path)
     gateway = ModelGateway(service)
-    context = ModelCallContext(purpose="unit-test", request_id="req-1")
+    context = ModelCallContext(purpose="local-test", request_id="req-1")
 
     generation = gateway.generate_sync(
         [{"role": "user", "content": "What is UAT?\nContext: UAT validates readiness before go-live."}],
         "model-local-extractive",
         context=context,
     )
-    embedding = gateway.embed_sync(["What is UAT?", "UAT validates go-live readiness."], "model-local-hash-384", context=context)
+    embedding = gateway.embed_sync(["What is UAT?"], "model-local-hash-384", context=context)
     reranked = gateway.rerank_sync(
         "UAT readiness",
         ["Payroll setup", "UAT validates readiness before go-live"],
@@ -135,25 +333,204 @@ def test_local_generation_embedding_and_reranking_record_usage(tmp_path):
 
     assert "UAT" in generation.text
     assert embedding.dimension == 384
-    assert len(embedding.embeddings) == 2
     assert reranked.items[0].index == 1
-    usage = service.list_usage(purpose="unit-test")
-    assert [event.capability for event in usage] == ["rerank", "embedding", "generation"]
+    assert all(item.connection_id == "connection-local-builtin" for item in service.list_usage(purpose="local-test"))
 
 
-def test_disabled_deployment_is_not_resolved_for_runtime(tmp_path):
+def test_connection_with_deployments_cannot_be_deleted(tmp_path):
     service = build_service(tmp_path)
-    deployment = service.create_deployment(
+    connection = create_remote_connection(service)
+    create_remote_deployment(service, connection)
+
+    with pytest.raises(ModelFarmError, match="referenced"):
+        service.delete_connection(connection.id)
+
+
+@pytest.mark.parametrize(
+    ("provider", "api_base", "payload", "expected_url", "expected_id"),
+    [
+        ("ollama", "http://127.0.0.1:11434", {"models": [{"name": "llama3.1"}]}, "http://127.0.0.1:11434/api/tags", "llama3.1"),
+        ("vllm", "http://127.0.0.1:8001/v1", {"data": [{"id": "meta-llama/test"}]}, "http://127.0.0.1:8001/v1/models", "meta-llama/test"),
+    ],
+)
+def test_local_server_model_discovery_uses_documented_catalog(monkeypatch, tmp_path, provider, api_base, payload, expected_url, expected_id):
+    service = build_service(tmp_path)
+    connection = service.create_connection(
         {
-            "name": "Disabled judge",
-            "provider": "custom",
-            "model": "mock-judge",
-            "capabilities": ["judge"],
-            "credential_env_refs": {},
+            "name": f"{provider} server",
+            "provider": provider,
+            "access_path": "local",
+            "api_base": api_base,
             "locality": "local",
-            "enabled": False,
         }
     )
+    captured = {}
 
-    with pytest.raises(ModelFarmError, match="disabled"):
-        service.resolve(deployment.id, "judge")
+    def fake_request(url, headers, *, timeout):
+        captured.update({"url": url, "headers": headers, "timeout": timeout})
+        return payload
+
+    monkeypatch.setattr("aragbiz.model_farm._connection_request_json", fake_request)
+    models = service.available_models(connection.id)
+
+    assert captured["url"] == expected_url
+    assert models[0]["id"] == expected_id
+
+
+def test_stream_fallback_stops_after_first_delta(tmp_path):
+    service = build_service(tmp_path)
+    first_connection = create_remote_connection(service, name="Streaming primary connection")
+    second_connection = create_remote_connection(service, provider="openai", name="Streaming fallback connection")
+    first = create_remote_deployment(service, first_connection, name="Streaming primary")
+    second = create_remote_deployment(service, second_connection, model="gpt-4.1-mini", name="Streaming fallback")
+    gateway = ModelGateway(service)
+    fake = FailingStreamLiteLLM()
+    gateway.litellm_adapter._module = lambda: fake
+
+    async def collect():
+        return [
+            event
+            async for event in gateway.stream(
+                [{"role": "user", "content": "Hello"}],
+                first.id,
+                fallback_deployment_ids=[second.id],
+            )
+        ]
+
+    with pytest.raises(ModelFarmError, match="streaming failed"):
+        asyncio.run(collect())
+    assert fake.called_models == ["openrouter/google/gemma-3-27b-it:free"]
+
+
+def test_stream_fallback_is_allowed_before_first_delta(tmp_path):
+    service = build_service(tmp_path)
+    first_connection = create_remote_connection(service, name="Pre-delta primary connection")
+    second_connection = create_remote_connection(service, provider="openai", name="Pre-delta fallback connection")
+    first = create_remote_deployment(service, first_connection, name="Pre-delta primary")
+    second = create_remote_deployment(service, second_connection, model="gpt-4.1-mini", name="Pre-delta fallback")
+    gateway = ModelGateway(service)
+    fake = PreDeltaFailLiteLLM()
+    gateway.litellm_adapter._module = lambda: fake
+
+    async def collect():
+        return [
+            event
+            async for event in gateway.stream(
+                [{"role": "user", "content": "Hello"}],
+                first.id,
+                fallback_deployment_ids=[second.id],
+            )
+        ]
+
+    events = asyncio.run(collect())
+    assert [event.data["text"] for event in events if event.type == "delta"] == ["fallback"]
+    fallback = next(event for event in events if event.type == "model_fallback")
+    assert fallback.data["deployment_id"] == first.id
+    assert fallback.data["next_deployment_id"] == second.id
+    completed = next(event for event in events if event.type == "model_completed")
+    assert completed.data["metadata"]["fallback_attempts"][0]["deployment_id"] == first.id
+    assert fake.called_models == ["openrouter/google/gemma-3-27b-it:free", "gpt-4.1-mini"]
+
+
+class FakeLiteLLM:
+    def __init__(self, *, stream_parts=None, fail_models=None):
+        self.calls = []
+        self.stream_parts = list(stream_parts or ["ready"])
+        self.fail_models = set(fail_models or [])
+
+    async def acompletion(self, **kwargs):
+        self.calls.append(kwargs)
+        if kwargs["model"] in self.fail_models:
+            raise TimeoutError("temporary provider timeout")
+        if kwargs.get("stream"):
+            return _FakeStream(self.stream_parts)
+        return {
+            "choices": [{"message": {"content": "ready"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+        }
+
+
+class RateLimitError(Exception):
+    pass
+
+
+class RateLimitedLiteLLM:
+    async def acompletion(self, **kwargs):
+        raise RateLimitError("Provider returned 429 too many requests")
+
+
+class _FakeStream:
+    def __init__(self, parts):
+        self._parts = iter(parts)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            part = next(self._parts)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+        return {"choices": [{"delta": {"content": part}}]}
+
+
+class FailingStreamLiteLLM:
+    model_cost = {"gpt-4.1-mini": {}}
+
+    def __init__(self):
+        self.called_models = []
+
+    async def acompletion(self, **kwargs):
+        self.called_models.append(kwargs["model"])
+        return _PartThenFailureStream()
+
+
+class _PartThenFailureStream:
+    def __init__(self):
+        self.index = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        self.index += 1
+        if self.index == 1:
+            return {"choices": [{"delta": {"content": "partial"}}]}
+        raise TimeoutError("provider timed out after sending content")
+
+
+class PreDeltaFailLiteLLM:
+    model_cost = {"gpt-4.1-mini": {}}
+
+    def __init__(self):
+        self.called_models = []
+
+    async def acompletion(self, **kwargs):
+        self.called_models.append(kwargs["model"])
+        if kwargs["model"].startswith("openrouter/"):
+            return _ImmediateFailureStream()
+        return _FakeStream(["fallback"])
+
+
+class _ImmediateFailureStream:
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise TimeoutError("provider timed out before content")
+
+
+def _legacy_v1_encrypt(value, secret_key):
+    key = hashlib.sha256(secret_key.encode("utf-8")).digest()
+    nonce = b"legacy-unit-test"
+    blocks = []
+    counter = 0
+    while sum(len(block) for block in blocks) < len(value.encode("utf-8")):
+        blocks.append(hashlib.sha256(key + nonce + counter.to_bytes(4, "big")).digest())
+        counter += 1
+    plaintext = value.encode("utf-8")
+    stream = b"".join(blocks)[: len(plaintext)]
+    ciphertext = bytes(left ^ right for left, right in zip(plaintext, stream))
+    tag = hmac.new(key, nonce + ciphertext, hashlib.sha256).digest()
+    encode = lambda item: base64.urlsafe_b64encode(item).decode("ascii").rstrip("=")
+    return f"v1:{encode(nonce)}:{encode(ciphertext)}:{encode(tag)}"

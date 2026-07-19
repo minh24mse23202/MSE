@@ -408,7 +408,10 @@ def test_upload_with_model_gateway_embedding_runs_outside_active_event_loop(monk
 
 
 def test_model_farm_template_api_creates_disabled_deployment(monkeypatch, tmp_path):
-    model_farm_service = ModelFarmService(JsonModelFarmRepository(str(tmp_path / "models.json")))
+    model_farm_service = ModelFarmService(
+        JsonModelFarmRepository(str(tmp_path / "models.json")),
+        secret_key="unit-test-model-secret-key",
+    )
     model_gateway = ModelGateway(model_farm_service)
     monkeypatch.setattr(api_main, "model_farm_service", model_farm_service)
     monkeypatch.setattr(api_main, "model_gateway", model_gateway)
@@ -418,14 +421,31 @@ def test_model_farm_template_api_creates_disabled_deployment(monkeypatch, tmp_pa
 
     providers = client.get("/model-farm/providers")
     assert providers.status_code == 200
-    assert {item["id"] for item in providers.json()} >= {"openai-generation", "openai-compatible"}
+    assert {item["id"] for item in providers.json()} >= {
+        "openai-generation", "openrouter-generation", "gemini-generation", "ollama-generation", "vllm-generation"
+    }
+
+    connection_response = client.post(
+        "/model-farm/connections",
+        json={
+            "name": "OpenAI production",
+            "provider": "openai",
+            "access_path": "production",
+            "api_base": "https://api.openai.com/v1",
+            "credential_env_refs": {"api_key": "ARAGBIZ_MODEL_OPENAI_API_KEY"},
+        },
+    )
+    assert connection_response.status_code == 200
+    connection = connection_response.json()
+    assert connection["credential_status"]["references"] == ["ARAGBIZ_MODEL_OPENAI_API_KEY"]
+    assert "credential_secrets" not in connection
 
     created = client.post(
         "/model-farm/deployments/from-template",
         json={
             "template_id": "openai-generation",
+            "connection_id": connection["id"],
             "name": "OpenAI GPT deployment",
-            "credential_env_refs": {"api_key": "ARAGBIZ_MODEL_OPENAI_API_KEY"},
             "capabilities": ["generation", "judge"],
         },
     )
@@ -433,11 +453,69 @@ def test_model_farm_template_api_creates_disabled_deployment(monkeypatch, tmp_pa
     payload = created.json()
     assert payload["enabled"] is False
     assert payload["health_status"] == "untested"
+    assert payload["connection_id"] == connection["id"]
+    assert payload["gateway_model"] == "gpt-4.1-mini"
     assert payload["metadata"]["template_id"] == "openai-generation"
 
     enable = client.patch(f"/model-farm/deployments/{payload['id']}", json={"enabled": True})
     assert enable.status_code == 400
     assert "Test a remote deployment" in enable.json()["detail"]
+
+
+def test_model_farm_draft_endpoint_tests_without_persisting(monkeypatch, tmp_path):
+    model_farm_service = ModelFarmService(
+        JsonModelFarmRepository(str(tmp_path / "models.json")),
+        secret_key="unit-test-model-secret-key",
+    )
+    model_gateway = ModelGateway(model_farm_service)
+    monkeypatch.setattr(api_main, "model_farm_service", model_farm_service)
+    monkeypatch.setattr(api_main, "model_gateway", model_gateway)
+    monkeypatch.setattr(api_main, "_require_user", lambda authorization: None)
+    monkeypatch.setattr(api_main, "_require_admin", lambda authorization: None)
+    class FakeLiteLLM:
+        async def acompletion(self, **kwargs):
+            assert kwargs["model"] == "openrouter/google/gemma-3-27b-it:free"
+            return {
+                "choices": [{"message": {"content": "ready"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+            }
+
+    monkeypatch.setattr(model_gateway.litellm_adapter, "_module", lambda: FakeLiteLLM())
+    client = TestClient(app)
+
+    connection_response = client.post(
+        "/model-farm/connections",
+        json={
+            "name": "OpenRouter experimentation",
+            "provider": "openrouter",
+            "access_path": "experimentation",
+            "api_base": "https://openrouter.ai/api/v1",
+            "credential_secrets": {"api_key": "sk-test"},
+        },
+    )
+    assert connection_response.status_code == 200
+    connection_id = connection_response.json()["id"]
+
+    response = client.post(
+        "/model-farm/deployments/test-draft",
+        json={
+            "template_id": "openrouter-generation",
+            "connection_id": connection_id,
+            "name": "Draft OpenRouter model",
+            "model": "google/gemma-3-27b-it:free",
+            "capabilities": ["generation", "judge", "planner"],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "healthy"
+    assert payload["sample"] == "ready"
+    assert payload["deployment"]["provider"] == "openrouter"
+    assert payload["deployment"]["capabilities"] == ["generation", "judge", "planner"]
+    assert payload["deployment"]["connection_id"] == connection_id
+    deployments = client.get("/model-farm/deployments").json()
+    assert all(item["name"] != "Draft OpenRouter model" for item in deployments)
 
 
 def test_knowledge_document_crud_and_answer_selection(monkeypatch, tmp_path):

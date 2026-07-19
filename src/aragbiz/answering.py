@@ -121,6 +121,20 @@ class AdaptiveRAGAnswerService:
                     answer_parts.append(str(event.data.get("text") or ""))
                 elif event.type == "model_completed":
                     model_completed = event.data
+                elif event.type == "model_fallback":
+                    fallback_step = _trace_step(
+                        "Generator fallback",
+                        "warning",
+                        (
+                            f"{event.data.get('deployment_name') or event.data.get('deployment_id')} failed "
+                            f"with {event.data.get('error_category') or 'a provider error'}; "
+                            f"continuing with {event.data.get('next_deployment_name') or event.data.get('next_deployment_id')}."
+                        ),
+                        dict(event.data),
+                    )
+                    prepared.trace_steps.append(fallback_step)
+                    yield AnswerStreamEvent("trace", fallback_step)
+                    continue
                 yield event
         except (GeneratorConfigurationError, GeneratorExecutionError, ModelFarmError) as exc:
             raise AnsweringError(str(exc)) from exc
@@ -404,12 +418,70 @@ class AdaptiveRAGAnswerService:
 
     def _finalize_answer(self, prepared: PreparedAnswer, generation: GeneratorResult) -> AnswerResult:
         trace_steps = list(prepared.trace_steps)
+        traced_fallback_deployments = {
+            str(step.get("metadata", {}).get("deployment_id") or "")
+            for step in trace_steps
+            if step.get("step") == "Generator fallback"
+        }
+        for failed_attempt in list(generation.metadata.get("fallback_attempts") or []):
+            deployment_id = str(failed_attempt.get("deployment_id") or "")
+            if deployment_id in traced_fallback_deployments:
+                continue
+            trace_steps.append(
+                _trace_step(
+                    "Generator fallback",
+                    "warning",
+                    (
+                        f"{failed_attempt.get('deployment_name') or deployment_id} failed "
+                        f"with {failed_attempt.get('error_category') or 'a provider error'}; "
+                        "the next configured fallback was used."
+                    ),
+                    dict(failed_attempt),
+                )
+            )
+        configured_deployment_id = str(prepared.chat_configuration.get("generator_deployment_id") or "")
+        configured_generator = {
+            "deployment_id": configured_deployment_id,
+            "provider": prepared.chat_configuration.get("generator_provider", "Local"),
+            "model": prepared.chat_configuration.get("generator_model", "extractive"),
+        }
+        if configured_deployment_id and self.model_farm_service is not None:
+            try:
+                configured_deployment = self.model_farm_service.get_deployment(configured_deployment_id)
+                configured_generator.update(
+                    {
+                        "name": configured_deployment.name,
+                        "provider": configured_deployment.provider,
+                        "model": configured_deployment.model,
+                    }
+                )
+            except KeyError:
+                configured_generator["name"] = "Missing deployment"
+        actual_generator = {
+            "provider": generation.provider,
+            "model": generation.model,
+        }
+        actual_deployment_id = str(generation.metadata.get("deployment_id") or "")
+        if actual_deployment_id:
+            actual_generator["deployment_id"] = actual_deployment_id
+        fallback_index = int(generation.metadata.get("fallback_index") or 0)
+        generator_detail = f"Executed {generation.provider}/{generation.model} generator."
+        generator_status = generation.status
+        if fallback_index > 0:
+            generator_detail = (
+                f"Configured generator {configured_generator.get('provider')}/{configured_generator.get('model')} failed; "
+                f"executed fallback {generation.provider}/{generation.model}."
+            )
+            generator_status = "warning"
         trace_steps.append(
             _trace_step(
                 "Generator execution",
-                generation.status,
-                f"Executed {generation.provider}/{generation.model} generator.",
+                generator_status,
+                generator_detail,
                 {
+                    "configured_generator": configured_generator,
+                    "actual_generator": actual_generator,
+                    "fallback_used": fallback_index > 0,
                     "provider": generation.provider,
                     "model": generation.model,
                     "input_chars": generation.input_chars,
@@ -446,14 +518,10 @@ class AdaptiveRAGAnswerService:
             "aggregation_summary": prepared.aggregation_summary,
             "latency_ms": elapsed_ms,
             "generator": generation.model,
-            "configured_generator": {
-                "provider": prepared.chat_configuration.get("generator_provider", "Local"),
-                "model": prepared.chat_configuration.get("generator_model", "extractive"),
-            },
-            "actual_generator": {
-                "provider": generation.provider,
-                "model": generation.model,
-            },
+            "configured_generator": configured_generator,
+            "actual_generator": actual_generator,
+            "fallback_used": fallback_index > 0,
+            "fallback_attempts": list(generation.metadata.get("fallback_attempts") or []),
             "generation_status": generation.status,
             "prompt_preview": generation.prompt_preview,
             "input_chars": generation.input_chars,
