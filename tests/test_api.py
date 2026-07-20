@@ -175,6 +175,48 @@ def test_chat_configuration_crud_and_answer_snapshot():
     )
     assert missing.status_code == 404
 
+
+def test_chat_configuration_limits_are_exposed_and_enforced():
+    client = TestClient(app)
+    limits_response = client.get("/chat/configuration-limits")
+
+    assert limits_response.status_code == 200
+    limits = limits_response.json()
+    assert limits == {
+        "default_completed_exchanges": 3,
+        "default_characters": 4000,
+        "max_completed_exchanges": 6,
+        "max_characters": 10000,
+    }
+
+    rejected = client.post(
+        "/chat/configurations",
+        json={
+            "name": "Invalid conversation memory",
+            "metadata": {
+                "conversation_history_exchanges": 7,
+                "conversation_history_characters": 10001,
+            },
+        },
+    )
+    assert rejected.status_code == 400
+    assert "Completed exchanges" in rejected.json()["detail"]
+
+    accepted = client.post(
+        "/chat/configurations",
+        json={
+            "name": "Maximum conversation memory",
+            "metadata": {
+                "conversation_history_exchanges": 6,
+                "conversation_history_characters": 10000,
+            },
+        },
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["metadata"]["conversation_history_exchanges"] == 6
+    assert accepted.json()["metadata"]["conversation_history_characters"] == 10000
+
+
 def test_answer_appends_to_existing_conversation():
     client = TestClient(app)
     conversation = client.post("/chat/conversations", json={"title": "Existing chat"}).json()
@@ -192,6 +234,80 @@ def test_answer_appends_to_existing_conversation():
     messages = client.get(f"/chat/conversations/{conversation['id']}/messages").json()
     assert len(messages) == 2
     assert messages[0]["content"].startswith("Can I start accepting")
+
+
+def test_answer_uses_completed_history_for_second_turn():
+    client = TestClient(app)
+    first = client.post(
+        "/answer",
+        json={"question": "Explain the invoice mismatch approval workflow.", "mode": "direct"},
+    ).json()
+
+    second_response = client.post(
+        "/answer",
+        json={
+            "conversation_id": first["conversation_id"],
+            "question": "Who approves it?",
+            "mode": "direct",
+        },
+    )
+
+    assert second_response.status_code == 200
+    second = second_response.json()
+    assert second["question"] == "Who approves it?"
+    assert second["metadata"]["history_exchange_count"] == 1
+    assert second["metadata"]["query_rewritten"] is True
+    assert "invoice mismatch approval workflow" in second["metadata"]["standalone_query"]
+    messages = client.get(f"/chat/conversations/{first['conversation_id']}/messages").json()
+    assert [message["role"] for message in messages] == ["user", "assistant", "user", "assistant"]
+
+
+def test_answer_uses_saved_conversation_history_limits():
+    client = TestClient(app)
+    configuration = client.post(
+        "/chat/configurations",
+        json={
+            "name": "Short conversation memory",
+            "metadata": {
+                "conversation_awareness_enabled": True,
+                "conversation_history_exchanges": 1,
+                "conversation_history_characters": 500,
+            },
+        },
+    ).json()
+    first = client.post(
+        "/answer",
+        json={
+            "question": "Explain invoice mismatch review.",
+            "mode": "direct",
+            "chat_configuration_id": configuration["id"],
+        },
+    ).json()
+    client.post(
+        "/answer",
+        json={
+            "conversation_id": first["conversation_id"],
+            "question": "Explain the approval owner.",
+            "mode": "direct",
+            "chat_configuration_id": configuration["id"],
+        },
+    )
+
+    third = client.post(
+        "/answer",
+        json={
+            "conversation_id": first["conversation_id"],
+            "question": "What happens after that?",
+            "mode": "direct",
+            "chat_configuration_id": configuration["id"],
+        },
+    ).json()
+
+    assert third["metadata"]["history_exchange_limit"] == 1
+    assert third["metadata"]["history_character_limit"] == 500
+    assert third["metadata"]["history_exchange_count"] == 1
+    assert third["metadata"]["history_character_count"] <= 500
+    assert "approval owner" in third["metadata"]["standalone_query"]
 
 
 def test_answer_stream_emits_deltas_and_persists_completed_messages():
@@ -222,6 +338,32 @@ def test_answer_stream_emits_deltas_and_persists_completed_messages():
     assert messages[1]["id"] == started["assistant_message_id"]
     assert messages[1]["content"] == completed["answer"]
     assert messages[1]["request_id"] == started["request_id"]
+
+
+def test_answer_stream_uses_history_loaded_before_current_message():
+    client = TestClient(app)
+    first = client.post(
+        "/answer",
+        json={"question": "Describe the purchase order approval workflow.", "mode": "direct"},
+    ).json()
+
+    response = client.post(
+        "/answer/stream",
+        json={
+            "conversation_id": first["conversation_id"],
+            "question": "What happens after that?",
+            "mode": "direct",
+        },
+    )
+
+    assert response.status_code == 200
+    events = _sse_events(response.text)
+    completed = next(event["data"] for event in events if event["type"] == "completed")
+    assert completed["metadata"]["history_exchange_count"] == 1
+    assert completed["metadata"]["query_rewritten"] is True
+    trace_names = [step["step"] for step in completed["metadata"]["trace_steps"]]
+    assert "Conversation context" in trace_names
+    assert "Query reformulation" in trace_names
 
 
 def test_answer_stream_persists_failed_partial_message(monkeypatch):

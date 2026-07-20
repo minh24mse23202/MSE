@@ -5,6 +5,15 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple
 
+from aragbiz.conversation import (
+    DEFAULT_HISTORY_MAX_CHARACTERS,
+    DEFAULT_HISTORY_MAX_EXCHANGES,
+    QueryReformulationResult,
+    QueryReformulator,
+    conversation_history_characters,
+    conversation_history_exchange_count,
+    normalize_conversation_history,
+)
 from aragbiz.generation import (
     GenerationRequest,
     Generator,
@@ -40,15 +49,24 @@ class AnswerOptions:
     request_id: str = ""
     user_id: str = ""
     conversation_id: str = ""
+    conversation_history: List[Dict[str, str]] = field(default_factory=list)
+    conversation_history_max_exchanges: int = DEFAULT_HISTORY_MAX_EXCHANGES
+    conversation_history_max_characters: int = DEFAULT_HISTORY_MAX_CHARACTERS
 
 
 @dataclass
 class PreparedAnswer:
     query: str
+    standalone_query: str
     options: AnswerOptions
     start: float
     top_k: int
     chat_configuration: Dict[str, Any]
+    conversation_awareness_enabled: bool
+    conversation_history: List[Dict[str, str]]
+    conversation_history_max_exchanges: int
+    conversation_history_max_characters: int
+    reformulation: QueryReformulationResult
     complexity_label: ComplexityLabel
     route_level: RouteLevel
     knowledge_base: Optional[KnowledgeBaseRecord]
@@ -81,6 +99,7 @@ class AdaptiveRAGAnswerService:
         prompt_builder: Optional[PromptBuilder] = None,
         generator_resolver: Optional[GeneratorResolver] = None,
         query_decomposer: Optional["QueryDecomposer"] = None,
+        query_reformulator: Optional[QueryReformulator] = None,
         model_farm_service: Optional[ModelFarmService] = None,
         model_gateway: Optional[ModelGateway] = None,
     ):
@@ -96,6 +115,7 @@ class AdaptiveRAGAnswerService:
             model_gateway=model_gateway,
         )
         self.decomposer = query_decomposer or QueryDecomposer()
+        self.query_reformulator = query_reformulator or QueryReformulator()
         self.retriever = KnowledgeBaseRetriever(
             knowledge_service=knowledge_service,
             bm25_weight=bm25_weight,
@@ -165,14 +185,50 @@ class AdaptiveRAGAnswerService:
     def _prepare_answer(self, query: str, options: AnswerOptions) -> PreparedAnswer:
         options = options or AnswerOptions()
         start = time.perf_counter()
+        original_query = str(query or "").strip()
         top_k = max(1, min(int(options.top_k), 50))
         selected_document_ids = _normalize_document_ids(options.document_ids)
         chat_configuration = dict(options.chat_configuration or {})
-        complexity_label = self.router.classifier.predict(query)
-        route_level = self._resolve_route(options.mode, complexity_label)
         knowledge_base = self._selected_knowledge_base(options.knowledge_base_id)
         if options.mode == "adaptive" and knowledge_base is None:
             raise AnsweringError("Select a knowledge base before using Adaptive mode.")
+        if options.mode == "simple_rag" and knowledge_base is None:
+            raise AnsweringError("Select a knowledge base before using L2 Simple RAG.")
+        if options.mode == "complex_rag" and knowledge_base is None:
+            raise AnsweringError("Select a knowledge base before using L3 Complex RAG.")
+        external_processing_allowed = _external_processing_allowed(knowledge_base)
+        conversation_awareness_enabled = _conversation_awareness_enabled(chat_configuration)
+        conversation_history_max_exchanges = max(1, int(options.conversation_history_max_exchanges))
+        conversation_history_max_characters = max(1, int(options.conversation_history_max_characters))
+        conversation_history = (
+            normalize_conversation_history(
+                options.conversation_history,
+                max_exchanges=conversation_history_max_exchanges,
+                max_characters=conversation_history_max_characters,
+            )
+            if conversation_awareness_enabled
+            else []
+        )
+        reformulation = self.query_reformulator.reformulate(
+            original_query,
+            conversation_history,
+            enabled=conversation_awareness_enabled,
+            planner_deployment_id=str(chat_configuration.get("planner_deployment_id") or "").strip(),
+            model_gateway=self.model_gateway,
+            call_context=ModelCallContext(
+                purpose="conversation_rewrite",
+                request_id=options.request_id,
+                user_id=options.user_id,
+                conversation_id=options.conversation_id,
+                knowledge_base_id=knowledge_base.id if knowledge_base else "",
+            ),
+            external_processing_allowed=external_processing_allowed,
+            history_max_exchanges=conversation_history_max_exchanges,
+            history_max_characters=conversation_history_max_characters,
+        )
+        standalone_query = reformulation.standalone_query
+        complexity_label = self.router.classifier.predict(standalone_query)
+        route_level = self._resolve_route(options.mode, complexity_label)
         if route_level == "l2_simple_rag" and knowledge_base is None:
             raise AnsweringError("Select a knowledge base before using L2 Simple RAG.")
         if route_level == "l3_complex_rag" and knowledge_base is None:
@@ -182,13 +238,62 @@ class AdaptiveRAGAnswerService:
         else:
             selected_document_ids = []
 
+        history_exchange_count = conversation_history_exchange_count(conversation_history)
+        history_character_count = conversation_history_characters(conversation_history)
+        reformulation_status = "warning" if reformulation.warning else ("completed" if reformulation.rewritten else "skipped")
+        if reformulation.warning:
+            reformulation_detail = reformulation.warning
+        elif reformulation.rewritten:
+            reformulation_detail = f"Resolved the follow-up into a standalone query using {reformulation.strategy} reformulation."
+        elif reformulation.strategy == "disabled":
+            reformulation_detail = "Conversation awareness is disabled for this RAG configuration."
+        elif reformulation.strategy == "no_history":
+            reformulation_detail = "No completed prior exchanges were available."
+        else:
+            reformulation_detail = "The current question was already standalone."
+
         trace_steps = [
-            _trace_step("Chat input", "completed", query, {"characters": len(query)}),
+            _trace_step("Chat input", "completed", original_query, {"characters": len(original_query)}),
+            _trace_step(
+                "Conversation context",
+                "completed" if conversation_history else "skipped",
+                (
+                    f"Loaded {history_exchange_count} completed exchange(s) using {history_character_count} characters."
+                    if conversation_history
+                    else "No conversation history was added to this answer."
+                ),
+                {
+                    "enabled": conversation_awareness_enabled,
+                    "exchange_count": history_exchange_count,
+                    "message_count": len(conversation_history),
+                    "character_count": history_character_count,
+                    "exchange_limit": conversation_history_max_exchanges,
+                    "character_limit": conversation_history_max_characters,
+                    "message_ids": [message.get("message_id", "") for message in conversation_history if message.get("message_id")],
+                },
+            ),
+            _trace_step(
+                "Query reformulation",
+                reformulation_status,
+                reformulation_detail,
+                {
+                    "original_query": original_query,
+                    "standalone_query": standalone_query,
+                    "query_rewritten": reformulation.rewritten,
+                    "follow_up_detected": reformulation.follow_up_detected,
+                    "strategy": reformulation.strategy,
+                    **reformulation.planner_metadata,
+                },
+            ),
             _trace_step(
                 "Query complexity classifier",
                 "completed",
                 f"Predicted {complexity_label} query complexity.",
-                {"complexity_label": complexity_label, "classifier": type(self.router.classifier).__name__},
+                {
+                    "complexity_label": complexity_label,
+                    "classifier": type(self.router.classifier).__name__,
+                    "classified_query": standalone_query,
+                },
             ),
             _trace_step(
                 "Route decision",
@@ -201,14 +306,13 @@ class AdaptiveRAGAnswerService:
         contexts: List[RetrievedContext] = []
         retrieval_mode: str = "none"
         retrieval_used = route_level in {"l2_simple_rag", "l3_complex_rag"}
-        external_processing_allowed = _external_processing_allowed(knowledge_base)
         decomposed_queries: List[str] = []
         retrieval_steps: List[Dict[str, Any]] = []
         aggregation_summary: Dict[str, Any] = {}
         if route_level == "l2_simple_rag":
             assert knowledge_base is not None
             contexts = self.retriever.search(
-                query=query,
+                query=standalone_query,
                 knowledge_base_id=knowledge_base.id,
                 top_k=top_k,
                 mode=options.retrieval_mode,
@@ -233,7 +337,7 @@ class AdaptiveRAGAnswerService:
             retrieval_mode = options.retrieval_mode
         elif route_level == "l3_complex_rag":
             assert knowledge_base is not None
-            decomposed_queries = self.decomposer.decompose(query)
+            decomposed_queries = self.decomposer.decompose(standalone_query)
             trace_steps.append(
                 _trace_step(
                     "Query decomposition",
@@ -280,7 +384,7 @@ class AdaptiveRAGAnswerService:
             original_contexts = contexts
             try:
                 reranked = self.model_gateway.rerank_sync(
-                    query,
+                    standalone_query,
                     [context.document.text for context in contexts],
                     reranker_deployment_id,
                     top_n=min(top_k, len(contexts)),
@@ -322,7 +426,14 @@ class AdaptiveRAGAnswerService:
                     )
                 )
 
-        prompt = self.prompt_builder.build(query, contexts, chat_configuration, route_level=route_level)
+        prompt = self.prompt_builder.build(
+            original_query,
+            contexts,
+            chat_configuration,
+            route_level=route_level,
+            conversation_history=conversation_history,
+            standalone_query=standalone_query,
+        )
         trace_steps.append(
             _trace_step(
                 "Prompt builder",
@@ -332,11 +443,17 @@ class AdaptiveRAGAnswerService:
             )
         )
         return PreparedAnswer(
-            query=query,
+            query=original_query,
+            standalone_query=standalone_query,
             options=options,
             start=start,
             top_k=top_k,
             chat_configuration=chat_configuration,
+            conversation_awareness_enabled=conversation_awareness_enabled,
+            conversation_history=conversation_history,
+            conversation_history_max_exchanges=conversation_history_max_exchanges,
+            conversation_history_max_characters=conversation_history_max_characters,
+            reformulation=reformulation,
             complexity_label=complexity_label,
             route_level=route_level,
             knowledge_base=knowledge_base,
@@ -504,6 +621,17 @@ class AdaptiveRAGAnswerService:
         elapsed_ms = round((time.perf_counter() - prepared.start) * 1000, 3)
         metadata: Dict[str, Any] = {
             "requested_mode": prepared.options.mode,
+            "conversation_awareness_enabled": prepared.conversation_awareness_enabled,
+            "history_exchange_count": conversation_history_exchange_count(prepared.conversation_history),
+            "history_character_count": conversation_history_characters(prepared.conversation_history),
+            "history_exchange_limit": prepared.conversation_history_max_exchanges,
+            "history_character_limit": prepared.conversation_history_max_characters,
+            "original_query": prepared.query,
+            "standalone_query": prepared.standalone_query,
+            "query_rewritten": prepared.reformulation.rewritten,
+            "reformulation_strategy": prepared.reformulation.strategy,
+            "reformulation_warning": prepared.reformulation.warning,
+            "planner_reformulation": prepared.reformulation.planner_metadata,
             "route_level": prepared.route_level,
             "route_label": _route_label(prepared.route_level),
             "complexity_label": prepared.complexity_label,
@@ -912,6 +1040,18 @@ def _trace_step(step: str, status: str, detail: str, metadata: Optional[Dict[str
         "detail": detail,
         "metadata": metadata or {},
     }
+
+
+def _conversation_awareness_enabled(chat_configuration: Dict[str, Any]) -> bool:
+    metadata = chat_configuration.get("metadata")
+    value = chat_configuration.get("conversation_awareness_enabled")
+    if value is None and isinstance(metadata, dict):
+        value = metadata.get("conversation_awareness_enabled")
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(value)
 
 
 def _external_processing_allowed(knowledge_base: Optional[KnowledgeBaseRecord]) -> bool:

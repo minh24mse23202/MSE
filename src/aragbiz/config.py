@@ -26,6 +26,10 @@ class AppConfig:
     knowledge_database_url: str = "postgresql+psycopg://aragbiz:aragbiz@localhost:5432/aragbiz"
     knowledge_json_store: str = "data/knowledge/knowledge_store.json"
     chat_json_store: str = "data/knowledge/chat_store.json"
+    conversation_history_default_exchanges: int = 3
+    conversation_history_default_characters: int = 4000
+    conversation_history_max_exchanges: int = 6
+    conversation_history_max_characters: int = 10000
     evaluation_json_store: str = "data/knowledge/evaluation_store.json"
     model_farm_json_store: str = "data/knowledge/model_farm_store.json"
     model_secret_key: str = ""
@@ -57,6 +61,28 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
     env_use_trained = os.getenv("ARAGBIZ_USE_TRAINED_CLASSIFIER")
     if env_use_trained is not None:
         use_trained = _parse_bool(env_use_trained)
+    history_max_exchanges = max(
+        1,
+        int(os.getenv("ARAGBIZ_CONVERSATION_MAX_EXCHANGES", AppConfig.conversation_history_max_exchanges)),
+    )
+    history_max_characters = max(
+        1,
+        int(os.getenv("ARAGBIZ_CONVERSATION_MAX_CHARACTERS", AppConfig.conversation_history_max_characters)),
+    )
+    history_default_exchanges = max(
+        1,
+        min(
+            int(raw.get("chat", {}).get("history_default_exchanges", AppConfig.conversation_history_default_exchanges)),
+            history_max_exchanges,
+        ),
+    )
+    history_default_characters = max(
+        1,
+        min(
+            int(raw.get("chat", {}).get("history_default_characters", AppConfig.conversation_history_default_characters)),
+            history_max_characters,
+        ),
+    )
     return AppConfig(
         sample_dataset=raw.get("paths", {}).get("sample_dataset", AppConfig.sample_dataset),
         fallback_sample_dataset=raw.get("paths", {}).get("fallback_sample_dataset", AppConfig.fallback_sample_dataset),
@@ -85,6 +111,10 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
             "ARAGBIZ_CHAT_STORE",
             raw.get("chat", {}).get("json_store", AppConfig.chat_json_store),
         ),
+        conversation_history_default_exchanges=history_default_exchanges,
+        conversation_history_default_characters=history_default_characters,
+        conversation_history_max_exchanges=history_max_exchanges,
+        conversation_history_max_characters=history_max_characters,
         evaluation_json_store=os.getenv(
             "ARAGBIZ_EVALUATION_STORE",
             raw.get("evaluation", {}).get("json_store", AppConfig.evaluation_json_store),

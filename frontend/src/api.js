@@ -27,6 +27,18 @@ export async function getCurrentUser() {
   return response.json();
 }
 
+export async function updateCurrentUser(payload) {
+  const response = await fetch(`${API_BASE_URL}/auth/me`, {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload)
+  });
+  await assertOk(response, "Profile update failed");
+  const result = await response.json();
+  setAuthToken(result.access_token);
+  return result;
+}
+
 export async function login(payload) {
   const response = await fetch(`${API_BASE_URL}/auth/login`, {
     method: "POST",
@@ -192,6 +204,14 @@ export async function listChatConfigurations() {
     headers: authHeaders()
   });
   await assertOk(response, "Chat configurations request failed");
+  return response.json();
+}
+
+export async function getChatConfigurationLimits() {
+  const response = await fetch(`${API_BASE_URL}/chat/configuration-limits`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Chat configuration limits request failed");
   return response.json();
 }
 

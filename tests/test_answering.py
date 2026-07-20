@@ -16,6 +16,16 @@ class StubClassifier:
         return self.label
 
 
+class CapturingClassifier(StubClassifier):
+    def __init__(self, label):
+        super().__init__(label)
+        self.queries = []
+
+    def predict(self, query):
+        self.queries.append(query)
+        return super().predict(query)
+
+
 def build_service(tmp_path, label="moderate"):
     knowledge_service = KnowledgeService(
         repository=JsonKnowledgeRepository(str(tmp_path / "knowledge.json")),
@@ -174,6 +184,60 @@ def test_l2_hybrid_combines_bm25_and_dense_scores(tmp_path):
     assert result.metadata["retrieval_mode"] == "hybrid"
     assert len(result.contexts) == 2
     assert all(context.mode == "hybrid" for context in result.contexts)
+
+
+def test_follow_up_uses_standalone_query_for_classifier_and_retrieval(tmp_path):
+    service, kb = build_service(tmp_path, label="moderate")
+    classifier = CapturingClassifier("moderate")
+    service.router.classifier = classifier
+    invoice_document = next(
+        document for document in service.knowledge_service.list_documents(kb.id)
+        if document.title == "Invoice runbook"
+    )
+
+    result = service.answer(
+        "Who approves it?",
+        AnswerOptions(
+            mode="simple_rag",
+            knowledge_base_id=kb.id,
+            retrieval_mode="bm25",
+            top_k=1,
+            conversation_history=[
+                {"role": "user", "content": "Explain the invoice mismatch workflow."},
+                {"role": "assistant", "content": "Finance operations reviews invoice mismatches."},
+            ],
+        ),
+    )
+
+    assert result.question == "Who approves it?"
+    assert result.metadata["query_rewritten"] is True
+    assert result.metadata["history_exchange_count"] == 1
+    assert "invoice mismatch workflow" in result.metadata["standalone_query"]
+    assert classifier.queries == [result.metadata["standalone_query"]]
+    assert result.contexts[0].document.metadata["document_id"] == invoice_document.id
+    assert any(step["step"] == "Conversation context" for step in result.metadata["trace_steps"])
+    assert any(step["step"] == "Query reformulation" for step in result.metadata["trace_steps"])
+
+
+def test_conversation_awareness_can_be_disabled(tmp_path):
+    service, _ = build_service(tmp_path, label="simple")
+
+    result = service.answer(
+        "Who approves it?",
+        AnswerOptions(
+            mode="direct",
+            conversation_history=[
+                {"role": "user", "content": "Explain the invoice mismatch workflow."},
+                {"role": "assistant", "content": "Finance operations reviews invoice mismatches."},
+            ],
+            chat_configuration={"metadata": {"conversation_awareness_enabled": False}},
+        ),
+    )
+
+    assert result.metadata["conversation_awareness_enabled"] is False
+    assert result.metadata["history_exchange_count"] == 0
+    assert result.metadata["query_rewritten"] is False
+    assert result.metadata["reformulation_strategy"] == "disabled"
 
 
 class FallbackGateway:

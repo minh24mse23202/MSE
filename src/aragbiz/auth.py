@@ -8,7 +8,7 @@ import os
 import secrets
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
@@ -210,6 +210,53 @@ class AuthService:
             raise AuthenticationError("Invalid email or password.")
         return user, self.issue_token(user)
 
+    def update_profile(
+        self,
+        user_id: str,
+        *,
+        email: Optional[str] = None,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        current_password: str = "",
+        new_password: Optional[str] = None,
+    ) -> UserRecord:
+        try:
+            user = self.repository.get_user(user_id)
+        except KeyError as exc:
+            raise AuthenticationError("The user account no longer exists.") from exc
+        if not user.active:
+            raise AuthenticationError("This account is disabled.")
+
+        updated_email = user.email if email is None else normalize_email(email)
+        if not updated_email or "@" not in updated_email:
+            raise AuthenticationError("Enter a valid email address.")
+        email_changed = updated_email != user.email
+        password_changed = new_password is not None
+        if email_changed or password_changed:
+            if not current_password or not verify_password(current_password, user.password_hash):
+                raise AuthenticationError("Current password is incorrect.")
+        if password_changed and len(new_password or "") < 8:
+            raise AuthenticationError("New password must contain at least 8 characters.")
+        if email_changed:
+            try:
+                existing = self.repository.get_by_email(updated_email)
+            except KeyError:
+                pass
+            else:
+                if existing.id != user.id:
+                    raise AuthenticationError("An account with this email already exists.")
+
+        return self.repository.save_user(
+            replace(
+                user,
+                email=updated_email,
+                password_hash=hash_password(new_password) if password_changed else user.password_hash,
+                first_name=user.first_name if first_name is None else first_name.strip(),
+                last_name=user.last_name if last_name is None else last_name.strip(),
+                updated_at=utc_now(),
+            )
+        )
+
     def issue_token(self, user: UserRecord) -> str:
         now = int(time.time())
         return encode_token(
@@ -330,4 +377,3 @@ def _user_from_row(row: Any) -> UserRecord:
         last_name=row.get("last_name") or "", role=row.get("role") or "user", active=bool(row.get("active", True)),
         created_at=row.get("created_at") or "", updated_at=row.get("updated_at") or "",
     )
-

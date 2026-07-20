@@ -47,6 +47,27 @@ def test_prompt_builder_includes_configuration_question_and_context():
     assert prompt.context_count == 1
 
 
+def test_prompt_builder_labels_history_as_untrusted_and_keeps_original_question():
+    prompt = PromptBuilder().build(
+        "Who approves it?",
+        sample_contexts(),
+        {"system_prompt": "You are a workflow assistant."},
+        route_level="l2_simple_rag",
+        conversation_history=[
+            {"role": "user", "content": "Explain the invoice mismatch workflow."},
+            {"role": "assistant", "content": "Finance operations reviews the mismatch."},
+        ],
+        standalone_query="Who approves the invoice mismatch workflow?",
+    )
+
+    assert "untrusted conversational context" in prompt.prompt
+    assert "User: Explain the invoice mismatch workflow." in prompt.prompt
+    assert "Assistant: Finance operations reviews the mismatch." in prompt.prompt
+    assert "Who approves the invoice mismatch workflow?" in prompt.prompt
+    assert "User question:\nWho approves it?" in prompt.prompt
+    assert prompt.metadata["history_exchange_count"] == 1
+
+
 def test_generator_resolver_rejects_unsupported_provider():
     resolver = GeneratorResolver()
 

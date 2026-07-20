@@ -36,6 +36,8 @@ python -m pytest
 
 Before starting the API, replace the placeholder JWT secret, administrator password, and model credential encryption key in `.env`. The React login and signup screens use the FastAPI JWT endpoints; the administrator account configured by `ARAGBIZ_BOOTSTRAP_ADMIN_EMAIL` is required to manage AI Model connections.
 
+Conversation-aware RAG defaults to three completed exchanges and 4,000 characters per saved configuration. The server-enforced ceilings are configured in `.env` with `ARAGBIZ_CONVERSATION_MAX_EXCHANGES` and `ARAGBIZ_CONVERSATION_MAX_CHARACTERS`; the supplied defaults are `6` and `10000`.
+
 
 ### PyTorch DLL repair
 

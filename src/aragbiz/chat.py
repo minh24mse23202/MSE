@@ -1356,6 +1356,9 @@ def _default_chat_configuration_payload() -> Dict[str, Any]:
             "planner_deployment_id": "",
             "generation_parameters": {"temperature": 0.2, "max_tokens": 500},
             "citations_enabled": True,
+            "conversation_awareness_enabled": True,
+            "conversation_history_exchanges": 3,
+            "conversation_history_characters": 4000,
         },
     }
 

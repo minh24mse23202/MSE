@@ -140,6 +140,53 @@ def test_evaluation_service_runs_adaptive_and_static_baseline(tmp_path):
     assert cases[0].static_metadata["route_level"] == "l2_simple_rag"
 
 
+def test_evaluation_runs_each_case_without_conversation_context(tmp_path):
+    service, kb = build_answer_service(tmp_path, label="complex")
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '\n'.join([
+            '{"id":"q1","question":"How are invoice mismatches escalated?","answer":"Escalate to finance operations.","context":"Invoice mismatch","complexity_label":"complex","metadata":{}}',
+            '{"id":"q2","question":"Who approves it?","answer":"Finance operations.","context":"Invoice mismatch","complexity_label":"complex","metadata":{}}',
+        ]) + '\n',
+        encoding="utf-8",
+    )
+    saved_configuration = {
+        "metadata": {
+            "conversation_awareness_enabled": True,
+            "conversation_history_exchanges": 6,
+            "conversation_history_characters": 10000,
+        }
+    }
+    evaluation = EvaluationService(JsonEvaluationRepository(str(tmp_path / "eval.json")), service, str(dataset_path))
+
+    run = evaluation.run(
+        EvaluationRunConfig(
+            knowledge_base_id=kb.id,
+            retrieval_mode="bm25",
+            top_k=2,
+            limit=2,
+            compare_baseline=True,
+            chat_configuration=saved_configuration,
+        )
+    )
+    cases = evaluation.list_cases(run.id)
+
+    assert saved_configuration["metadata"]["conversation_awareness_enabled"] is True
+    assert run.metadata["conversation_context"]["enabled"] is False
+    for case in cases:
+        for metadata in (case.adaptive_metadata, case.static_metadata):
+            assert metadata["conversation_awareness_enabled"] is False
+            assert metadata["history_exchange_count"] == 0
+            assert metadata["history_character_count"] == 0
+            assert metadata["query_rewritten"] is False
+            assert metadata["standalone_query"] == metadata["original_query"]
+            conversation_step = next(
+                step for step in metadata["trace_steps"] if step["step"] == "Conversation context"
+            )
+            assert conversation_step["status"] == "skipped"
+            assert conversation_step["metadata"]["enabled"] is False
+
+
 def _ragxplain_case():
     return EvaluationCaseRecord(
         id="case-1",

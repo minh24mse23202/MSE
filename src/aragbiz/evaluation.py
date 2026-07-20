@@ -117,6 +117,7 @@ class EvaluationService:
         else:
             records = []
         knowledge_base = self.answer_service.knowledge_service.get_knowledge_base(config.knowledge_base_id)
+        evaluation_chat_configuration = _evaluation_chat_configuration(config.chat_configuration)
 
         adaptive_results: List[AnswerResult] = []
         static_results: List[AnswerResult] = []
@@ -132,7 +133,8 @@ class EvaluationService:
                     knowledge_base_id=config.knowledge_base_id,
                     retrieval_mode=config.retrieval_mode,
                     top_k=top_k,
-                    chat_configuration=config.chat_configuration,
+                    chat_configuration=evaluation_chat_configuration,
+                    conversation_history=[],
                 ),
             )
             adaptive_results.append(adaptive_result)
@@ -145,7 +147,8 @@ class EvaluationService:
                         knowledge_base_id=config.knowledge_base_id,
                         retrieval_mode=config.retrieval_mode,
                         top_k=top_k,
-                        chat_configuration=config.chat_configuration,
+                        chat_configuration=evaluation_chat_configuration,
+                        conversation_history=[],
                     ),
                 )
                 static_results.append(static_result)
@@ -239,6 +242,10 @@ class EvaluationService:
                 "chat_configuration": config.chat_configuration,
                 "judge_deployment_id": config.judge_deployment_id,
                 "static_baseline": "simple_rag" if config.compare_baseline else "disabled",
+                "conversation_context": {
+                    "enabled": False,
+                    "isolation": "Each evaluation record is executed as an independent query.",
+                },
                 "ragxplain": ragxplain_metadata,
             },
             error=None,
@@ -284,6 +291,15 @@ class EvaluationService:
         if self.ragxplain_runner is None:
             raise RagxplainUnavailableError("RAGXplain viewer is not configured for this environment.")
         return self.ragxplain_runner.viewer_path()
+
+
+def _evaluation_chat_configuration(configuration: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = dict(configuration or {})
+    metadata = dict(snapshot.get("metadata") or {})
+    snapshot["conversation_awareness_enabled"] = False
+    metadata["conversation_awareness_enabled"] = False
+    snapshot["metadata"] = metadata
+    return snapshot
 
 
 class Evaluator:

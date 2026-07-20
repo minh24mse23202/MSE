@@ -215,6 +215,28 @@ def test_litellm_generation_uses_connection_mapping_and_records_usage(tmp_path):
     assert usage.gateway_model == "openrouter/google/gemma-3-27b-it:free"
 
 
+def test_gateway_generation_can_record_planner_capability(tmp_path):
+    service = build_service(tmp_path)
+    connection = create_remote_connection(service)
+    deployment = create_remote_deployment(service, connection)
+    gateway = ModelGateway(service)
+    gateway.litellm_adapter._module = lambda: FakeLiteLLM()
+
+    result = asyncio.run(
+        gateway.generate(
+            [{"role": "user", "content": "Rewrite this follow-up."}],
+            deployment.id,
+            capability="planner",
+            context=ModelCallContext(purpose="conversation_rewrite", request_id="request-planner"),
+        )
+    )
+
+    assert result.text == "ready"
+    usage = service.list_usage(purpose="conversation_rewrite")[0]
+    assert usage.capability == "planner"
+    assert usage.request_id == "request-planner"
+
+
 def test_litellm_stream_forwards_provider_deltas(tmp_path):
     service = build_service(tmp_path)
     connection = create_remote_connection(service)

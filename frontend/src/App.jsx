@@ -59,6 +59,7 @@ import {
   deleteKnowledgeBase,
   deleteKnowledgeDocument,
   deleteModelDeployment,
+  getChatConfigurationLimits,
   getModelUsageSummary,
   getCurrentUser,
   getKnowledgeProcessingTrace,
@@ -89,6 +90,7 @@ import {
   signup as signupUser,
   updateChatConfiguration,
   updateChatConversation,
+  updateCurrentUser,
   updateKnowledgeBase,
   updateModelDeployment,
   updateModelConnection,
@@ -129,6 +131,12 @@ const COMPOSER_MAX_CHARACTERS = 10000;
 const CONFIGURATION_DISPLAY_ID_LENGTH = 12;
 const CONFIGURATION_DISPLAY_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const AI_LOGOS_PATH = "/AdaptiveRAG/img/logo_ai_models/";
+const defaultConversationLimits = {
+  defaultCompletedExchanges: 3,
+  defaultCharacters: 4000,
+  maxCompletedExchanges: 6,
+  maxCharacters: 10000
+};
 const defaultChatConfigurationDraft = {
   chatConfigurationId: "",
   configurationCode: createConfigurationCode(),
@@ -142,6 +150,9 @@ const defaultChatConfigurationDraft = {
     "Summarize the selected knowledge base.",
     "Which documents explain this process best?"
   ],
+  conversationAwarenessEnabled: true,
+  conversationHistoryExchanges: defaultConversationLimits.defaultCompletedExchanges,
+  conversationHistoryCharacters: defaultConversationLimits.defaultCharacters,
   generatorDeploymentId: defaultGeneratorDeploymentId,
   fallbackDeploymentIds: [],
   rerankerDeploymentId: "",
@@ -228,6 +239,7 @@ export default function App() {
   const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState("");
   const [selectedEvaluationDetail, setSelectedEvaluationDetail] = useState(null);
   const [confirmation, setConfirmation] = useState(null);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
   const confirmationResolverRef = useRef(null);
 
   useEffect(() => {
@@ -274,9 +286,16 @@ export default function App() {
 
   function leaveStudio() {
     clearAuthToken();
+    setIsProfileOpen(false);
     setCurrentUser(null);
     setSignedIn(false);
     setScreen("login");
+  }
+
+  async function saveProfile(payload) {
+    const result = await updateCurrentUser(payload);
+    setCurrentUser(result.user);
+    return result.user;
   }
 
   function confirmAction(options = {}) {
@@ -314,7 +333,13 @@ export default function App() {
   }
 
   return (
-    <Shell activeScreen={screen} onNavigate={setScreen} user={currentUser} onSignOut={leaveStudio}>
+    <Shell
+      activeScreen={screen}
+      onNavigate={setScreen}
+      user={currentUser}
+      onOpenProfile={() => setIsProfileOpen(true)}
+      onSignOut={leaveStudio}
+    >
       {screen === "main" && (
         <MainScreen
           selectedKnowledgeBaseId={selectedKnowledgeBaseId}
@@ -348,6 +373,13 @@ export default function App() {
         />
       )}
       {screen === "analytics" && <AnalyticsScreen />}
+      {isProfileOpen && (
+        <UserProfileModal
+          user={currentUser}
+          onClose={() => setIsProfileOpen(false)}
+          onSave={saveProfile}
+        />
+      )}
       <ConfirmationDialog
         confirmation={confirmation}
         onCancel={() => resolveConfirmation(false)}
@@ -523,8 +555,8 @@ function SignupScreen({ onSubmit, onSwitch }) {
   );
 }
 
-function Shell({ activeScreen, onNavigate, user, onSignOut, children }) {
-  const userLabel = user?.first_name || user?.email || "User";
+function Shell({ activeScreen, onNavigate, user, onOpenProfile, onSignOut, children }) {
+  const userLabel = [user?.first_name, user?.last_name].filter(Boolean).join(" ") || user?.email || "User";
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -547,15 +579,218 @@ function Shell({ activeScreen, onNavigate, user, onSignOut, children }) {
           ))}
         </nav>
         <div className="topbar-actions">
-          <span className="user-chip" title={user?.email || ""}>
+          <button
+            className="user-chip"
+            type="button"
+            title="Open user profile"
+            aria-label={`Open user profile for ${userLabel}`}
+            onClick={onOpenProfile}
+          >
             <IconLabel icon={CircleUserRound}>{userLabel}</IconLabel>
-          </span>
+          </button>
           <button type="button" aria-label="Sign out" title="Sign out" onClick={onSignOut}>
             <IconOnly icon={LogOut} size={18} />
           </button>
         </div>
       </header>
       <main className="workspace">{children}</main>
+    </div>
+  );
+}
+
+function UserProfileModal({ user, onClose, onSave }) {
+  const [form, setForm] = useState({
+    firstName: user?.first_name || "",
+    lastName: user?.last_name || "",
+    email: user?.email || "",
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: ""
+  });
+  const [showPasswords, setShowPasswords] = useState(false);
+  const [status, setStatus] = useState({ type: "", message: "" });
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key === "Escape" && !submitting) onClose();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, submitting]);
+
+  function updateField(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setStatus({ type: "", message: "" });
+  }
+
+  async function submitProfile(event) {
+    event.preventDefault();
+    const normalizedEmail = form.email.trim().toLowerCase();
+    const emailChanged = normalizedEmail !== String(user?.email || "").toLowerCase();
+    const passwordChanged = Boolean(form.newPassword);
+    if (passwordChanged && form.newPassword !== form.confirmPassword) {
+      setStatus({ type: "error", message: "New password and confirmation do not match." });
+      return;
+    }
+    if ((emailChanged || passwordChanged) && !form.currentPassword) {
+      setStatus({ type: "error", message: "Enter your current password to change email or password." });
+      return;
+    }
+
+    setSubmitting(true);
+    setStatus({ type: "", message: "" });
+    try {
+      const payload = {
+        first_name: form.firstName.trim(),
+        last_name: form.lastName.trim(),
+        email: normalizedEmail,
+        current_password: form.currentPassword
+      };
+      if (passwordChanged) payload.new_password = form.newPassword;
+      const updated = await onSave(payload);
+      setForm((current) => ({
+        ...current,
+        firstName: updated.first_name || "",
+        lastName: updated.last_name || "",
+        email: updated.email || "",
+        currentPassword: "",
+        newPassword: "",
+        confirmPassword: ""
+      }));
+      setStatus({ type: "success", message: "Profile updated successfully." });
+    } catch (error) {
+      setStatus({ type: "error", message: error.message });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop profile-modal-backdrop" role="presentation" onMouseDown={submitting ? undefined : onClose}>
+      <section
+        className="modal profile-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="profile-modal-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="modal-header">
+          <div>
+            <h2 id="profile-modal-title"><IconLabel icon={CircleUserRound} size={20}>User profile</IconLabel></h2>
+            <p>Update your account information and login credentials.</p>
+          </div>
+          <button className="icon-button modal-close" type="button" aria-label="Close profile" onClick={onClose} disabled={submitting}>
+            <IconOnly icon={X} />
+          </button>
+        </header>
+
+        <form className="profile-form" onSubmit={submitProfile}>
+          <div className="profile-identity">
+            <span><strong>Account ID</strong>{user?.id || "Unavailable"}</span>
+            <span><strong>Role</strong>{user?.role || "user"}</span>
+          </div>
+
+          <section className="profile-section">
+            <div>
+              <h3>Personal information</h3>
+              <p>Your display name is shown in the application header.</p>
+            </div>
+            <div className="profile-form-grid">
+              <label>
+                First name
+                <input
+                  value={form.firstName}
+                  onChange={(event) => updateField("firstName", event.target.value)}
+                  autoComplete="given-name"
+                  maxLength={100}
+                />
+              </label>
+              <label>
+                Last name
+                <input
+                  value={form.lastName}
+                  onChange={(event) => updateField("lastName", event.target.value)}
+                  autoComplete="family-name"
+                  maxLength={100}
+                />
+              </label>
+            </div>
+            <label>
+              Email
+              <input
+                type="email"
+                value={form.email}
+                onChange={(event) => updateField("email", event.target.value)}
+                autoComplete="email"
+                required
+              />
+            </label>
+          </section>
+
+          <section className="profile-section">
+            <div>
+              <h3>Password</h3>
+              <p>Current password is required when changing your email or password.</p>
+            </div>
+            <label>
+              Current password
+              <div className="profile-password-input">
+                <input
+                  type={showPasswords ? "text" : "password"}
+                  value={form.currentPassword}
+                  onChange={(event) => updateField("currentPassword", event.target.value)}
+                  autoComplete="current-password"
+                />
+                <button
+                  type="button"
+                  aria-label={showPasswords ? "Hide passwords" : "Show passwords"}
+                  title={showPasswords ? "Hide passwords" : "Show passwords"}
+                  onClick={() => setShowPasswords((current) => !current)}
+                >
+                  <IconOnly icon={showPasswords ? EyeOff : Eye} size={17} />
+                </button>
+              </div>
+            </label>
+            <div className="profile-form-grid">
+              <label>
+                New password
+                <input
+                  type={showPasswords ? "text" : "password"}
+                  value={form.newPassword}
+                  onChange={(event) => updateField("newPassword", event.target.value)}
+                  autoComplete="new-password"
+                  minLength={8}
+                  placeholder="Leave blank to keep current"
+                />
+              </label>
+              <label>
+                Confirm new password
+                <input
+                  type={showPasswords ? "text" : "password"}
+                  value={form.confirmPassword}
+                  onChange={(event) => updateField("confirmPassword", event.target.value)}
+                  autoComplete="new-password"
+                  minLength={8}
+                />
+              </label>
+            </div>
+          </section>
+
+          {status.message && (
+            <p className={`profile-status ${status.type}`} role={status.type === "error" ? "alert" : "status"}>
+              {status.message}
+            </p>
+          )}
+
+          <div className="modal-actions profile-actions">
+            <button className="secondary-action" type="button" onClick={onClose} disabled={submitting}>Cancel</button>
+            <button className="primary-action" type="submit" disabled={submitting}>
+              <IconLabel icon={Save}>{submitting ? "Saving..." : "Save profile"}</IconLabel>
+            </button>
+          </div>
+        </form>
+      </section>
     </div>
   );
 }
@@ -620,6 +855,7 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [chatConfigurations, setChatConfigurations] = useState([]);
   const [modelDeployments, setModelDeployments] = useState([]);
+  const [conversationLimits, setConversationLimits] = useState(defaultConversationLimits);
   const [configurationStatus, setConfigurationStatus] = useState("");
   const [layout, setLayout] = useState(loadMainLayout);
   const [config, setConfig] = useState({
@@ -651,6 +887,27 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
   useEffect(() => {
     refreshChatConfigurations();
     refreshMainModelDeployments();
+    getChatConfigurationLimits()
+      .then((payload) => {
+        const limits = normalizeConversationLimits(payload);
+        setConversationLimits(limits);
+        setConfig((current) => ({
+          ...current,
+          conversationHistoryExchanges: clampNumber(
+            current.conversationHistoryExchanges,
+            limits.defaultCompletedExchanges,
+            1,
+            limits.maxCompletedExchanges
+          ),
+          conversationHistoryCharacters: clampNumber(
+            current.conversationHistoryCharacters,
+            limits.defaultCharacters,
+            1,
+            limits.maxCharacters
+          )
+        }));
+      })
+      .catch((error) => setConfigurationStatus(`Conversation limits unavailable: ${error.message}`));
   }, []);
 
   useEffect(() => {
@@ -760,7 +1017,7 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
         ...config,
         chatConfigurationId: "",
         configurationCode: createConfigurationCode(existingConfigurationCodes(chatConfigurations))
-      }));
+      }, conversationLimits));
       await refreshChatConfigurations(created.id);
       setConfig((current) => applyChatConfigurationToDraft(current, created));
       setConfigurationStatus(`Saved "${created.name}"`);
@@ -775,7 +1032,10 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
       return;
     }
     try {
-      const updated = await updateChatConfiguration(config.chatConfigurationId, chatConfigurationPayloadFromDraft(config));
+      const updated = await updateChatConfiguration(
+        config.chatConfigurationId,
+        chatConfigurationPayloadFromDraft(config, conversationLimits)
+      );
       await refreshChatConfigurations(updated.id);
       setConfig((current) => applyChatConfigurationToDraft(current, updated));
       setConfigurationStatus(`Updated "${updated.name}"`);
@@ -1033,7 +1293,7 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
         topK: config.topK,
         documentIds: selectedFilterDocumentIds,
         chatConfigurationId: config.chatConfigurationId || null,
-        chatConfiguration: chatConfigurationPayloadFromDraft(config)
+        chatConfiguration: chatConfigurationPayloadFromDraft(config, conversationLimits)
       }, (event) => {
         if (event.type === "started") {
           const serverAssistantId = event.data?.assistant_message_id;
@@ -1239,6 +1499,7 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
         selectedKnowledgeBase={selectedKnowledgeBase}
         chatConfigurations={chatConfigurations}
         modelDeployments={modelDeployments}
+        conversationLimits={conversationLimits}
         onRefreshModelDeployments={refreshMainModelDeployments}
         configurationStatus={configurationStatus}
         onSelectChatConfiguration={selectChatConfiguration}
@@ -1579,6 +1840,16 @@ function ChatPanel({
                 <button onClick={() => onOpenPopup({ type: "trace", message })}><IconLabel icon={GitBranch}>Trace</IconLabel></button>
                 <button onClick={() => onFeedback(message, "up")}><IconLabel icon={ThumbsUp}>Useful</IconLabel></button>
                 <button onClick={() => onFeedback(message, "down")}><IconLabel icon={ThumbsDown}>Needs work</IconLabel></button>
+                {message.metadata?.query_rewritten && (
+                  <button
+                    className="follow-up-resolved-chip"
+                    type="button"
+                    title={message.metadata?.standalone_query || "Open query reformulation trace"}
+                    onClick={() => onOpenPopup({ type: "trace", message, focusStep: "Query reformulation" })}
+                  >
+                    <IconLabel icon={RotateCw}>Follow-up resolved</IconLabel>
+                  </button>
+                )}
                 <span><IconLabel icon={BrainCircuit}>{message.metadata?.complexity_label || "pending"}</IconLabel></span>
               </div>
             )}
@@ -1731,6 +2002,7 @@ function RagConfiguration({
   selectedKnowledgeBase,
   chatConfigurations = [],
   modelDeployments = [],
+  conversationLimits = defaultConversationLimits,
   onRefreshModelDeployments = () => {},
   configurationStatus = "",
   onSelectChatConfiguration = () => {},
@@ -1764,7 +2036,8 @@ function RagConfiguration({
   const selectedChatConfiguration = chatConfigurations.find((item) => item.id === config.chatConfigurationId);
   const configurationCreatedAt = selectedChatConfiguration?.created_at || config.configurationCreatedAt || "";
   const configurationUpdatedAt = selectedChatConfiguration?.updated_at || config.configurationUpdatedAt || "";
-  const [collapsedSections, setCollapsedSections] = useState({});
+  const conversationContextEnabled = Boolean(config.conversationAwarenessEnabled);
+  const [collapsedSections, setCollapsedSections] = useState({ knowledge: true });
   function toggleCustomizerSection(sectionId) {
     setCollapsedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
   }
@@ -1870,6 +2143,61 @@ function RagConfiguration({
           />
           <small>Enter one starter per line. These appear as quick-start buttons in a new chat.</small>
         </label>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={conversationContextEnabled}
+            onChange={(event) => setConfig({ ...config, conversationAwarenessEnabled: event.target.checked })}
+          />
+          Use conversation context for follow-up questions
+        </label>
+        <div
+          className={`config-two-column conversation-memory-controls ${conversationContextEnabled ? "" : "is-disabled"}`}
+          aria-disabled={!conversationContextEnabled}
+        >
+          <label>
+            Completed exchanges
+            <input
+              type="number"
+              min="1"
+              max={conversationLimits.maxCompletedExchanges}
+              disabled={!conversationContextEnabled}
+              value={config.conversationHistoryExchanges}
+              onChange={(event) => setConfig({
+                ...config,
+                conversationHistoryExchanges: clampNumber(
+                  event.target.value,
+                  conversationLimits.defaultCompletedExchanges,
+                  1,
+                  conversationLimits.maxCompletedExchanges
+                )
+              })}
+            />
+          </label>
+          <label>
+            Character budget
+            <input
+              type="number"
+              min="1"
+              max={conversationLimits.maxCharacters}
+              disabled={!conversationContextEnabled}
+              value={config.conversationHistoryCharacters}
+              onChange={(event) => setConfig({
+                ...config,
+                conversationHistoryCharacters: clampNumber(
+                  event.target.value,
+                  conversationLimits.defaultCharacters,
+                  1,
+                  conversationLimits.maxCharacters
+                )
+              })}
+            />
+          </label>
+        </div>
+        <small>
+          Server maximum: {conversationLimits.maxCompletedExchanges} completed exchanges and{" "}
+          {conversationLimits.maxCharacters.toLocaleString()} characters. Follow-up rewriting appears in Trace.
+        </small>
       </CollapsibleCustomizerSection>
       <CollapsibleCustomizerSection
         title="Adaptive RAG"
@@ -2177,7 +2505,7 @@ function KnowledgeBaseSummary({ selectedKnowledgeBase, collapsed = false, onTogg
   );
 }
 function TraceModal({ popup, onClose }) {
-  const { type, message } = popup;
+  const { type, message, focusStep = "" } = popup;
   const contexts = message.contexts || [];
   const traceSteps = Array.isArray(message.metadata?.trace_steps) ? message.metadata.trace_steps : [];
   const [sourceQuery, setSourceQuery] = useState("");
@@ -2189,8 +2517,11 @@ function TraceModal({ popup, onClose }) {
     setSourceQuery("");
     setSelectedSourceId(contexts[0]?.id || "");
     setTraceQuery("");
-    setSelectedTraceIndex(0);
-  }, [message.id, type]);
+    const focusedIndex = focusStep
+      ? traceSteps.findIndex((step) => step.step === focusStep)
+      : -1;
+    setSelectedTraceIndex(focusedIndex >= 0 ? focusedIndex : 0);
+  }, [message.id, type, focusStep]);
 
   async function copyText(text) {
     try {
@@ -2358,6 +2689,15 @@ function TraceSummary({ metadata }) {
     <section className="trace-summary-card">
       <div><dt>Route</dt><dd>{metadata.route_label || metadata.route_level || "-"}</dd></div>
       <div><dt>Complexity</dt><dd>{metadata.complexity_label || "-"}</dd></div>
+      <div>
+        <dt>Conversation context</dt>
+        <dd>{metadata.history_exchange_count ?? 0} / {metadata.history_exchange_limit ?? "-"} exchange(s)</dd>
+      </div>
+      <div>
+        <dt>History characters</dt>
+        <dd>{metadata.history_character_count ?? 0} / {metadata.history_character_limit ?? "-"}</dd>
+      </div>
+      <div><dt>Query rewritten</dt><dd>{metadata.query_rewritten ? "Yes" : "No"}</dd></div>
       <div><dt>Retrieval</dt><dd>{metadata.retrieval_mode || "none"}</dd></div>
       <div><dt>Top K</dt><dd>{metadata.top_k ?? "-"}</dd></div>
       <div><dt>Multi-step</dt><dd>{metadata.multi_step ? "Yes" : "No"}</dd></div>
@@ -4677,6 +5017,21 @@ function applyChatConfigurationSnapshotToDraft(current, snapshot = {}, configura
     conversationStarters: Array.isArray(metadata.conversation_starters)
       ? metadata.conversation_starters
       : defaultChatConfigurationDraft.conversationStarters,
+    conversationAwarenessEnabled: typeof metadata.conversation_awareness_enabled === "boolean"
+      ? metadata.conversation_awareness_enabled
+      : true,
+    conversationHistoryExchanges: clampNumber(
+      metadata.conversation_history_exchanges,
+      defaultConversationLimits.defaultCompletedExchanges,
+      1,
+      defaultConversationLimits.maxCompletedExchanges
+    ),
+    conversationHistoryCharacters: clampNumber(
+      metadata.conversation_history_characters,
+      defaultConversationLimits.defaultCharacters,
+      1,
+      defaultConversationLimits.maxCharacters
+    ),
     systemPrompt: snapshot.system_prompt || "",
     predefinedPrompt: snapshot.predefined_prompt || ""
   };
@@ -4706,7 +5061,7 @@ function chatConfigurationSnapshotFromRecord(record = {}) {
   };
 }
 
-function chatConfigurationPayloadFromDraft(config) {
+function chatConfigurationPayloadFromDraft(config, conversationLimits = defaultConversationLimits) {
   return {
     name: config.configurationName || defaultChatConfigurationDraft.configurationName,
     description: config.configurationDescription || "",
@@ -4739,6 +5094,19 @@ function chatConfigurationPayloadFromDraft(config) {
       configuration_id: normalizeConfigurationCode(config.configurationCode) || createConfigurationCode(),
       welcome_message: config.welcomeMessage || defaultChatConfigurationDraft.welcomeMessage,
       conversation_starters: normalizeConversationStarters(config.conversationStarters),
+      conversation_awareness_enabled: config.conversationAwarenessEnabled !== false,
+      conversation_history_exchanges: clampNumber(
+        config.conversationHistoryExchanges,
+        conversationLimits.defaultCompletedExchanges,
+        1,
+        conversationLimits.maxCompletedExchanges
+      ),
+      conversation_history_characters: clampNumber(
+        config.conversationHistoryCharacters,
+        conversationLimits.defaultCharacters,
+        1,
+        conversationLimits.maxCharacters
+      ),
       generator_deployment_id: config.generatorDeploymentId || defaultChatConfigurationDraft.generatorDeploymentId
     }
   };
@@ -5165,6 +5533,37 @@ function sanitizeKnowledgeConfiguration(configuration) {
 
 function chunkingStrategyUsesOverlap(strategy) {
   return ["sliding_window_overlap", "semantic", "recursive", "hierarchical_parent_child"].includes(strategy);
+}
+
+function normalizeConversationLimits(payload = {}) {
+  const maxCompletedExchanges = clampNumber(
+    payload.max_completed_exchanges,
+    defaultConversationLimits.maxCompletedExchanges,
+    1,
+    Number.MAX_SAFE_INTEGER
+  );
+  const maxCharacters = clampNumber(
+    payload.max_characters,
+    defaultConversationLimits.maxCharacters,
+    1,
+    Number.MAX_SAFE_INTEGER
+  );
+  return {
+    maxCompletedExchanges,
+    maxCharacters,
+    defaultCompletedExchanges: clampNumber(
+      payload.default_completed_exchanges,
+      defaultConversationLimits.defaultCompletedExchanges,
+      1,
+      maxCompletedExchanges
+    ),
+    defaultCharacters: clampNumber(
+      payload.default_characters,
+      defaultConversationLimits.defaultCharacters,
+      1,
+      maxCharacters
+    )
+  };
 }
 
 function clampNumber(value, fallback, min, max) {

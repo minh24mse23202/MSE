@@ -1544,12 +1544,13 @@ class ModelGateway:
         context: Optional[ModelCallContext] = None,
         external_processing_allowed: bool = True,
         require_enabled: bool = True,
+        capability: str = "generation",
     ) -> ModelGenerationResult:
         candidates = [deployment_id, *(fallback_deployment_ids or [])]
         last_error: Optional[Exception] = None
         fallback_attempts: List[Dict[str, Any]] = []
         for fallback_index, candidate_id in enumerate(candidates):
-            deployment = self.service.resolve(candidate_id, "generation", require_enabled=require_enabled)
+            deployment = self.service.resolve(candidate_id, capability, require_enabled=require_enabled)
             self.service.assert_egress_allowed(
                 deployment,
                 external_processing_allowed=external_processing_allowed,
@@ -1560,7 +1561,7 @@ class ModelGateway:
             try:
                 result = await self._generate_once(deployment, messages, parameters or {})
                 latency = (time.perf_counter() - started) * 1000
-                self._record_completed(deployment, "generation", context, result.input_tokens, result.output_tokens, latency, result.estimated_cost_usd, fallback_index)
+                self._record_completed(deployment, capability, context, result.input_tokens, result.output_tokens, latency, result.estimated_cost_usd, fallback_index)
                 return replace(
                     result,
                     metadata={
@@ -1572,14 +1573,15 @@ class ModelGateway:
                 )
             except Exception as exc:  # provider exception types are optional imports
                 latency = (time.perf_counter() - started) * 1000
-                self._record_failed(deployment, "generation", context, latency, exc, fallback_index)
+                self._record_failed(deployment, capability, context, latency, exc, fallback_index)
                 fallback_attempts.append(
                     _failed_model_attempt(deployment, exc, fallback_index, latency)
                 )
                 last_error = exc
                 if not _is_retryable_error(exc) or fallback_index == len(candidates) - 1:
                     break
-        raise ModelFarmError(f"Generator execution failed: {_safe_error(last_error)}") from last_error
+        operation = "Generator" if capability == "generation" else capability.replace("_", " ").title()
+        raise ModelFarmError(f"{operation} execution failed: {_safe_error(last_error)}") from last_error
 
     async def stream(
         self,

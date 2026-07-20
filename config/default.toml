@@ -50,6 +50,11 @@ json_store = "data/knowledge/auth_store.json"
 required = false
 access_token_ttl_seconds = 28800
 
+[chat]
+json_store = "data/knowledge/chat_store.json"
+history_default_exchanges = 3
+history_default_characters = 4000
+
 [jobs]
 json_store = "data/knowledge/jobs_store.json"
 blob_store = "data/uploads"

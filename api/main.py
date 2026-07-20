@@ -15,6 +15,7 @@ from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions, Answering
 from aragbiz.auth import AuthenticationError, UserRecord
 from aragbiz.config import load_config
 from aragbiz.chat import ChatConfigurationRecord, ChatConversationRecord, ChatMessageRecord, ChatSection
+from aragbiz.conversation import build_conversation_history
 from aragbiz.evaluation import EvaluationCaseRecord, EvaluationRunConfig, EvaluationRunRecord
 from aragbiz.factory import (
     build_auth_service,
@@ -108,6 +109,13 @@ class ChatConfigurationPatchRequest(BaseModel):
     generation_parameters: Optional[Dict[str, Any]] = None
     citations_enabled: Optional[bool] = None
     metadata: Optional[Dict[str, Any]] = None
+
+
+class ChatConfigurationLimitsResponse(BaseModel):
+    default_completed_exchanges: int
+    default_characters: int
+    max_completed_exchanges: int
+    max_characters: int
 
 
 class AnswerRequest(BaseModel):
@@ -359,6 +367,14 @@ class AuthLoginRequest(BaseModel):
     password: str
 
 
+class AuthProfileUpdateRequest(BaseModel):
+    email: Optional[str] = Field(None, min_length=3)
+    first_name: Optional[str] = Field(None, max_length=100)
+    last_name: Optional[str] = Field(None, max_length=100)
+    current_password: str = ""
+    new_password: Optional[str] = Field(None, min_length=8)
+
+
 class UserResponse(BaseModel):
     id: str
     email: str
@@ -558,6 +574,26 @@ def auth_me(authorization: str = Header(default="")) -> UserResponse:
         return _user_response(auth_service.current_user(authorization))
     except AuthenticationError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+@app.patch("/auth/me", response_model=AuthTokenResponse)
+def update_auth_profile(
+    request: AuthProfileUpdateRequest,
+    authorization: str = Header(default=""),
+) -> AuthTokenResponse:
+    user = _require_user(authorization)
+    try:
+        updated = auth_service.update_profile(
+            user.id,
+            email=request.email,
+            first_name=request.first_name,
+            last_name=request.last_name,
+            current_password=request.current_password,
+            new_password=request.new_password,
+        )
+        return AuthTokenResponse(access_token=auth_service.issue_token(updated), user=_user_response(updated))
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/model-farm/providers", response_model=List[Dict[str, Any]])
@@ -813,9 +849,17 @@ def answer(request: AnswerRequest, authorization: str = Header(default="")) -> A
         model_gateway=model_gateway,
     )
     try:
+        conversation_history: List[Dict[str, str]] = []
         if request.conversation_id:
             chat_service.get_conversation(request.conversation_id)
         chat_configuration_id, chat_configuration = _resolve_answer_chat_configuration(request)
+        history_max_exchanges, history_max_characters = _conversation_history_limits(chat_configuration)
+        if request.conversation_id:
+            conversation_history = build_conversation_history(
+                chat_service.list_messages(request.conversation_id),
+                max_exchanges=history_max_exchanges,
+                max_characters=history_max_characters,
+            )
         result = service.answer(
             request.question,
             AnswerOptions(
@@ -828,6 +872,9 @@ def answer(request: AnswerRequest, authorization: str = Header(default="")) -> A
                 request_id=request.request_id or f"request-{uuid.uuid4().hex}",
                 user_id=user.id,
                 conversation_id=request.conversation_id or "",
+                conversation_history=conversation_history,
+                conversation_history_max_exchanges=history_max_exchanges,
+                conversation_history_max_characters=history_max_characters,
             ),
         )
         result.metadata["chat_configuration_id"] = chat_configuration_id
@@ -900,9 +947,18 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
             },
         )
         try:
+            conversation_history: List[Dict[str, str]] = []
             if request.conversation_id:
                 await asyncio.to_thread(chat_service.get_conversation, request.conversation_id)
             chat_configuration_id, chat_configuration = await asyncio.to_thread(_resolve_answer_chat_configuration, request)
+            history_max_exchanges, history_max_characters = _conversation_history_limits(chat_configuration)
+            if request.conversation_id:
+                existing_messages = await asyncio.to_thread(chat_service.list_messages, request.conversation_id)
+                conversation_history = build_conversation_history(
+                    existing_messages,
+                    max_exchanges=history_max_exchanges,
+                    max_characters=history_max_characters,
+                )
             conversation = await asyncio.to_thread(
                 chat_service.ensure_conversation_for_question,
                 request.conversation_id,
@@ -973,6 +1029,9 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                     request_id=request_id,
                     user_id=user.id,
                     conversation_id=conversation.id,
+                    conversation_history=conversation_history,
+                    conversation_history_max_exchanges=history_max_exchanges,
+                    conversation_history_max_characters=history_max_characters,
                 ),
             ):
                 if event.type == "trace":
@@ -1092,13 +1151,23 @@ def list_chat_configurations() -> List[ChatConfigurationResponse]:
     return [_chat_configuration_response(record) for record in chat_service.list_configurations()]
 
 
+@app.get("/chat/configuration-limits", response_model=ChatConfigurationLimitsResponse)
+def get_chat_configuration_limits() -> ChatConfigurationLimitsResponse:
+    return ChatConfigurationLimitsResponse(
+        default_completed_exchanges=config.conversation_history_default_exchanges,
+        default_characters=config.conversation_history_default_characters,
+        max_completed_exchanges=config.conversation_history_max_exchanges,
+        max_characters=config.conversation_history_max_characters,
+    )
+
+
 @app.post("/chat/configurations", response_model=ChatConfigurationResponse)
 def create_chat_configuration(request: ChatConfigurationRequest) -> ChatConfigurationResponse:
     try:
         payload = _chat_configuration_payload(request)
         _validate_chat_configuration_payload(payload)
         return _chat_configuration_response(chat_service.create_configuration(**payload))
-    except (KeyError, ModelFarmError) as exc:
+    except (KeyError, ModelFarmError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -1119,6 +1188,8 @@ def update_chat_configuration(configuration_id: str, request: ChatConfigurationP
         return _chat_configuration_response(chat_service.update_configuration(configuration_id, **payload))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ModelFarmError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.delete("/chat/configurations/{configuration_id}")
@@ -1757,6 +1828,19 @@ def _configuration_payload(configuration: Optional[KnowledgeBaseConfigurationReq
 
 
 def _validate_chat_configuration_payload(payload: Dict[str, Any]) -> None:
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    _validate_conversation_history_setting(
+        metadata,
+        "conversation_history_exchanges",
+        config.conversation_history_max_exchanges,
+        "Completed exchanges",
+    )
+    _validate_conversation_history_setting(
+        metadata,
+        "conversation_history_characters",
+        config.conversation_history_max_characters,
+        "Conversation characters",
+    )
     deployment_id = str(payload.get("generator_deployment_id") or "").strip()
     if deployment_id:
         deployment = model_farm_service.resolve(deployment_id, "generation")
@@ -1770,6 +1854,49 @@ def _validate_chat_configuration_payload(payload: Dict[str, Any]) -> None:
     planner_id = str(payload.get("planner_deployment_id") or "").strip()
     if planner_id:
         model_farm_service.resolve(planner_id, "planner")
+
+
+def _conversation_history_limits(chat_configuration: Dict[str, Any]) -> tuple[int, int]:
+    metadata = chat_configuration.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    exchanges = _bounded_conversation_history_setting(
+        metadata.get("conversation_history_exchanges"),
+        config.conversation_history_default_exchanges,
+        config.conversation_history_max_exchanges,
+    )
+    characters = _bounded_conversation_history_setting(
+        metadata.get("conversation_history_characters"),
+        config.conversation_history_default_characters,
+        config.conversation_history_max_characters,
+    )
+    return exchanges, characters
+
+
+def _bounded_conversation_history_setting(value: Any, default: int, maximum: int) -> int:
+    try:
+        parsed = int(value if value is not None else default)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(1, min(parsed, maximum))
+
+
+def _validate_conversation_history_setting(
+    metadata: Dict[str, Any],
+    key: str,
+    maximum: int,
+    label: str,
+) -> None:
+    if key not in metadata:
+        return
+    value = metadata.get(key)
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be a whole number.")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a whole number.") from exc
+    if parsed < 1 or parsed > maximum:
+        raise ValueError(f"{label} must be between 1 and {maximum}.")
 
 
 def _require_user(authorization: str) -> UserRecord:
