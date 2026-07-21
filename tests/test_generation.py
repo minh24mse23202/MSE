@@ -68,6 +68,31 @@ def test_prompt_builder_labels_history_as_untrusted_and_keeps_original_question(
     assert prompt.metadata["history_exchange_count"] == 1
 
 
+def test_prompt_builder_requires_source_labels_when_citations_are_enabled():
+    prompt = PromptBuilder().build(
+        "How do I handle an invoice mismatch?",
+        sample_contexts(),
+        {"citations_enabled": True},
+        route_level="l2_simple_rag",
+    )
+
+    assert "Citations are required" in prompt.prompt
+    assert "Do not invent source labels" in prompt.prompt
+    assert prompt.metadata["citations_required"] is True
+
+
+def test_prompt_builder_does_not_require_source_labels_when_citations_are_disabled():
+    prompt = PromptBuilder().build(
+        "How do I handle an invoice mismatch?",
+        sample_contexts(),
+        {"citations_enabled": False},
+        route_level="l2_simple_rag",
+    )
+
+    assert "Citation validation is disabled" in prompt.prompt
+    assert prompt.metadata["citations_required"] is False
+
+
 def test_generator_resolver_rejects_unsupported_provider():
     resolver = GeneratorResolver()
 

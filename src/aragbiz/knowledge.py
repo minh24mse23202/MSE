@@ -367,6 +367,43 @@ class KnowledgeService:
         embeddings = embedder.embed([query])
         return (embeddings[0] if embeddings else [], embedder.model_name)
 
+    def query_embedding_details(self, knowledge_base_id: str) -> Dict[str, Any]:
+        self.repository.initialize()
+        knowledge_base = self.repository.get_knowledge_base(knowledge_base_id)
+        configuration = self._knowledge_base_configuration(knowledge_base_id)
+        chunks = self.repository.list_chunks(knowledge_base_id, limit=1)
+        chunk = chunks[0] if chunks else None
+        versions = self.list_index_versions(knowledge_base_id)
+        active_version = next((version for version in versions if version.status == "active"), None)
+        return {
+            "deployment_id": (
+                active_version.embedding_deployment_id
+                if active_version
+                else configuration.get("embedding_deployment_id", "")
+            ),
+            "provider": (
+                active_version.embedding_provider
+                if active_version
+                else configuration.get("embedding_provider", "")
+            ),
+            "model": (
+                active_version.embedding_model
+                if active_version
+                else (chunk.embedding_model if chunk else knowledge_base.embedding_model)
+            ),
+            "dimension": (
+                active_version.embedding_dimension
+                if active_version
+                else (chunk.embedding_dimension if chunk else self._embedding_dimension)
+            ),
+            "active_index_version_id": (
+                active_version.id
+                if active_version
+                else (chunk.index_version_id if chunk else "")
+            ),
+            "source": "active_knowledge_index",
+        }
+
     def list_index_versions(self, knowledge_base_id: str) -> List[KnowledgeIndexVersionRecord]:
         self.repository.initialize()
         self.repository.get_knowledge_base(knowledge_base_id)

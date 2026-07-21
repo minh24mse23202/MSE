@@ -72,6 +72,17 @@ class PromptBuilder:
         history = list(conversation_history or [])
         history_block = self._history_block(history)
         resolved_query = standalone_query.strip()
+        citations_required = bool(configuration["citations_enabled"] and contexts)
+        citation_instruction = (
+            "Citations are required. Cite supporting retrieved statements with their exact source labels, "
+            "for example [S1]. Do not invent source labels."
+            if citations_required
+            else (
+                "Citation validation is enabled, but this route has no retrieved sources to cite."
+                if configuration["citations_enabled"]
+                else "Citation validation is disabled. Source labels are optional."
+            )
+        )
         prompt_parts = [
             configuration["system_prompt"],
             "",
@@ -80,6 +91,7 @@ class PromptBuilder:
             f"- Tone: {configuration['tone']}",
             f"- Humor level: {configuration['humor_level']}/5. Keep humor appropriate for business workflow support.",
             f"- Route level: {route_level}",
+            f"- {citation_instruction}",
             configuration["predefined_prompt"],
             "",
             "Conversation history:",
@@ -113,6 +125,8 @@ class PromptBuilder:
                 "tone": configuration["tone"],
                 "humor_level": configuration["humor_level"],
                 "context_count": len(contexts),
+                "citations_enabled": configuration["citations_enabled"],
+                "citations_required": citations_required,
                 "history_message_count": len(history),
                 "history_exchange_count": min(
                     sum(1 for message in history if message.get("role") == "user"),
@@ -333,6 +347,7 @@ def default_chat_configuration() -> Dict[str, Any]:
         "fallback_deployment_ids": [],
         "reranker_deployment_id": "",
         "planner_deployment_id": "",
+        "citations_enabled": True,
         "generation_parameters": {"temperature": 0.2, "max_tokens": 500},
         "response_structure": "Concise answer with bullets and cited workflow context",
         "tone": "Professional",
@@ -357,7 +372,20 @@ def _normalized_configuration(chat_configuration: Optional[Dict[str, Any]]) -> D
     normalized["humor_level"] = max(0, min(humor_level, 5))
     normalized["system_prompt"] = str(normalized.get("system_prompt") or default_chat_configuration()["system_prompt"])
     normalized["predefined_prompt"] = str(normalized.get("predefined_prompt") or default_chat_configuration()["predefined_prompt"])
+    metadata = normalized.get("metadata") if isinstance(normalized.get("metadata"), dict) else {}
+    citation_value = normalized.get("citations_enabled")
+    if citation_value is None:
+        citation_value = metadata.get("citations_enabled", True)
+    normalized["citations_enabled"] = _as_bool(citation_value, default=True)
     return normalized
+
+
+def _as_bool(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(value)
 
 
 def _generated_text(outputs: Any) -> str:

@@ -1,10 +1,18 @@
 import asyncio
 
+import pytest
+
 from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions
+from aragbiz.cancellation import AnswerCancelled, CancellationToken
 from aragbiz.generation import ExtractiveGenerator
 from aragbiz.knowledge import HashEmbeddingModel, KnowledgeService, OverlapChunker
 from aragbiz.knowledge_store import JsonKnowledgeRepository
-from aragbiz.model_farm import ModelStreamEvent
+from aragbiz.model_farm import (
+    ModelClassificationResult,
+    ModelFarmError,
+    ModelGenerationResult,
+    ModelStreamEvent,
+)
 from aragbiz.routing import AdaptiveRouter
 
 
@@ -69,6 +77,24 @@ def test_l1_direct_generation_uses_local_generator(tmp_path):
     assert "prompt_preview" in result.metadata
     assert any(step["step"] == "Prompt builder" for step in result.metadata["trace_steps"])
     assert any(step["step"] == "Generator execution" for step in result.metadata["trace_steps"])
+
+
+def test_stream_rejects_a_request_cancelled_before_preparation(tmp_path):
+    service, _ = build_service(tmp_path, label="simple")
+    token = CancellationToken("request-cancelled")
+    token.cancel("Stopped before preparation.")
+
+    async def collect():
+        return [
+            event
+            async for event in service.answer_stream(
+                "What is Wix Payments?",
+                AnswerOptions(mode="direct", cancellation_token=token),
+            )
+        ]
+
+    with pytest.raises(AnswerCancelled, match="Stopped before preparation"):
+        asyncio.run(collect())
 
 
 def test_adaptive_simple_routes_to_l1(tmp_path):
@@ -184,6 +210,197 @@ def test_l2_hybrid_combines_bm25_and_dense_scores(tmp_path):
     assert result.metadata["retrieval_mode"] == "hybrid"
     assert len(result.contexts) == 2
     assert all(context.mode == "hybrid" for context in result.contexts)
+
+
+class RuntimeControlGateway:
+    def __init__(self, *, label="complex", planner_text='["Check verification", "Check approval owner"]', fail_classifier=False):
+        self.label = label
+        self.planner_text = planner_text
+        self.fail_classifier = fail_classifier
+        self.classified_queries = []
+        self.planner_calls = []
+
+    def classify_sync(self, query, deployment_id, **kwargs):
+        self.classified_queries.append((query, deployment_id, kwargs))
+        if self.fail_classifier:
+            raise ModelFarmError("classifier unavailable")
+        return ModelClassificationResult(
+            label=self.label,
+            deployment_id=deployment_id,
+            provider="Local",
+            model="query_classifier_t5",
+            metadata={"runtime": "test-classifier", "latency_ms": 1.2},
+        )
+
+    def generate_sync(self, messages, deployment_id, **kwargs):
+        self.planner_calls.append((messages, deployment_id, kwargs))
+        return ModelGenerationResult(
+            text=self.planner_text,
+            deployment_id=deployment_id,
+            provider="OpenRouter",
+            model="planner-model",
+            status="completed",
+            metadata={"runtime": "test-planner", "latency_ms": 2.4},
+        )
+
+
+def test_selected_classifier_controls_adaptive_route(tmp_path):
+    service, kb = build_service(tmp_path, label="simple")
+    gateway = RuntimeControlGateway(label="complex")
+    service.model_gateway = gateway
+
+    result = service.answer(
+        "Compare the verification and approval workflow.",
+        AnswerOptions(
+            mode="adaptive",
+            knowledge_base_id=kb.id,
+            retrieval_mode="bm25",
+            top_k=2,
+            chat_configuration={"metadata": {"classifier_deployment_id": "model-local-t5-classifier"}},
+        ),
+    )
+
+    assert result.metadata["route_level"] == "l3_complex_rag"
+    assert result.metadata["configured_classifier"]["deployment_id"] == "model-local-t5-classifier"
+    assert result.metadata["actual_classifier"]["runtime"] == "test-classifier"
+    assert result.metadata["classifier_fallback_used"] is False
+    assert gateway.classified_queries[0][1] == "model-local-t5-classifier"
+
+
+def test_selected_classifier_failure_falls_back_to_process_default(tmp_path):
+    service, kb = build_service(tmp_path, label="moderate")
+    service.model_gateway = RuntimeControlGateway(fail_classifier=True)
+
+    result = service.answer(
+        "How should the invoice mismatch be handled?",
+        AnswerOptions(
+            mode="adaptive",
+            knowledge_base_id=kb.id,
+            retrieval_mode="bm25",
+            chat_configuration={"metadata": {"classifier_deployment_id": "broken-classifier"}},
+        ),
+    )
+
+    classifier_trace = next(
+        step for step in result.metadata["trace_steps"] if step["step"] == "Query complexity classifier"
+    )
+    assert result.metadata["route_level"] == "l2_simple_rag"
+    assert result.metadata["classifier_fallback_used"] is True
+    assert result.metadata["actual_classifier"]["runtime"] == "process_default"
+    assert classifier_trace["status"] == "warning"
+
+
+def test_selected_planner_controls_l3_decomposition(tmp_path):
+    service, kb = build_service(tmp_path, label="complex")
+    gateway = RuntimeControlGateway()
+    service.model_gateway = gateway
+    original = "Compare verification with invoice approval."
+
+    result = service.answer(
+        original,
+        AnswerOptions(
+            mode="complex_rag",
+            knowledge_base_id=kb.id,
+            retrieval_mode="bm25",
+            top_k=2,
+            chat_configuration={"planner_deployment_id": "remote-planner"},
+        ),
+    )
+
+    assert result.metadata["decomposed_queries"] == [
+        "Check verification",
+        "Check approval owner",
+        original,
+    ]
+    assert result.metadata["configured_planner"]["deployment_id"] == "remote-planner"
+    assert result.metadata["actual_planner"]["runtime"] == "test-planner"
+    assert result.metadata["planner_fallback_used"] is False
+    assert gateway.planner_calls[0][2]["capability"] == "planner"
+    assert gateway.planner_calls[0][2]["context"].purpose == "query_decomposition"
+
+
+def test_invalid_planner_output_falls_back_to_deterministic_decomposition(tmp_path):
+    service, kb = build_service(tmp_path, label="complex")
+    service.model_gateway = RuntimeControlGateway(planner_text="not-json")
+    original = "Compare verification with invoice approval."
+
+    result = service.answer(
+        original,
+        AnswerOptions(
+            mode="complex_rag",
+            knowledge_base_id=kb.id,
+            retrieval_mode="bm25",
+            top_k=2,
+            chat_configuration={"planner_deployment_id": "invalid-planner"},
+        ),
+    )
+
+    planner_trace = next(step for step in result.metadata["trace_steps"] if step["step"] == "Query decomposition")
+    assert result.metadata["decomposed_queries"][-1] == original
+    assert result.metadata["planner_fallback_used"] is True
+    assert result.metadata["actual_planner"]["runtime"] == "deterministic_rules"
+    assert planner_trace["status"] == "warning"
+
+
+def test_query_embedding_is_inherited_from_active_index_and_ignored_for_bm25(tmp_path):
+    service, kb = build_service(tmp_path, label="moderate")
+
+    dense = service.answer(
+        "invoice mismatch",
+        AnswerOptions(
+            mode="simple_rag",
+            knowledge_base_id=kb.id,
+            retrieval_mode="dense",
+            chat_configuration={"metadata": {"query_embedding_deployment_id": "stale-override"}},
+        ),
+    )
+    bm25 = service.answer(
+        "invoice mismatch",
+        AnswerOptions(
+            mode="simple_rag",
+            knowledge_base_id=kb.id,
+            retrieval_mode="bm25",
+            chat_configuration={"metadata": {"query_embedding_deployment_id": "stale-override"}},
+        ),
+    )
+
+    assert dense.metadata["query_embedding"]["used"] is True
+    assert dense.metadata["query_embedding"]["deployment_id"] != "stale-override"
+    assert dense.metadata["query_embedding"]["active_index_version_id"]
+    assert bm25.metadata["query_embedding"]["used"] is False
+
+
+def test_citation_validation_is_advisory_and_can_be_disabled(tmp_path):
+    service, kb = build_service(tmp_path, label="moderate")
+
+    enabled = service.answer(
+        "How should the invoice mismatch be handled?",
+        AnswerOptions(
+            mode="simple_rag",
+            knowledge_base_id=kb.id,
+            retrieval_mode="bm25",
+            chat_configuration={"citations_enabled": True},
+        ),
+    )
+    disabled = service.answer(
+        "How should the invoice mismatch be handled?",
+        AnswerOptions(
+            mode="simple_rag",
+            knowledge_base_id=kb.id,
+            retrieval_mode="bm25",
+            chat_configuration={"citations_enabled": False},
+        ),
+    )
+
+    assert enabled.answer
+    assert enabled.metadata["citation_validation"]["status"] == "warning"
+    assert set(enabled.metadata["citation_sources"]) == {
+        context.document.metadata["source_label"] for context in enabled.contexts
+    }
+    first_source = next(iter(enabled.metadata["citation_sources"].values()))
+    assert first_source["context_id"]
+    assert first_source["document_id"]
+    assert disabled.metadata["citation_validation"]["status"] == "disabled"
 
 
 def test_follow_up_uses_standalone_query_for_classifier_and_retrieval(tmp_path):

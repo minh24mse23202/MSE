@@ -39,6 +39,7 @@ import {
   Save,
   Search,
   SendHorizontal,
+  Square,
   ThumbsDown,
   ThumbsUp,
   Trash2,
@@ -48,6 +49,7 @@ import {
 import {
   askQuestion,
   askQuestionStream,
+  cancelAnswerRequest,
   createChatConfiguration,
   createEvaluationRun,
   createKnowledgeBase,
@@ -67,6 +69,7 @@ import {
   ingestWebsiteSource,
   listChatConfigurations,
   listChatConversations,
+  listChatMessageVersions,
   listChatMessages,
   listEvaluationCases,
   listEvaluationRuns,
@@ -81,6 +84,8 @@ import {
   clearAuthToken,
   hasAuthToken,
   login as loginUser,
+  regenerateAnswerStream,
+  retryAnswerStream,
   reindexKnowledgeBase,
   submitFeedback,
   testModelDeployment,
@@ -841,9 +846,11 @@ function ConfirmationDialog({ confirmation, onCancel, onConfirm }) {
 
 function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAction }) {
   const mainGridRef = useRef(null);
+  const activeAnswerOperationRef = useRef(null);
   const [messages, setMessages] = useState(() => welcomeMessagesFromConfig(defaultChatConfigurationDraft));
   const [question, setQuestion] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [feedbackStatus, setFeedbackStatus] = useState("");
   const [popup, setPopup] = useState(null);
   const [knowledgeBaseOptions, setKnowledgeBaseOptions] = useState([]);
@@ -861,7 +868,6 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
   const [config, setConfig] = useState({
     classifier: "DistilBERT",
     classifierDeploymentId: "",
-    queryEmbeddingDeploymentId: "",
     route: "Adaptive",
     retrievalMode: "Hybrid",
     topK: 6,
@@ -1146,6 +1152,40 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
     }
   }
 
+  function beginAnswerOperation(requestId, controller, messageId = "") {
+    activeAnswerOperationRef.current = {
+      requestId,
+      controller,
+      messageId,
+      stopping: false,
+      abortTimer: null
+    };
+  }
+
+  function finishAnswerOperation(requestId) {
+    const operation = activeAnswerOperationRef.current;
+    if (!operation || operation.requestId !== requestId) return;
+    if (operation.abortTimer) window.clearTimeout(operation.abortTimer);
+    activeAnswerOperationRef.current = null;
+    setIsStopping(false);
+  }
+
+  async function stopActiveAnswer() {
+    const operation = activeAnswerOperationRef.current;
+    if (!operation || operation.stopping) return;
+    operation.stopping = true;
+    setIsStopping(true);
+    setFeedbackStatus("Stopping answer...");
+    try {
+      await cancelAnswerRequest(operation.requestId);
+      operation.abortTimer = window.setTimeout(() => operation.controller.abort(), 3000);
+    } catch (error) {
+      operation.stopping = false;
+      setIsStopping(false);
+      setFeedbackStatus(`Stop failed: ${error.message}`);
+    }
+  }
+
   async function sendQuestion() {
     const trimmed = question.trim();
     if (!trimmed) return;
@@ -1166,7 +1206,6 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
       config.generatorDeploymentId,
       ...(config.fallbackDeploymentIds || []),
       config.plannerDeploymentId,
-      config.queryEmbeddingDeploymentId,
       config.classifierDeploymentId,
       config.reranker ? config.rerankerDeploymentId : ""
     ].filter(Boolean);
@@ -1186,6 +1225,7 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
     }
     const assistantMessageId = createId();
     const streamRequestId = createId();
+    const streamController = new AbortController();
     let persistedConversationId = activeConversationId || "";
     let persistedAssistantMessageId = "";
     let streamPollTimer = null;
@@ -1205,6 +1245,7 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
     setMessages((current) => [...current.filter((message) => !isWelcomeMessage(message)), userMessage, assistantPlaceholder]);
     setQuestion("");
     setIsLoading(true);
+    beginAnswerOperation(streamRequestId, streamController, assistantMessageId);
     const stopStreamPolling = () => {
       streamFinished = true;
       if (streamPollTimer) {
@@ -1293,7 +1334,8 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
         topK: config.topK,
         documentIds: selectedFilterDocumentIds,
         chatConfigurationId: config.chatConfigurationId || null,
-        chatConfiguration: chatConfigurationPayloadFromDraft(config, conversationLimits)
+        chatConfiguration: chatConfigurationPayloadFromDraft(config, conversationLimits),
+        signal: streamController.signal
       }, (event) => {
         if (event.type === "started") {
           const serverAssistantId = event.data?.assistant_message_id;
@@ -1336,7 +1378,30 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
             streamingStatus: "Streaming answer..."
           }));
         }
+        if (event.type === "cancelled") {
+          patchStreamingAssistant((message) => ({
+            content: event.data?.partial_answer || message.content || "",
+            status: "cancelled",
+            latestVersionStatus: "cancelled",
+            streaming: false,
+            streamingStatus: "",
+            metadata: {
+              ...(message.metadata || {}),
+              request_id: event.data?.request_id || streamRequestId,
+              assistant_message_id: event.data?.assistant_message_id || persistedAssistantMessageId,
+              message_version_id: event.data?.message_version_id || message.metadata?.message_version_id,
+              message_version_number: event.data?.message_version_number || message.metadata?.message_version_number,
+              cancelled: true
+            }
+          }));
+        }
       });
+      if (response?.status === "cancelled") {
+        stopStreamPolling();
+        setFeedbackStatus("Answer stopped");
+        await refreshConversationLists();
+        return;
+      }
       if (response.conversation_id && response.conversation_id !== activeConversationId) {
         setActiveConversationId(response.conversation_id);
       }
@@ -1352,30 +1417,40 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
           assistant_message_id: response.metadata?.assistant_message_id || persistedAssistantMessageId
         },
         status: "completed",
+        latestVersionStatus: "completed",
         streaming: false,
-        streamingStatus: ""
+        streamingStatus: "",
+        versionCount: 1,
+        latestVersionNumber: Number(response.metadata?.message_version_number || 1),
+        viewingVersionNumber: Number(response.metadata?.message_version_number || 1)
       });
       await refreshConversationLists();
     } catch (error) {
       stopStreamPolling();
-      patchStreamingAssistant({
+      const stopped = streamController.signal.aborted || Boolean(activeAnswerOperationRef.current?.stopping);
+      patchStreamingAssistant((message) => ({
           question: trimmed,
           role: "assistant",
-          content: `Answer request failed: ${error.message}`,
-          contexts: [],
+          content: stopped ? message.content : `Answer request failed: ${error.message}`,
+          contexts: stopped ? message.contexts : [],
         metadata: {
+          ...(message.metadata || {}),
           error: error.message,
-          complexity_label: "unknown",
-          trace_steps: [],
+          complexity_label: stopped ? message.metadata?.complexity_label : "unknown",
+          trace_steps: stopped ? message.metadata?.trace_steps || [] : [],
           request_id: streamRequestId,
-          assistant_message_id: persistedAssistantMessageId
+          assistant_message_id: persistedAssistantMessageId,
+          cancelled: stopped
         },
-        status: "failed",
+        status: stopped ? "cancelled" : "failed",
+        latestVersionStatus: stopped ? "cancelled" : "failed",
         streaming: false,
         streamingStatus: ""
-      });
+      }));
+      setFeedbackStatus(stopped ? "Answer stopped" : `Answer failed: ${error.message}`);
     } finally {
       stopStreamPolling();
+      finishAnswerOperation(streamRequestId);
       setIsLoading(false);
     }
   }
@@ -1393,6 +1468,242 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
     } catch (error) {
       setFeedbackStatus(`Feedback failed: ${error.message}`);
     }
+  }
+
+  async function copyAssistantMessage(message) {
+    try {
+      await navigator.clipboard.writeText(message.content || "");
+      setFeedbackStatus("Answer copied");
+    } catch {
+      setFeedbackStatus("Copy failed: clipboard access is unavailable.");
+    }
+  }
+
+  async function navigateAnswerVersion(message, direction) {
+    const persistedMessageId = message.metadata?.assistant_message_id || message.id;
+    try {
+      const versions = message.answerVersions || await listChatMessageVersions(persistedMessageId);
+      if (!versions.length) return;
+      const canonicalNumber = Number(message.metadata?.message_version_number || 1);
+      const currentNumber = Number(message.viewingVersionNumber || canonicalNumber);
+      const foundIndex = versions.findIndex((version) => version.version_number === currentNumber);
+      const currentIndex = foundIndex >= 0 ? foundIndex : versions.length - 1;
+      const nextIndex = Math.max(0, Math.min(versions.length - 1, currentIndex + direction));
+      const selected = versions[nextIndex];
+      setMessages((current) => updateMessage(current, message.id, {
+        content: selected.content,
+        contexts: selected.contexts || [],
+        metadata: {
+          ...(selected.metadata || {}),
+          assistant_message_id: persistedMessageId,
+          message_version_id: selected.id,
+          message_version_number: selected.version_number
+        },
+        status: selected.status,
+        streaming: false,
+        answerVersions: versions,
+        versionCount: versions.length,
+        latestVersionNumber: Math.max(...versions.map((version) => Number(version.version_number || 0))),
+        viewingVersionNumber: selected.version_number
+      }));
+    } catch (error) {
+      setFeedbackStatus(`Answer versions unavailable: ${error.message}`);
+    }
+  }
+
+  async function runExistingAnswer(message, operation = "regenerate") {
+    if (isLoading) return;
+    const isRetry = operation === "retry";
+    const actionLabel = isRetry ? "retrying" : "regenerating";
+    const mode = answerModeFromRoute(config.route);
+    if (mode !== "direct" && !selectedKnowledgeBaseId) {
+      setFeedbackStatus(`Select a knowledge base before ${actionLabel} this answer.`);
+      return;
+    }
+    if (!isValidChatConfigurationDraft(config)) {
+      setFeedbackStatus(`Select or save a chatbot configuration before ${actionLabel}.`);
+      return;
+    }
+    const selectedKnowledgeConfiguration = selectedKnowledgeBase
+      ? knowledgeConfigurationFromRecord(selectedKnowledgeBase)
+      : {};
+    const configuredDeploymentIds = [
+      config.generatorDeploymentId,
+      ...(config.fallbackDeploymentIds || []),
+      config.plannerDeploymentId,
+      config.classifierDeploymentId,
+      config.reranker ? config.rerankerDeploymentId : ""
+    ].filter(Boolean);
+    const remoteDeployment = configuredDeploymentIds
+      .map((deploymentId) => modelDeployments.find((deployment) => deployment.id === deploymentId))
+      .find((deployment) => deployment && deployment.locality !== "local");
+    if (selectedKnowledgeBase && remoteDeployment && !selectedKnowledgeConfiguration.external_processing_allowed) {
+      setFeedbackStatus(
+        `Remote model "${remoteDeployment.name}" is blocked for this knowledge base. `
+        + "Enable Allow remote model processing in Knowledge Bases first."
+      );
+      return;
+    }
+
+    const persistedMessageId = message.metadata?.assistant_message_id || message.id;
+    const requestId = createId();
+    const streamController = new AbortController();
+    const canonicalSnapshot = {
+      content: message.content,
+      contexts: message.contexts || [],
+      metadata: message.metadata || {},
+      status: message.status || "completed",
+      viewingVersionNumber: message.viewingVersionNumber
+    };
+    let nextVersionNumber = Number(message.latestVersionNumber || message.metadata?.message_version_number || 1) + 1;
+    let versionCreated = false;
+    setIsLoading(true);
+    beginAnswerOperation(requestId, streamController, persistedMessageId);
+    setMessages((current) => updateMessage(current, message.id, {
+      content: "",
+      contexts: [],
+      metadata: {
+        ...(message.metadata || {}),
+        request_id: requestId,
+        assistant_message_id: persistedMessageId,
+        regenerated: !isRetry,
+        retried: isRetry,
+        trace_steps: []
+      },
+      status: "streaming",
+      streaming: true,
+      streamingStatus: isRetry ? "Preparing retry..." : "Preparing regenerated answer..."
+    }));
+    try {
+      const streamFunction = isRetry ? retryAnswerStream : regenerateAnswerStream;
+      const response = await streamFunction(persistedMessageId, {
+        requestId,
+        knowledgeBaseId: selectedKnowledgeBaseId,
+        documentIds: selectedFilterDocumentIds,
+        mode,
+        retrievalMode: retrievalModeValue(config.retrievalMode),
+        topK: config.topK,
+        chatConfigurationId: config.chatConfigurationId || null,
+        chatConfiguration: chatConfigurationPayloadFromDraft(config, conversationLimits),
+        signal: streamController.signal
+      }, (event) => {
+        if (event.type === "started") {
+          versionCreated = Boolean(event.data?.message_version_id);
+          nextVersionNumber = Number(event.data?.message_version_number || nextVersionNumber);
+          setMessages((current) => updateMessage(current, message.id, (currentMessage) => ({
+            metadata: {
+              ...(currentMessage.metadata || {}),
+              request_id: event.data?.request_id || requestId,
+              assistant_message_id: persistedMessageId,
+              message_version_id: event.data?.message_version_id,
+              message_version_number: nextVersionNumber
+            },
+            streamingStatus: "Route is running..."
+          })));
+        } else if (event.type === "trace") {
+          setMessages((current) => updateMessage(current, message.id, (currentMessage) => ({
+            metadata: {
+              ...(currentMessage.metadata || {}),
+              trace_steps: [...(currentMessage.metadata?.trace_steps || []), event.data]
+            },
+            streamingStatus: event.data?.detail || "Running Adaptive RAG..."
+          })));
+        } else if (event.type === "sources") {
+          setMessages((current) => updateMessage(current, message.id, {
+            contexts: event.data?.contexts || [],
+            streamingStatus: "Sources retrieved. Generating answer..."
+          }));
+        } else if (event.type === "delta") {
+          setMessages((current) => updateMessage(current, message.id, (currentMessage) => ({
+            content: `${currentMessage.content || ""}${event.data?.text || ""}`,
+            streamingStatus: isRetry ? "Streaming retry..." : "Streaming regenerated answer..."
+          })));
+        } else if (event.type === "cancelled") {
+          setMessages((current) => updateMessage(current, message.id, (currentMessage) => ({
+            content: event.data?.partial_answer || currentMessage.content || "",
+            status: "cancelled",
+            latestVersionStatus: "cancelled",
+            streaming: false,
+            streamingStatus: "",
+            metadata: {
+              ...(currentMessage.metadata || {}),
+              request_id: event.data?.request_id || requestId,
+              message_version_id: event.data?.message_version_id || currentMessage.metadata?.message_version_id,
+              message_version_number: event.data?.message_version_number || nextVersionNumber,
+              cancelled: true
+            }
+          })));
+        }
+      });
+      if (response?.status === "cancelled") {
+        setMessages((current) => updateMessage(current, message.id, {
+          status: "cancelled",
+          latestVersionStatus: "cancelled",
+          streaming: false,
+          streamingStatus: "",
+          answerVersions: null,
+          versionCount: Math.max(Number(message.versionCount || 1) + 1, nextVersionNumber),
+          latestVersionNumber: nextVersionNumber,
+          viewingVersionNumber: nextVersionNumber
+        }));
+        await refreshConversationLists();
+        setFeedbackStatus("Answer stopped");
+        return;
+      }
+      setMessages((current) => updateMessage(current, message.id, {
+        question: response.question,
+        content: response.answer,
+        contexts: response.contexts || [],
+        metadata: {
+          ...(response.metadata || {}),
+          assistant_message_id: persistedMessageId
+        },
+        status: "completed",
+        latestVersionStatus: "completed",
+        streaming: false,
+        streamingStatus: "",
+        answerVersions: null,
+        versionCount: Math.max(Number(message.versionCount || 1) + 1, nextVersionNumber),
+        latestVersionNumber: nextVersionNumber,
+        viewingVersionNumber: nextVersionNumber
+      }));
+      await refreshConversationLists();
+      setFeedbackStatus(`${isRetry ? "Retried" : "Generated"} answer version ${nextVersionNumber}`);
+    } catch (error) {
+      const stopped = streamController.signal.aborted || Boolean(activeAnswerOperationRef.current?.stopping);
+      setMessages((current) => updateMessage(current, message.id, (currentMessage) => ({
+        ...(versionCreated ? {} : canonicalSnapshot),
+        status: versionCreated ? (stopped ? "cancelled" : "failed") : canonicalSnapshot.status,
+        latestVersionStatus: versionCreated
+          ? (stopped ? "cancelled" : "failed")
+          : message.latestVersionStatus,
+        streaming: false,
+        streamingStatus: "",
+        answerVersions: null,
+        metadata: versionCreated
+          ? { ...(currentMessage.metadata || {}), error: error.message, cancelled: stopped }
+          : canonicalSnapshot.metadata,
+        versionCount: versionCreated
+          ? Math.max(Number(message.versionCount || 1) + 1, nextVersionNumber)
+          : Number(message.versionCount || 1),
+        latestVersionNumber: versionCreated
+          ? nextVersionNumber
+          : Number(message.latestVersionNumber || message.metadata?.message_version_number || 1),
+        viewingVersionNumber: versionCreated ? nextVersionNumber : canonicalSnapshot.viewingVersionNumber
+      })));
+      setFeedbackStatus(stopped ? "Answer stopped" : `${isRetry ? "Retry" : "Regeneration"} failed: ${error.message}`);
+    } finally {
+      finishAnswerOperation(requestId);
+      setIsLoading(false);
+    }
+  }
+
+  async function regenerateMessage(message) {
+    return runExistingAnswer(message, "regenerate");
+  }
+
+  async function retryMessage(message) {
+    return runExistingAnswer(message, "retry");
   }
 
   function togglePanel(panel) {
@@ -1468,6 +1779,7 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
         recentConversations={recentConversations}
         activeConversationId={activeConversationId}
         isLoading={isHistoryLoading}
+        interactionLocked={isLoading}
         onSelectConversation={selectConversation}
         onTogglePinned={togglePinnedConversation}
         onRenameConversation={renameConversation}
@@ -1479,9 +1791,15 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
         question={question}
         setQuestion={setQuestion}
         isLoading={isLoading}
+        isStopping={isStopping}
         onSend={sendQuestion}
+        onStop={stopActiveAnswer}
         onOpenPopup={setPopup}
         onFeedback={recordFeedback}
+        onCopyMessage={copyAssistantMessage}
+        onRegenerate={regenerateMessage}
+        onRetry={retryMessage}
+        onNavigateVersion={navigateAnswerVersion}
         knowledgeBases={knowledgeBaseOptions}
         selectedKnowledgeBaseId={selectedKnowledgeBaseId}
         onSelectKnowledgeBase={onSelectKnowledgeBase}
@@ -1535,6 +1853,7 @@ function ConversationHistory({
   recentConversations,
   activeConversationId,
   isLoading,
+  interactionLocked = false,
   onSelectConversation,
   onTogglePinned,
   onRenameConversation,
@@ -1558,7 +1877,7 @@ function ConversationHistory({
         </div>
         <button className="panel-collapse-button" type="button" onClick={onToggle} aria-label="Collapse chat history"><IconOnly icon={ChevronLeft} /></button>
       </header>
-      <button className="new-chat-action" type="button" onClick={onNewChat}><IconLabel icon={MessageSquarePlus}>New chat</IconLabel></button>
+      <button className="new-chat-action" type="button" onClick={onNewChat} disabled={interactionLocked}><IconLabel icon={MessageSquarePlus}>New chat</IconLabel></button>
       <label className="history-search">
         <IconOnly icon={Search} size={16} />
         <input
@@ -1578,6 +1897,7 @@ function ConversationHistory({
         onTogglePinned={onTogglePinned}
         onRenameConversation={onRenameConversation}
         onDeleteConversation={onDeleteConversation}
+        interactionLocked={interactionLocked}
       />
       <ConversationSection
         title="Recents"
@@ -1589,6 +1909,7 @@ function ConversationHistory({
         onTogglePinned={onTogglePinned}
         onRenameConversation={onRenameConversation}
         onDeleteConversation={onDeleteConversation}
+        interactionLocked={interactionLocked}
       />
     </aside>
   );
@@ -1603,7 +1924,8 @@ function ConversationSection({
   onSelectConversation,
   onTogglePinned,
   onRenameConversation,
-  onDeleteConversation
+  onDeleteConversation,
+  interactionLocked = false
 }) {
   const [editingConversationId, setEditingConversationId] = useState("");
   const [editingTitle, setEditingTitle] = useState("");
@@ -1664,7 +1986,7 @@ function ConversationSection({
                   />
                 </form>
               ) : (
-                <button className="conversation-main" type="button" onClick={() => onSelectConversation(conversation)}>
+                <button className="conversation-main" type="button" disabled={interactionLocked} onClick={() => onSelectConversation(conversation)}>
                   <span className="conversation-title-block">
                     <strong title={conversation.title}>{chatHistoryDisplayTitle(conversation.title)}</strong>
                     <small>{conversation.route_mode || "adaptive"} - {conversation.retrieval_mode || "hybrid"}</small>
@@ -1676,15 +1998,16 @@ function ConversationSection({
                 <div className="conversation-actions">
                   <button
                     type="button"
+                    disabled={interactionLocked}
                     aria-label={conversation.pinned ? "Unpin chat" : "Pin chat"}
                     onClick={() => onTogglePinned(conversation)}
                   >
                     <IconOnly icon={conversation.pinned ? PinOff : Pin} size={14} />
                   </button>
-                  <button type="button" aria-label="Rename chat" onClick={() => beginRename(conversation)}>
+                  <button type="button" disabled={interactionLocked} aria-label="Rename chat" onClick={() => beginRename(conversation)}>
                     <IconOnly icon={Pencil} size={14} />
                   </button>
-                  <button type="button" aria-label="Delete chat" onClick={() => onDeleteConversation(conversation)}>
+                  <button type="button" disabled={interactionLocked} aria-label="Delete chat" onClick={() => onDeleteConversation(conversation)}>
                     <IconOnly icon={Trash2} size={14} />
                   </button>
                 </div>
@@ -1701,9 +2024,15 @@ function ChatPanel({
   question,
   setQuestion,
   isLoading,
+  isStopping,
   onSend,
+  onStop,
   onOpenPopup,
   onFeedback,
+  onCopyMessage,
+  onRegenerate,
+  onRetry,
+  onNavigateVersion,
   knowledgeBases,
   selectedKnowledgeBaseId,
   onSelectKnowledgeBase,
@@ -1732,6 +2061,12 @@ function ChatPanel({
   const characterUsagePercent = Math.min(100, Math.round((currentCharacterCount / COMPOSER_MAX_CHARACTERS) * 100));
   const shouldShowStarters = messages.length === 0 || messages.every(isWelcomeMessage);
   const visibleStarters = normalizeConversationStarters(conversationStarters);
+  const latestCompletedAssistantId = [...messages].reverse().find(
+    (message) => message.role === "assistant" && message.status === "completed" && !isWelcomeMessage(message)
+  )?.id;
+  const latestAssistantId = [...messages].reverse().find(
+    (message) => message.role === "assistant" && !isWelcomeMessage(message)
+  )?.id;
   const scrollSignature = messages
     .map((message) => `${message.id}:${message.content?.length || 0}:${message.streamingStatus || ""}:${message.status || ""}`)
     .join("|");
@@ -1811,7 +2146,21 @@ function ChatPanel({
             <div className="message-body">
               {message.content ? (
                 message.role === "assistant" ? (
-                  <AssistantMessageContent content={message.content} />
+                  <AssistantMessageContent
+                    content={message.content}
+                    citationSources={message.metadata?.citation_sources || {}}
+                    onCitationClick={(label, source) => onOpenPopup({
+                      type: "source",
+                      message,
+                      sourceLabel: label,
+                      selectedSourceId: source?.context_id || source?.chunk_id || ""
+                    })}
+                    onInvalidCitation={() => onOpenPopup({
+                      type: "trace",
+                      message,
+                      focusStep: "Citation validation"
+                    })}
+                  />
                 ) : (
                   <p className="user-message-content">{message.content}</p>
                 )
@@ -1836,8 +2185,21 @@ function ChatPanel({
             {message.role === "assistant" && !message.streaming && !isWelcomeMessage(message) && (
               <div className="message-actions">
                 <button onClick={() => onOpenPopup({ type: "source", message })}><IconLabel icon={Layers}>Sources</IconLabel></button>
-                <button type="button"><IconLabel icon={Copy}>Copy</IconLabel></button>
+                <button type="button" onClick={() => onCopyMessage(message)}><IconLabel icon={Copy}>Copy</IconLabel></button>
                 <button onClick={() => onOpenPopup({ type: "trace", message })}><IconLabel icon={GitBranch}>Trace</IconLabel></button>
+                {message.id === latestCompletedAssistantId && (
+                  <button type="button" disabled={isLoading} onClick={() => onRegenerate(message)}>
+                    <IconLabel icon={RotateCw}>Regenerate</IconLabel>
+                  </button>
+                )}
+                {message.id === latestAssistantId && (
+                  ["failed", "cancelled"].includes(message.status)
+                  || ["failed", "cancelled"].includes(message.latestVersionStatus)
+                ) && (
+                  <button type="button" disabled={isLoading} onClick={() => onRetry(message)}>
+                    <IconLabel icon={RefreshCw}>Retry</IconLabel>
+                  </button>
+                )}
                 <button onClick={() => onFeedback(message, "up")}><IconLabel icon={ThumbsUp}>Useful</IconLabel></button>
                 <button onClick={() => onFeedback(message, "down")}><IconLabel icon={ThumbsDown}>Needs work</IconLabel></button>
                 {message.metadata?.query_rewritten && (
@@ -1850,7 +2212,44 @@ function ChatPanel({
                     <IconLabel icon={RotateCw}>Follow-up resolved</IconLabel>
                   </button>
                 )}
+                {message.metadata?.citation_validation?.status === "warning" && (
+                  <button
+                    className="citation-warning-chip"
+                    type="button"
+                    title={message.metadata.citation_validation.detail || "Open citation validation trace"}
+                    onClick={() => onOpenPopup({ type: "trace", message, focusStep: "Citation validation" })}
+                  >
+                    <IconLabel icon={AlertTriangle}>Citation warning</IconLabel>
+                  </button>
+                )}
                 <span><IconLabel icon={BrainCircuit}>{message.metadata?.complexity_label || "pending"}</IconLabel></span>
+                {Number(message.versionCount || message.latestVersionNumber || 1) > 1 && (
+                  <span className="answer-version-nav">
+                    <button
+                      type="button"
+                      aria-label="Previous answer version"
+                      disabled={Number(message.viewingVersionNumber || message.metadata?.message_version_number || 1) <= 1}
+                      onClick={() => onNavigateVersion(message, -1)}
+                    >
+                      <IconOnly icon={ChevronLeft} size={14} />
+                    </button>
+                    <em>
+                      {Number(message.viewingVersionNumber || message.metadata?.message_version_number || 1)}
+                      /{Number(message.latestVersionNumber || message.versionCount || 1)}
+                    </em>
+                    <button
+                      type="button"
+                      aria-label="Next answer version"
+                      disabled={
+                        Number(message.viewingVersionNumber || message.metadata?.message_version_number || 1)
+                        >= Number(message.latestVersionNumber || message.versionCount || 1)
+                      }
+                      onClick={() => onNavigateVersion(message, 1)}
+                    >
+                      <IconOnly icon={ChevronRight} size={14} />
+                    </button>
+                  </span>
+                )}
               </div>
             )}
           </article>
@@ -1872,6 +2271,7 @@ function ChatPanel({
           placeholder={chatPlaceholder}
           maxLength={COMPOSER_MAX_CHARACTERS}
           value={question}
+          disabled={isLoading}
           onChange={(event) => setQuestion(event.target.value.slice(0, COMPOSER_MAX_CHARACTERS))}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
@@ -1886,7 +2286,7 @@ function ChatPanel({
             className={`composer-tool-button ${selectedFilterCount ? "active" : ""}`}
             type="button"
             onClick={openDocumentFilter}
-            disabled={!selectedKnowledgeBaseId}
+            disabled={isLoading || !selectedKnowledgeBaseId}
             title={selectedKnowledgeBaseId ? "Filter retrieval by selected documents" : "Select a knowledge base first"}
           >
             <IconLabel icon={Filter}>Filter{selectedFilterCount ? ` (${selectedFilterCount})` : ""}</IconLabel>
@@ -1908,6 +2308,7 @@ function ChatPanel({
             className="composer-select"
             aria-label="Select knowledge base"
             value={selectedKnowledgeBaseId}
+            disabled={isLoading}
             onChange={(event) => onSelectKnowledgeBase(event.target.value)}
           >
             <option value="">Select Knowledge Base</option>
@@ -1918,7 +2319,15 @@ function ChatPanel({
             ))}
           </select>
           <strong>{selectedRoute}</strong>
-          <button className="send-action" onClick={onSend} disabled={isLoading || (requiresKnowledgeBase && !selectedKnowledgeBaseId)} aria-label="Send message"><SendHorizontal size={20} aria-hidden="true" /></button>
+          <button
+            className={`send-action ${isLoading ? "stop-action" : ""}`}
+            type="button"
+            onClick={isLoading ? onStop : onSend}
+            disabled={isLoading ? isStopping : (requiresKnowledgeBase && !selectedKnowledgeBaseId)}
+            aria-label={isLoading ? (isStopping ? "Stopping answer" : "Stop answer") : "Send message"}
+          >
+            {isLoading ? <Square size={17} fill="currentColor" aria-hidden="true" /> : <SendHorizontal size={20} aria-hidden="true" />}
+          </button>
         </div>
       </div>
       {isFilterOpen && (
@@ -2013,7 +2422,6 @@ function RagConfiguration({
   onToggle
 }) {
   const generatorDeployments = modelDeployments.filter((deployment) => deployment.capabilities?.includes("generation"));
-  const embeddingDeployments = modelDeployments.filter((deployment) => deployment.capabilities?.includes("embedding"));
   const classifierDeployments = modelDeployments.filter((deployment) => deployment.capabilities?.includes("classifier"));
   const rerankerDeployments = modelDeployments.filter((deployment) => deployment.capabilities?.includes("rerank"));
   const plannerDeployments = modelDeployments.filter((deployment) => deployment.capabilities?.includes("planner"));
@@ -2022,17 +2430,15 @@ function RagConfiguration({
   const executedQueryEmbeddingModel = selectedKnowledgeBase
     ? selectedKnowledgeBase.embedding_model || activeKnowledgeConfiguration.embedding_model || "Not indexed"
     : "";
-  const selectedQueryEmbeddingDeploymentId = config.queryEmbeddingDeploymentId || activeEmbeddingDeploymentId || "";
-  const selectedQueryEmbeddingDeployment = embeddingDeployments.find((deployment) => deployment.id === selectedQueryEmbeddingDeploymentId);
-  const selectedQueryEmbeddingLabel = selectedQueryEmbeddingDeployment?.model
-    || selectedQueryEmbeddingDeployment?.name
-    || selectedQueryEmbeddingDeploymentId
-    || executedQueryEmbeddingModel;
-  const hasQueryEmbeddingOverride = Boolean(
-    config.queryEmbeddingDeploymentId
-    && activeEmbeddingDeploymentId
-    && config.queryEmbeddingDeploymentId !== activeEmbeddingDeploymentId
-  );
+  const activeEmbeddingDeployment = modelDeployments.find((deployment) => deployment.id === activeEmbeddingDeploymentId);
+  const activeQueryEmbeddingLabel = config.retrievalMode === "BM25"
+    ? "Not used by BM25 retrieval"
+    : (
+        activeEmbeddingDeployment?.name
+        || activeEmbeddingDeployment?.model
+        || executedQueryEmbeddingModel
+        || "Not indexed"
+      );
   const selectedChatConfiguration = chatConfigurations.find((item) => item.id === config.chatConfigurationId);
   const configurationCreatedAt = selectedChatConfiguration?.created_at || config.configurationCreatedAt || "";
   const configurationUpdatedAt = selectedChatConfiguration?.updated_at || config.configurationUpdatedAt || "";
@@ -2041,17 +2447,6 @@ function RagConfiguration({
   function toggleCustomizerSection(sectionId) {
     setCollapsedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
   }
-  const queryEmbeddingOptions = selectedKnowledgeBase
-    ? [
-        {
-          value: activeEmbeddingDeploymentId || "",
-          label: `${executedQueryEmbeddingModel || "Active KB embedding"} (active KB model)`
-        },
-        ...embeddingDeployments
-          .filter((deployment) => deployment.id !== activeEmbeddingDeploymentId)
-          .map((deployment) => deploymentOption(deployment))
-      ]
-    : [{ value: "", label: "Select a knowledge base first", disabled: true }];
   if (collapsed) {
     return (
       <aside className="config-panel panel-rail config-rail">
@@ -2249,21 +2644,24 @@ function RagConfiguration({
             onChange={(plannerDeploymentId) => setConfig({ ...config, plannerDeploymentId })}
           />
         </div>
-        <SelectField
-          label="Query embedding generation model"
-          value={selectedQueryEmbeddingDeploymentId}
-          options={queryEmbeddingOptions}
-          onChange={(queryEmbeddingDeploymentId) => setConfig({
-            ...config,
-            queryEmbeddingDeploymentId: queryEmbeddingDeploymentId === activeEmbeddingDeploymentId ? "" : queryEmbeddingDeploymentId
-          })}
-        />
-        {hasQueryEmbeddingOverride && (
-          <p className="config-warning-note">
-            Warning: selected query embedding model ({selectedQueryEmbeddingLabel}) is different from the active Knowledge Base embedding
-            ({executedQueryEmbeddingModel}). Dense retrieval should use matching query/document embeddings to avoid invalid similarity scores.
-          </p>
-        )}
+        <label>
+          Query embedding
+          <input
+            value={selectedKnowledgeBase ? activeQueryEmbeddingLabel : "Select a knowledge base first"}
+            readOnly
+            aria-readonly="true"
+            title={
+              selectedKnowledgeBase
+                ? `Inherited from active Knowledge Base index${activeEmbeddingDeploymentId ? ` (${activeEmbeddingDeploymentId})` : ""}`
+                : "Select a knowledge base first"
+            }
+          />
+          <small>
+            {config.retrievalMode === "BM25"
+              ? "BM25 is lexical and does not generate a query vector."
+              : "Locked to the active Knowledge Base index to preserve vector-space compatibility."}
+          </small>
+        </label>
         <div className="config-two-column">
           <SelectField
             label="Retrieval mode"
@@ -2505,23 +2903,23 @@ function KnowledgeBaseSummary({ selectedKnowledgeBase, collapsed = false, onTogg
   );
 }
 function TraceModal({ popup, onClose }) {
-  const { type, message, focusStep = "" } = popup;
+  const { type, message, focusStep = "", selectedSourceId = "", sourceLabel = "" } = popup;
   const contexts = message.contexts || [];
   const traceSteps = Array.isArray(message.metadata?.trace_steps) ? message.metadata.trace_steps : [];
   const [sourceQuery, setSourceQuery] = useState("");
-  const [selectedSourceId, setSelectedSourceId] = useState(contexts[0]?.id || "");
+  const [activeSourceId, setActiveSourceId] = useState(selectedSourceId || contexts[0]?.id || "");
   const [traceQuery, setTraceQuery] = useState("");
   const [selectedTraceIndex, setSelectedTraceIndex] = useState(0);
 
   useEffect(() => {
     setSourceQuery("");
-    setSelectedSourceId(contexts[0]?.id || "");
+    setActiveSourceId(selectedSourceId || contexts[0]?.id || "");
     setTraceQuery("");
     const focusedIndex = focusStep
       ? traceSteps.findIndex((step) => step.step === focusStep)
       : -1;
     setSelectedTraceIndex(focusedIndex >= 0 ? focusedIndex : 0);
-  }, [message.id, type, focusStep]);
+  }, [message.id, type, focusStep, selectedSourceId]);
 
   async function copyText(text) {
     try {
@@ -2543,7 +2941,7 @@ function TraceModal({ popup, onClose }) {
     ].filter(Boolean).join(" ").toLowerCase();
     return haystack.includes(sourceQuery.trim().toLowerCase());
   });
-  const selectedSource = filteredContexts.find((context) => context.id === selectedSourceId) || filteredContexts[0];
+  const selectedSource = filteredContexts.find((context) => context.id === activeSourceId) || filteredContexts[0];
   const traceItems = traceSteps.map((step, index) => ({ step, index }));
   const filteredTraceItems = traceItems.filter(({ step }) => {
     const haystack = [step.step, step.status, step.detail, JSON.stringify(step.metadata || {})].join(" ").toLowerCase();
@@ -2585,9 +2983,9 @@ function TraceModal({ popup, onClose }) {
                     key={context.id}
                     className={`source-result ${context.id === selectedSource?.id ? "selected" : ""}`}
                     type="button"
-                    onClick={() => setSelectedSourceId(context.id)}
+                    onClick={() => setActiveSourceId(context.id)}
                   >
-                    <span>{context.metadata?.source_type || "Chunk"}</span>
+                    <span>[{context.metadata?.source_label || `S${context.rank}`}] {context.metadata?.source_type || "Chunk"}</span>
                     <strong>{context.metadata?.title || `Knowledge chunk ${context.rank}`}</strong>
                     <small>{context.mode || message.metadata?.retrieval_mode || "retrieval"} - chunk {context.metadata?.chunk_index ?? context.rank}</small>
                     {context.metadata?.source_subquery && <small>Step {context.metadata?.subquery_index}: {context.metadata.source_subquery}</small>}
@@ -2602,6 +3000,7 @@ function TraceModal({ popup, onClose }) {
                       <div>
                         <p className="eyebrow">Selected chunk</p>
                         <h3>{selectedSource.metadata?.title || "Knowledge-base source"}</h3>
+                        <small>{sourceLabel || selectedSource.metadata?.source_label || `S${selectedSource.rank}`}</small>
                       </div>
                       <button className="secondary-action compact-action" type="button" onClick={() => copyText(selectedSource.text)}><IconLabel icon={Copy}>Copy text</IconLabel></button>
                     </header>
@@ -2685,10 +3084,22 @@ function TraceModal({ popup, onClose }) {
 }
 
 function TraceSummary({ metadata }) {
+  const classifier = metadata.actual_classifier || {};
+  const planner = metadata.actual_planner || {};
+  const embedding = metadata.query_embedding || {};
+  const citationStatus = metadata.citation_validation?.status || (metadata.citations_enabled ? "-" : "disabled");
   return (
     <section className="trace-summary-card">
       <div><dt>Route</dt><dd>{metadata.route_label || metadata.route_level || "-"}</dd></div>
       <div><dt>Complexity</dt><dd>{metadata.complexity_label || "-"}</dd></div>
+      <div>
+        <dt>Classifier</dt>
+        <dd>{classifier.name || classifier.model || classifier.runtime || "-"}</dd>
+      </div>
+      <div>
+        <dt>Classifier fallback</dt>
+        <dd>{metadata.classifier_fallback_used ? "Yes" : "No"}</dd>
+      </div>
       <div>
         <dt>Conversation context</dt>
         <dd>{metadata.history_exchange_count ?? 0} / {metadata.history_exchange_limit ?? "-"} exchange(s)</dd>
@@ -2699,9 +3110,18 @@ function TraceSummary({ metadata }) {
       </div>
       <div><dt>Query rewritten</dt><dd>{metadata.query_rewritten ? "Yes" : "No"}</dd></div>
       <div><dt>Retrieval</dt><dd>{metadata.retrieval_mode || "none"}</dd></div>
+      <div>
+        <dt>Query embedding</dt>
+        <dd>{embedding.used ? (embedding.model || embedding.deployment_id || "-") : "Not used"}</dd>
+      </div>
       <div><dt>Top K</dt><dd>{metadata.top_k ?? "-"}</dd></div>
       <div><dt>Multi-step</dt><dd>{metadata.multi_step ? "Yes" : "No"}</dd></div>
       <div><dt>Subqueries</dt><dd>{metadata.decomposed_queries?.length || 0}</dd></div>
+      <div>
+        <dt>Planner</dt>
+        <dd>{planner.name || planner.model || planner.runtime || "Deterministic"}</dd>
+      </div>
+      <div><dt>Citations</dt><dd>{citationStatus}</dd></div>
       <div><dt>Latency</dt><dd>{metadata.latency_ms ? `${metadata.latency_ms} ms` : "-"}</dd></div>
       <div><dt>Knowledge base</dt><dd>{metadata.knowledge_base_name || "-"}</dd></div>
     </section>
@@ -4702,24 +5122,104 @@ function IconLabel({ icon: Icon, children, size = 16 }) {
   );
 }
 
-function AssistantMessageContent({ content }) {
+function AssistantMessageContent({
+  content,
+  citationSources = {},
+  onCitationClick = () => {},
+  onInvalidCitation = () => {}
+}) {
+  const validLabels = Object.keys(citationSources);
   return (
     <div className="message-content">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, [remarkSourceCitations, { validLabels }]]}
         skipHtml
         components={{
-          a: ({ children, href, title }) => (
-            <a href={href} title={title} target="_blank" rel="noreferrer">
-              {children}
-            </a>
-          )
+          a: ({ children, href, title }) => {
+            if (href?.startsWith("aragbiz-source:")) {
+              const label = decodeURIComponent(href.slice("aragbiz-source:".length));
+              const source = citationSources[label];
+              return (
+                <button
+                  className="inline-citation"
+                  type="button"
+                  title={source?.title ? `${label}: ${source.title}` : `Open source ${label}`}
+                  onClick={() => onCitationClick(label, source)}
+                >
+                  [{label}]
+                </button>
+              );
+            }
+            if (href?.startsWith("aragbiz-invalid:")) {
+              const label = decodeURIComponent(href.slice("aragbiz-invalid:".length));
+              return (
+                <button
+                  className="inline-citation invalid"
+                  type="button"
+                  title={`${label} was not found in the retrieved sources`}
+                  onClick={onInvalidCitation}
+                >
+                  [{label}]
+                </button>
+              );
+            }
+            return (
+              <a href={href} title={title} target="_blank" rel="noreferrer">
+                {children}
+              </a>
+            );
+          }
         }}
       >
         {content}
       </ReactMarkdown>
     </div>
   );
+}
+
+function remarkSourceCitations({ validLabels = [] } = {}) {
+  const valid = new Set(validLabels);
+  return (tree) => {
+    transformCitationTextNodes(tree, valid);
+  };
+}
+
+function transformCitationTextNodes(node, validLabels) {
+  if (!node || !Array.isArray(node.children)) return;
+  if (["code", "inlineCode", "link", "linkReference"].includes(node.type)) return;
+  const nextChildren = [];
+  node.children.forEach((child) => {
+    if (child.type !== "text") {
+      transformCitationTextNodes(child, validLabels);
+      nextChildren.push(child);
+      return;
+    }
+    const value = String(child.value || "");
+    const pattern = /\[(S\d+)\]/g;
+    let cursor = 0;
+    let match = pattern.exec(value);
+    if (!match) {
+      nextChildren.push(child);
+      return;
+    }
+    while (match) {
+      if (match.index > cursor) {
+        nextChildren.push({ type: "text", value: value.slice(cursor, match.index) });
+      }
+      const label = match[1];
+      nextChildren.push({
+        type: "link",
+        url: `${validLabels.has(label) ? "aragbiz-source:" : "aragbiz-invalid:"}${encodeURIComponent(label)}`,
+        children: [{ type: "text", value: `[${label}]` }]
+      });
+      cursor = match.index + match[0].length;
+      match = pattern.exec(value);
+    }
+    if (cursor < value.length) {
+      nextChildren.push({ type: "text", value: value.slice(cursor) });
+    }
+  });
+  node.children = nextChildren;
 }
 
 function IconOnly({ icon: Icon, size = 18 }) {
@@ -4920,9 +5420,16 @@ function messagesFromChatRecords(records = []) {
       question: record.metadata?.question || previousUserQuestion,
       content: record.content,
       contexts: record.contexts || [],
-      metadata: record.metadata || {},
+      metadata: {
+        ...(record.metadata || {}),
+        assistant_message_id: record.id
+      },
       status: record.status || "completed",
-      streaming: false
+      streaming: false,
+      versionCount: Number(record.version_count || 1),
+      latestVersionNumber: Number(record.latest_version_number || record.metadata?.message_version_number || 1),
+      latestVersionStatus: record.latest_version_status || record.status || "completed",
+      viewingVersionNumber: Number(record.metadata?.message_version_number || 1)
     };
   });
 }
@@ -4997,7 +5504,6 @@ function applyChatConfigurationSnapshotToDraft(current, snapshot = {}, configura
     route,
     classifier: metadata.classifier || current.classifier,
     classifierDeploymentId: metadata.classifier_deployment_id || "",
-    queryEmbeddingDeploymentId: metadata.query_embedding_deployment_id || "",
     retrievalMode,
     topK: clampNumber(metadata.top_k, current.topK || 6, 1, 50),
     reranker: typeof metadata.reranker_enabled === "boolean" ? metadata.reranker_enabled : current.reranker,
@@ -5086,7 +5592,6 @@ function chatConfigurationPayloadFromDraft(config, conversationLimits = defaultC
       classifier: config.classifier || "Built-in trained classifier",
       classifier_deployment_id: config.classifierDeploymentId || "",
       planner_deployment_id: config.plannerDeploymentId || "",
-      query_embedding_deployment_id: config.queryEmbeddingDeploymentId || "",
       retrieval_mode: retrievalModeValue(config.retrievalMode),
       retrieval_mode_label: config.retrievalMode || "Hybrid",
       top_k: clampNumber(config.topK, 6, 1, 50),

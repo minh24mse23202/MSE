@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Iterable, List, Optional, Protocol, Sequence
 
+from aragbiz.cancellation import AnswerCancelled, CancellationToken
+
 
 MODEL_CAPABILITIES = {"generation", "embedding", "rerank", "judge", "planner", "classifier"}
 SECRET_ENV_PREFIX = "ARAGBIZ_MODEL_"
@@ -148,6 +150,18 @@ class ModelGenerationResult:
     output_tokens: int = 0
     estimated_cost_usd: float = 0.0
     finish_reason: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ModelClassificationResult:
+    label: str
+    deployment_id: str
+    provider: str
+    model: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    estimated_cost_usd: float = 0.0
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -815,7 +829,11 @@ class ModelFarmService:
             ) else provider
         )
         if resolved_provider == "openrouter":
-            requested_capabilities = [capability for capability in requested_capabilities if capability in {"generation", "judge", "planner"}]
+            requested_capabilities = [
+                capability
+                for capability in requested_capabilities
+                if capability in {"generation", "judge", "planner", "classifier"}
+            ]
             if not requested_capabilities:
                 requested_capabilities = ["generation"]
         unsupported = sorted(set(requested_capabilities) - allowed_capabilities)
@@ -1270,6 +1288,7 @@ class ModelAdapter(Protocol):
         resolved: ResolvedModel,
         messages: List[Dict[str, str]],
         parameters: Dict[str, Any],
+        cancellation_token: Optional[CancellationToken] = None,
     ) -> AsyncIterator[ModelStreamEvent]: ...
 
     async def embed(self, resolved: ResolvedModel, texts: List[str]) -> ModelEmbeddingResult: ...
@@ -1330,8 +1349,11 @@ class LocalBuiltinAdapter:
         resolved: ResolvedModel,
         messages: List[Dict[str, str]],
         parameters: Dict[str, Any],
+        cancellation_token: Optional[CancellationToken] = None,
     ) -> AsyncIterator[ModelStreamEvent]:
         deployment = resolved.deployment
+        if cancellation_token:
+            cancellation_token.raise_if_cancelled()
         if deployment.model == "google/flan-t5-small":
             prompt = "\n".join(item.get("content", "") for item in messages)
             parts: List[str] = []
@@ -1339,7 +1361,10 @@ class LocalBuiltinAdapter:
                 deployment.model,
                 prompt,
                 {**deployment.default_parameters, **parameters},
+                cancellation_token,
             ):
+                if cancellation_token:
+                    cancellation_token.raise_if_cancelled()
                 if delta:
                     parts.append(delta)
                     yield ModelStreamEvent("delta", {"text": delta})
@@ -1352,6 +1377,8 @@ class LocalBuiltinAdapter:
         else:
             result = await self.generate(resolved, messages, parameters)
             for chunk in _text_chunks(result.text, 32):
+                if cancellation_token:
+                    cancellation_token.raise_if_cancelled()
                 yield ModelStreamEvent("delta", {"text": chunk})
         yield ModelStreamEvent("model_completed", _generation_public_dict(result))
 
@@ -1450,6 +1477,7 @@ class LiteLLMAdapter:
         resolved: ResolvedModel,
         messages: List[Dict[str, str]],
         parameters: Dict[str, Any],
+        cancellation_token: Optional[CancellationToken] = None,
     ) -> AsyncIterator[ModelStreamEvent]:
         litellm = self._module()
         deployment = resolved.deployment
@@ -1457,13 +1485,24 @@ class LiteLLMAdapter:
         kwargs.update(deployment.default_parameters)
         kwargs.update(parameters)
         kwargs.update({"model": resolved.gateway_model, "messages": messages, "stream": True})
+        if cancellation_token:
+            cancellation_token.raise_if_cancelled()
         response = await litellm.acompletion(**kwargs)
         parts: List[str] = []
-        async for chunk in response:
-            delta = _stream_text(chunk)
-            if delta:
-                parts.append(delta)
-                yield ModelStreamEvent("delta", {"text": delta})
+        try:
+            async for chunk in response:
+                if cancellation_token:
+                    cancellation_token.raise_if_cancelled()
+                delta = _stream_text(chunk)
+                if delta:
+                    parts.append(delta)
+                    yield ModelStreamEvent("delta", {"text": delta})
+        finally:
+            close = getattr(response, "aclose", None)
+            if callable(close):
+                closed = close()
+                if hasattr(closed, "__await__"):
+                    await closed
         text = "".join(parts)
         input_tokens = _rough_token_count("\n".join(item.get("content", "") for item in messages))
         output_tokens = _rough_token_count(text)
@@ -1529,10 +1568,21 @@ class LiteLLMAdapter:
 
 
 class ModelGateway:
-    def __init__(self, service: ModelFarmService):
+    def __init__(
+        self,
+        service: ModelFarmService,
+        *,
+        classifier_model_paths: Optional[Dict[str, str]] = None,
+    ):
         self.service = service
         self.local_adapter = LocalBuiltinAdapter()
         self.litellm_adapter = LiteLLMAdapter()
+        self.classifier_model_paths = {
+            "query_classifier_distilbert": "data/artifacts/query_classifier_distilbert",
+            "query_classifier_t5": "data/artifacts/query_classifier_t5",
+            **dict(classifier_model_paths or {}),
+        }
+        self._classifier_cache: Dict[tuple[str, str], Any] = {}
 
     async def generate(
         self,
@@ -1592,6 +1642,7 @@ class ModelGateway:
         parameters: Optional[Dict[str, Any]] = None,
         context: Optional[ModelCallContext] = None,
         external_processing_allowed: bool = True,
+        cancellation_token: Optional[CancellationToken] = None,
     ) -> AsyncIterator[ModelStreamEvent]:
         candidates = [deployment_id, *(fallback_deployment_ids or [])]
         last_error: Optional[Exception] = None
@@ -1608,10 +1659,21 @@ class ModelGateway:
             started = time.perf_counter()
             emitted_delta = False
             completed: Dict[str, Any] = {}
+            output_parts: List[str] = []
             try:
-                async for event in self._adapter(resolved).stream(resolved, messages, parameters or {}):
+                if cancellation_token:
+                    cancellation_token.raise_if_cancelled()
+                async for event in self._adapter(resolved).stream(
+                    resolved,
+                    messages,
+                    parameters or {},
+                    cancellation_token,
+                ):
+                    if cancellation_token:
+                        cancellation_token.raise_if_cancelled()
                     if event.type == "delta":
                         emitted_delta = True
+                        output_parts.append(str(event.data.get("text") or ""))
                         yield event
                     elif event.type == "model_completed":
                         completed = dict(event.data)
@@ -1634,6 +1696,23 @@ class ModelGateway:
                 }
                 yield ModelStreamEvent("model_completed", completed)
                 return
+            except AnswerCancelled:
+                latency = (time.perf_counter() - started) * 1000
+                input_tokens = _rough_token_count("\n".join(item.get("content", "") for item in messages))
+                output_tokens = _rough_token_count("".join(output_parts))
+                cost = _estimate_cost(deployment, input_tokens, output_tokens)
+                self._record_cancelled(
+                    deployment,
+                    "generation",
+                    context,
+                    input_tokens,
+                    output_tokens,
+                    latency,
+                    cost,
+                    fallback_index,
+                    resolved=resolved,
+                )
+                raise
             except Exception as exc:
                 latency = (time.perf_counter() - started) * 1000
                 self._record_failed(deployment, "generation", context, latency, exc, fallback_index, resolved=resolved)
@@ -1693,6 +1772,96 @@ class ModelGateway:
             self._record_failed(deployment, "embedding", context, latency, exc, 0)
             raise ModelFarmError(f"Embedding execution failed: {_safe_error(exc)}") from exc
 
+    async def classify(
+        self,
+        query: str,
+        deployment_id: str,
+        *,
+        context: Optional[ModelCallContext] = None,
+        external_processing_allowed: bool = True,
+        require_enabled: bool = True,
+    ) -> ModelClassificationResult:
+        deployment = self.service.resolve(deployment_id, "classifier", require_enabled=require_enabled)
+        self.service.assert_egress_allowed(
+            deployment,
+            external_processing_allowed=external_processing_allowed,
+            content_kind="Query text",
+        )
+        self.service.assert_budget(deployment)
+        started = time.perf_counter()
+        try:
+            resolved = self._resolve_model(deployment, require_connection_enabled=require_enabled)
+            if resolved.connection.provider == "local_builtin":
+                classifier = self._local_classifier(deployment)
+                label = await asyncio.to_thread(classifier.predict, query)
+                input_tokens = _rough_token_count(query)
+                output_tokens = 1
+                cost = 0.0
+                runtime = (
+                    "transformers-text2text-classification"
+                    if deployment.model == "query_classifier_t5"
+                    else "huggingface-sequence-classification"
+                )
+                metadata = {
+                    "runtime": runtime,
+                    "gateway_model": resolved.gateway_model,
+                    "connection_id": resolved.connection.id,
+                    "access_path": resolved.connection.access_path,
+                }
+            else:
+                generated = await self._generate_once(
+                    deployment,
+                    [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Classify the business-workflow query complexity. "
+                                "Return exactly one label: simple, moderate, or complex."
+                            ),
+                        },
+                        {"role": "user", "content": query},
+                    ],
+                    {"temperature": 0, "max_tokens": 12},
+                    require_connection_enabled=require_enabled,
+                )
+                label = _classification_label(generated.text)
+                input_tokens = generated.input_tokens
+                output_tokens = generated.output_tokens
+                cost = generated.estimated_cost_usd
+                metadata = {
+                    **generated.metadata,
+                    "runtime": generated.metadata.get("runtime", "litellm-classification"),
+                    "gateway_model": resolved.gateway_model,
+                    "connection_id": resolved.connection.id,
+                    "access_path": resolved.connection.access_path,
+                }
+            latency = (time.perf_counter() - started) * 1000
+            self._record_completed(
+                deployment,
+                "classifier",
+                context,
+                input_tokens,
+                output_tokens,
+                latency,
+                cost,
+                0,
+                resolved=resolved,
+            )
+            return ModelClassificationResult(
+                label=str(label),
+                deployment_id=deployment.id,
+                provider=deployment.provider,
+                model=deployment.model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                estimated_cost_usd=cost,
+                metadata={**metadata, "latency_ms": round(latency, 3)},
+            )
+        except Exception as exc:
+            latency = (time.perf_counter() - started) * 1000
+            self._record_failed(deployment, "classifier", context, latency, exc, 0)
+            raise ModelFarmError(f"Classifier execution failed: {_safe_error(exc)}") from exc
+
     async def rerank(
         self,
         query: str,
@@ -1721,6 +1890,9 @@ class ModelGateway:
     def generate_sync(self, *args: Any, **kwargs: Any) -> ModelGenerationResult:
         return _run_sync(self.generate(*args, **kwargs))
 
+    def classify_sync(self, *args: Any, **kwargs: Any) -> ModelClassificationResult:
+        return _run_sync(self.classify(*args, **kwargs))
+
     def embed_sync(self, *args: Any, **kwargs: Any) -> ModelEmbeddingResult:
         return _run_sync(self.embed(*args, **kwargs))
 
@@ -1730,6 +1902,16 @@ class ModelGateway:
     async def test_deployment(self, deployment_id: str) -> Dict[str, Any]:
         deployment = self.service.get_deployment(deployment_id)
         try:
+            if "classifier" in deployment.capabilities:
+                result = await self.classify(
+                    "How should an invoice mismatch be escalated and approved?",
+                    deployment.id,
+                    require_enabled=False,
+                )
+                if deployment.connection_id:
+                    self.service.set_connection_health(deployment.connection_id, healthy=bool(result.label))
+                updated = self.service.set_health(deployment.id, healthy=bool(result.label))
+                return {"status": updated.health_status, "label": result.label, "deployment": updated}
             if "generation" in deployment.capabilities or "judge" in deployment.capabilities or "planner" in deployment.capabilities:
                 result = await self._generate_once(
                     deployment,
@@ -1785,7 +1967,12 @@ class ModelGateway:
             missing = self.service.missing_credentials(deployment)
             if missing:
                 raise ModelFarmError(f"Deployment '{deployment.name}' is missing credentials: {', '.join(missing)}.")
-            if "generation" in deployment.capabilities or "judge" in deployment.capabilities or "planner" in deployment.capabilities:
+            if (
+                "generation" in deployment.capabilities
+                or "judge" in deployment.capabilities
+                or "planner" in deployment.capabilities
+                or "classifier" in deployment.capabilities
+            ):
                 result = await self._generate_once(
                     deployment,
                     [{"role": "user", "content": "Reply with the word ready."}],
@@ -1855,6 +2042,26 @@ class ModelGateway:
     ) -> ModelGenerationResult:
         resolved = self._resolve_model(deployment, require_connection_enabled=require_connection_enabled)
         return await self._adapter(resolved).generate(resolved, messages, parameters)
+
+    def _local_classifier(self, deployment: ModelDeployment) -> Any:
+        model_path = str(self.classifier_model_paths.get(deployment.model) or "").strip()
+        if not model_path:
+            raise ModelFarmError(f"No artifact path is configured for classifier deployment '{deployment.name}'.")
+        resolved_path = str(Path(model_path).expanduser().resolve())
+        cache_key = (deployment.model, resolved_path)
+        if cache_key in self._classifier_cache:
+            return self._classifier_cache[cache_key]
+        path = Path(resolved_path)
+        if not path.exists():
+            raise ModelFarmError(
+                f"Classifier artifact for '{deployment.name}' was not found at {path}. "
+                "Train or extract the model artifact before selecting this deployment."
+            )
+        from aragbiz.classifier import HuggingFaceQueryClassifier, T5QueryClassifier
+
+        classifier = T5QueryClassifier(path) if deployment.model == "query_classifier_t5" else HuggingFaceQueryClassifier(path)
+        self._classifier_cache[cache_key] = classifier
+        return classifier
 
     async def _embed_once(
         self,
@@ -1971,6 +2178,37 @@ class ModelGateway:
             )
         )
 
+    def _record_cancelled(
+        self,
+        deployment: ModelDeployment,
+        capability: str,
+        context: Optional[ModelCallContext],
+        input_tokens: int,
+        output_tokens: int,
+        latency_ms: float,
+        cost: float,
+        fallback_index: int,
+        *,
+        resolved: Optional[ResolvedModel] = None,
+    ) -> None:
+        resolved = resolved or self._resolved_for_usage(deployment)
+        self.service.record_usage(
+            _usage_event(
+                deployment,
+                capability,
+                context,
+                "cancelled",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                latency_ms=latency_ms,
+                cost=cost,
+                fallback_index=fallback_index,
+                connection_id=resolved.connection.id if resolved else "",
+                access_path=resolved.connection.access_path if resolved else "",
+                gateway_model=resolved.gateway_model if resolved else deployment.model,
+            )
+        )
+
     def _resolved_for_usage(self, deployment: ModelDeployment) -> Optional[ResolvedModel]:
         try:
             return self._resolve_model(deployment, require_connection_enabled=False)
@@ -1993,7 +2231,7 @@ def model_provider_templates() -> List[Dict[str, Any]]:
             "OpenAI",
             "openai",
             "gpt-4.1-mini",
-            ["generation", "judge", "planner"],
+            ["generation", "judge", "planner", "classifier"],
             {"api_key": "ARAGBIZ_MODEL_OPENAI_API_KEY"},
             {"temperature": 0.2, "max_tokens": 800},
             {"context_window": 64000, "max_output_tokens": 1200, "timeout_seconds": 60},
@@ -2017,7 +2255,7 @@ def model_provider_templates() -> List[Dict[str, Any]]:
             "Azure OpenAI",
             "azure",
             "azure/gpt-4o-mini",
-            ["generation", "judge", "planner"],
+            ["generation", "judge", "planner", "classifier"],
             {"api_key": "ARAGBIZ_MODEL_AZURE_OPENAI_API_KEY"},
             {"temperature": 0.2, "max_tokens": 800},
             {"context_window": 64000, "max_output_tokens": 1200, "timeout_seconds": 60},
@@ -2043,7 +2281,7 @@ def model_provider_templates() -> List[Dict[str, Any]]:
             "OpenRouter",
             "openrouter",
             "google/gemma-4-31b-it:free",
-            ["generation", "judge", "planner"],
+            ["generation", "judge", "planner", "classifier"],
             {"api_key": "ARAGBIZ_MODEL_OPENROUTER_API_KEY"},
             {"temperature": 0.2, "max_tokens": 800},
             {"context_window": 32000, "max_output_tokens": 1200, "timeout_seconds": 90},
@@ -2080,7 +2318,7 @@ def model_provider_templates() -> List[Dict[str, Any]]:
             "Amazon Bedrock",
             "bedrock",
             "bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            ["generation", "judge", "planner"],
+            ["generation", "judge", "planner", "classifier"],
             {},
             {"temperature": 0.2, "max_tokens": 800},
             {"context_window": 200000, "max_output_tokens": 1200, "timeout_seconds": 90},
@@ -2105,7 +2343,7 @@ def model_provider_templates() -> List[Dict[str, Any]]:
             "Gemini",
             "gemini",
             "gemini-2.5-flash",
-            ["generation", "judge", "planner"],
+            ["generation", "judge", "planner", "classifier"],
             {"api_key": "ARAGBIZ_MODEL_GEMINI_API_KEY"},
             {"temperature": 0.2, "max_tokens": 800},
             {"context_window": 1000000, "max_output_tokens": 1200, "timeout_seconds": 60},
@@ -2117,7 +2355,7 @@ def model_provider_templates() -> List[Dict[str, Any]]:
             "Ollama",
             "ollama",
             "llama3.1",
-            ["generation", "embedding", "judge", "planner"],
+            ["generation", "embedding", "judge", "planner", "classifier"],
             {},
             {"temperature": 0.2, "max_tokens": 800},
             {"context_window": 32000, "max_output_tokens": 1200, "timeout_seconds": 120},
@@ -2131,7 +2369,7 @@ def model_provider_templates() -> List[Dict[str, Any]]:
             "vLLM",
             "vllm",
             "meta-llama/Llama-3.1-8B-Instruct",
-            ["generation", "embedding", "rerank", "judge", "planner"],
+            ["generation", "embedding", "rerank", "judge", "planner", "classifier"],
             {},
             {"temperature": 0.2, "max_tokens": 800},
             {"context_window": 32000, "max_output_tokens": 1200, "timeout_seconds": 120},
@@ -2946,6 +3184,26 @@ def _rough_token_count(text: str) -> int:
     return max(1, math.ceil(len(text) / 4)) if text else 0
 
 
+def _classification_label(value: Any) -> str:
+    text = str(value or "").strip()
+    if text.startswith("```") and text.endswith("```"):
+        text = text[3:-3].strip()
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        payload = text
+    if isinstance(payload, dict):
+        payload = payload.get("label")
+    label = str(payload or "").strip().lower().strip("\"'")
+    if label not in {"simple", "moderate", "complex"}:
+        raise ModelFarmError(
+            "Classifier returned an invalid label. Expected exactly one of: simple, moderate, complex."
+        )
+    return label
+
+
 def _tokens(text: str) -> List[str]:
     return [part for part in "".join(char.lower() if char.isalnum() else " " for char in text).split() if part]
 
@@ -2970,9 +3228,14 @@ def _load_local_flan(model_name: str) -> tuple[Any, Any]:
     return _LOCAL_FLAN_CACHE[model_name]
 
 
-async def _stream_local_flan(model_name: str, prompt: str, parameters: Dict[str, Any]) -> AsyncIterator[str]:
+async def _stream_local_flan(
+    model_name: str,
+    prompt: str,
+    parameters: Dict[str, Any],
+    cancellation_token: Optional[CancellationToken] = None,
+) -> AsyncIterator[str]:
     try:
-        from transformers import TextIteratorStreamer  # type: ignore
+        from transformers import StoppingCriteria, StoppingCriteriaList, TextIteratorStreamer  # type: ignore
     except ImportError as exc:
         raise ModelFarmError("Install the ml extra to stream local FLAN-T5.") from exc
     tokenizer, model = await asyncio.to_thread(_load_local_flan, model_name)
@@ -2980,12 +3243,17 @@ async def _stream_local_flan(model_name: str, prompt: str, parameters: Dict[str,
     streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
     errors: List[BaseException] = []
 
+    class CancellationStoppingCriteria(StoppingCriteria):
+        def __call__(self, *args: Any, **kwargs: Any) -> bool:
+            return bool(cancellation_token and cancellation_token.is_cancelled)
+
     def run_generate() -> None:
         try:
             model.generate(
                 **inputs,
                 streamer=streamer,
                 max_new_tokens=int(parameters.get("max_tokens") or parameters.get("max_new_tokens") or 160),
+                stopping_criteria=StoppingCriteriaList([CancellationStoppingCriteria()]),
             )
         except BaseException as exc:  # pragma: no cover - optional dependency failures vary by platform
             errors.append(exc)
@@ -2997,6 +3265,8 @@ async def _stream_local_flan(model_name: str, prompt: str, parameters: Dict[str,
     while thread.is_alive() or not errors:
         yielded = False
         for text in streamer:
+            if cancellation_token:
+                cancellation_token.raise_if_cancelled()
             yielded = True
             yield str(text)
             await asyncio.sleep(0)

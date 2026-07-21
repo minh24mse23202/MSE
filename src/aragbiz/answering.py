@@ -3,8 +3,10 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field
+import json
 from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple
 
+from aragbiz.cancellation import AnswerCancelled, CancellationToken
 from aragbiz.conversation import (
     DEFAULT_HISTORY_MAX_CHARACTERS,
     DEFAULT_HISTORY_MAX_EXCHANGES,
@@ -52,6 +54,26 @@ class AnswerOptions:
     conversation_history: List[Dict[str, str]] = field(default_factory=list)
     conversation_history_max_exchanges: int = DEFAULT_HISTORY_MAX_EXCHANGES
     conversation_history_max_characters: int = DEFAULT_HISTORY_MAX_CHARACTERS
+    cancellation_token: Optional[CancellationToken] = None
+
+
+@dataclass(frozen=True)
+class QueryClassificationExecution:
+    label: ComplexityLabel
+    configured: Dict[str, Any]
+    actual: Dict[str, Any]
+    fallback_used: bool = False
+    warning: str = ""
+
+
+@dataclass(frozen=True)
+class QueryDecompositionResult:
+    queries: List[str]
+    strategy: str
+    configured: Dict[str, Any] = field(default_factory=dict)
+    actual: Dict[str, Any] = field(default_factory=dict)
+    fallback_used: bool = False
+    warning: str = ""
 
 
 @dataclass
@@ -67,6 +89,7 @@ class PreparedAnswer:
     conversation_history_max_exchanges: int
     conversation_history_max_characters: int
     reformulation: QueryReformulationResult
+    classification: QueryClassificationExecution
     complexity_label: ComplexityLabel
     route_level: RouteLevel
     knowledge_base: Optional[KnowledgeBaseRecord]
@@ -76,8 +99,11 @@ class PreparedAnswer:
     retrieval_used: bool
     external_processing_allowed: bool
     decomposed_queries: List[str]
+    decomposition: QueryDecompositionResult
     retrieval_steps: List[Dict[str, Any]]
     aggregation_summary: Dict[str, Any]
+    query_embedding: Dict[str, Any]
+    citations_enabled: bool
     prompt: PromptBuildResult
     trace_steps: List[Dict[str, Any]]
 
@@ -128,15 +154,21 @@ class AdaptiveRAGAnswerService:
         return self._finalize_answer(prepared, generation)
 
     async def answer_stream(self, query: str, options: Optional[AnswerOptions] = None) -> AsyncIterator[AnswerStreamEvent]:
-        prepared = await _to_thread(self._prepare_answer, query, options or AnswerOptions())
+        resolved_options = options or AnswerOptions()
+        _raise_if_cancelled(resolved_options)
+        prepared = await _to_thread(self._prepare_answer, query, resolved_options)
+        _raise_if_cancelled(resolved_options)
         for step in prepared.trace_steps:
+            _raise_if_cancelled(resolved_options)
             yield AnswerStreamEvent("trace", step)
+        _raise_if_cancelled(resolved_options)
         yield AnswerStreamEvent("sources", {"contexts": prepared.contexts})
 
         answer_parts: List[str] = []
         model_completed: Dict[str, Any] = {}
         try:
             async for event in self._stream_generation(prepared):
+                _raise_if_cancelled(resolved_options)
                 if event.type == "delta":
                     answer_parts.append(str(event.data.get("text") or ""))
                 elif event.type == "model_completed":
@@ -156,6 +188,8 @@ class AdaptiveRAGAnswerService:
                     yield AnswerStreamEvent("trace", fallback_step)
                     continue
                 yield event
+        except AnswerCancelled:
+            raise
         except (GeneratorConfigurationError, GeneratorExecutionError, ModelFarmError) as exc:
             raise AnsweringError(str(exc)) from exc
 
@@ -227,7 +261,14 @@ class AdaptiveRAGAnswerService:
             history_max_characters=conversation_history_max_characters,
         )
         standalone_query = reformulation.standalone_query
-        complexity_label = self.router.classifier.predict(standalone_query)
+        classification = self._classify_query(
+            standalone_query,
+            chat_configuration,
+            options,
+            knowledge_base,
+            external_processing_allowed,
+        )
+        complexity_label = classification.label
         route_level = self._resolve_route(options.mode, complexity_label)
         if route_level == "l2_simple_rag" and knowledge_base is None:
             raise AnsweringError("Select a knowledge base before using L2 Simple RAG.")
@@ -287,11 +328,13 @@ class AdaptiveRAGAnswerService:
             ),
             _trace_step(
                 "Query complexity classifier",
-                "completed",
-                f"Predicted {complexity_label} query complexity.",
+                "warning" if classification.warning else "completed",
+                classification.warning or f"Predicted {complexity_label} query complexity.",
                 {
                     "complexity_label": complexity_label,
-                    "classifier": type(self.router.classifier).__name__,
+                    "configured_classifier": classification.configured,
+                    "actual_classifier": classification.actual,
+                    "fallback_used": classification.fallback_used,
                     "classified_query": standalone_query,
                 },
             ),
@@ -307,8 +350,18 @@ class AdaptiveRAGAnswerService:
         retrieval_mode: str = "none"
         retrieval_used = route_level in {"l2_simple_rag", "l3_complex_rag"}
         decomposed_queries: List[str] = []
+        decomposition = QueryDecompositionResult([], "not_applicable")
         retrieval_steps: List[Dict[str, Any]] = []
         aggregation_summary: Dict[str, Any] = {}
+        query_embedding = self.knowledge_service.query_embedding_details(knowledge_base.id) if knowledge_base else {}
+        query_embedding = {
+            **query_embedding,
+            "used": bool(
+                route_level in {"l2_simple_rag", "l3_complex_rag"}
+                and options.retrieval_mode in {"dense", "hybrid"}
+            ),
+            "retrieval_mode": options.retrieval_mode if retrieval_used else "none",
+        }
         if route_level == "l2_simple_rag":
             assert knowledge_base is not None
             contexts = self.retriever.search(
@@ -331,19 +384,41 @@ class AdaptiveRAGAnswerService:
                         "document_filter_ids": selected_document_ids,
                         "document_filter_count": len(selected_document_ids),
                         "context_ids": [context.document.id for context in contexts],
+                        "query_embedding": query_embedding,
                     },
                 )
             )
             retrieval_mode = options.retrieval_mode
         elif route_level == "l3_complex_rag":
             assert knowledge_base is not None
-            decomposed_queries = self.decomposer.decompose(standalone_query)
+            decomposition = self.decomposer.decompose_with_planner(
+                standalone_query,
+                planner_deployment_id=str(
+                    _configuration_value(chat_configuration, "planner_deployment_id", "")
+                ).strip(),
+                model_gateway=self.model_gateway,
+                call_context=ModelCallContext(
+                    purpose="query_decomposition",
+                    request_id=options.request_id,
+                    user_id=options.user_id,
+                    conversation_id=options.conversation_id,
+                    knowledge_base_id=knowledge_base.id,
+                ),
+                external_processing_allowed=external_processing_allowed,
+            )
+            decomposed_queries = decomposition.queries
             trace_steps.append(
                 _trace_step(
                     "Query decomposition",
-                    "completed",
-                    f"Created {len(decomposed_queries)} deterministic retrieval subquery(s).",
-                    {"decomposed_queries": decomposed_queries, "strategy": "deterministic_rules"},
+                    "warning" if decomposition.warning else "completed",
+                    decomposition.warning or f"Created {len(decomposed_queries)} retrieval subquery(s) using {decomposition.strategy}.",
+                    {
+                        "decomposed_queries": decomposed_queries,
+                        "strategy": decomposition.strategy,
+                        "configured_planner": decomposition.configured,
+                        "actual_planner": decomposition.actual,
+                        "fallback_used": decomposition.fallback_used,
+                    },
                 )
             )
             contexts, retrieval_steps, aggregation_summary = self._retrieve_multi_step(
@@ -365,6 +440,7 @@ class AdaptiveRAGAnswerService:
                         "document_filter_ids": selected_document_ids,
                         "document_filter_count": len(selected_document_ids),
                         "retrieval_steps": retrieval_steps,
+                        "query_embedding": query_embedding,
                     },
                 )
             )
@@ -426,6 +502,7 @@ class AdaptiveRAGAnswerService:
                     )
                 )
 
+        citations_enabled = _citations_enabled(chat_configuration)
         prompt = self.prompt_builder.build(
             original_query,
             contexts,
@@ -454,6 +531,7 @@ class AdaptiveRAGAnswerService:
             conversation_history_max_exchanges=conversation_history_max_exchanges,
             conversation_history_max_characters=conversation_history_max_characters,
             reformulation=reformulation,
+            classification=classification,
             complexity_label=complexity_label,
             route_level=route_level,
             knowledge_base=knowledge_base,
@@ -463,11 +541,81 @@ class AdaptiveRAGAnswerService:
             retrieval_used=retrieval_used,
             external_processing_allowed=external_processing_allowed,
             decomposed_queries=decomposed_queries,
+            decomposition=decomposition,
             retrieval_steps=retrieval_steps,
             aggregation_summary=aggregation_summary,
+            query_embedding=query_embedding,
+            citations_enabled=citations_enabled,
             prompt=prompt,
             trace_steps=trace_steps,
         )
+
+    def _classify_query(
+        self,
+        query: str,
+        chat_configuration: Dict[str, Any],
+        options: AnswerOptions,
+        knowledge_base: Optional[KnowledgeBaseRecord],
+        external_processing_allowed: bool,
+    ) -> QueryClassificationExecution:
+        deployment_id = str(_configuration_value(chat_configuration, "classifier_deployment_id", "")).strip()
+        default_descriptor = {
+            "deployment_id": "",
+            "provider": "Local",
+            "model": type(self.router.classifier).__name__,
+            "runtime": "process_default",
+        }
+        if not deployment_id:
+            label = self.router.classifier.predict(query)
+            return QueryClassificationExecution(label, dict(default_descriptor), dict(default_descriptor))
+
+        configured = {"deployment_id": deployment_id}
+        if self.model_farm_service is not None:
+            try:
+                deployment = self.model_farm_service.get_deployment(deployment_id)
+                configured.update(
+                    {
+                        "name": deployment.name,
+                        "provider": deployment.provider,
+                        "model": deployment.model,
+                    }
+                )
+            except KeyError:
+                pass
+        if self.model_gateway is None:
+            label = self.router.classifier.predict(query)
+            warning = (
+                f"Configured classifier {configured.get('name') or deployment_id} could not run because "
+                "Model Gateway is unavailable; the process-default classifier was used."
+            )
+            return QueryClassificationExecution(label, configured, default_descriptor, True, warning)
+        try:
+            result = self.model_gateway.classify_sync(
+                query,
+                deployment_id,
+                context=ModelCallContext(
+                    purpose="query_classification",
+                    request_id=options.request_id,
+                    user_id=options.user_id,
+                    conversation_id=options.conversation_id,
+                    knowledge_base_id=knowledge_base.id if knowledge_base else "",
+                ),
+                external_processing_allowed=external_processing_allowed,
+            )
+            actual = {
+                "deployment_id": result.deployment_id,
+                "provider": result.provider,
+                "model": result.model,
+                **result.metadata,
+            }
+            return QueryClassificationExecution(result.label, configured, actual)
+        except ModelFarmError as exc:
+            label = self.router.classifier.predict(query)
+            warning = (
+                f"Configured classifier {configured.get('name') or deployment_id} failed; "
+                f"the process-default classifier predicted {label}. Error: {exc}"
+            )
+            return QueryClassificationExecution(label, configured, default_descriptor, True, warning)
 
     def _generation_request(self, prepared: PreparedAnswer) -> GenerationRequest:
         return GenerationRequest(
@@ -511,6 +659,7 @@ class AdaptiveRAGAnswerService:
                     parameters=dict(prepared.chat_configuration.get("generation_parameters") or {}),
                     context=self._call_context(prepared),
                     external_processing_allowed=prepared.external_processing_allowed,
+                    cancellation_token=prepared.options.cancellation_token,
                 ):
                     yield AnswerStreamEvent(event.type, event.data)
                 return
@@ -518,6 +667,7 @@ class AdaptiveRAGAnswerService:
                 raise GeneratorExecutionError(str(exc)) from exc
         generation = await _to_thread(self._generate_answer, prepared)
         for chunk in _text_chunks(generation.answer, 32):
+            _raise_if_cancelled(prepared.options)
             yield AnswerStreamEvent("delta", {"text": chunk})
         yield AnswerStreamEvent(
             "model_completed",
@@ -608,7 +758,11 @@ class AdaptiveRAGAnswerService:
             )
         )
 
-        citation_validation = _validate_citations(generation.answer, prepared.contexts)
+        citation_validation = _validate_citations(
+            generation.answer,
+            prepared.contexts,
+            enabled=prepared.citations_enabled,
+        )
         trace_steps.append(
             _trace_step(
                 "Citation validation",
@@ -635,13 +789,20 @@ class AdaptiveRAGAnswerService:
             "route_level": prepared.route_level,
             "route_label": _route_label(prepared.route_level),
             "complexity_label": prepared.complexity_label,
+            "configured_classifier": prepared.classification.configured,
+            "actual_classifier": prepared.classification.actual,
+            "classifier_fallback_used": prepared.classification.fallback_used,
             "retrieval_used": prepared.retrieval_used,
             "retrieval_mode": prepared.retrieval_mode,
+            "query_embedding": prepared.query_embedding,
             "top_k": prepared.top_k,
             "document_filter_ids": prepared.document_ids,
             "document_filter_count": len(prepared.document_ids),
             "multi_step": prepared.route_level == "l3_complex_rag",
             "decomposed_queries": prepared.decomposed_queries,
+            "configured_planner": prepared.decomposition.configured,
+            "actual_planner": prepared.decomposition.actual,
+            "planner_fallback_used": prepared.decomposition.fallback_used,
             "retrieval_steps": prepared.retrieval_steps,
             "aggregation_summary": prepared.aggregation_summary,
             "latency_ms": elapsed_ms,
@@ -658,6 +819,8 @@ class AdaptiveRAGAnswerService:
             "trace_steps": trace_steps,
             "request_id": prepared.options.request_id,
             "citation_validation": citation_validation,
+            "citation_sources": _citation_source_map(prepared.contexts),
+            "citations_enabled": prepared.citations_enabled,
             "external_processing_allowed": prepared.external_processing_allowed,
         }
         if prepared.knowledge_base is not None:
@@ -866,6 +1029,84 @@ class QueryDecomposer:
         unique.append(original)
         return unique[:max_subqueries]
 
+    def decompose_with_planner(
+        self,
+        query: str,
+        *,
+        planner_deployment_id: str = "",
+        model_gateway: Optional[ModelGateway] = None,
+        call_context: Optional[ModelCallContext] = None,
+        external_processing_allowed: bool = True,
+        max_subqueries: int = 4,
+    ) -> QueryDecompositionResult:
+        deterministic = self.decompose(query, max_subqueries=max_subqueries)
+        if not planner_deployment_id:
+            return QueryDecompositionResult(
+                deterministic,
+                "deterministic_rules",
+                configured={"deployment_id": ""},
+                actual={"runtime": "deterministic_rules"},
+            )
+        configured: Dict[str, Any] = {"deployment_id": planner_deployment_id}
+        if model_gateway is not None:
+            try:
+                gateway_service = getattr(model_gateway, "service", None)
+                if gateway_service is not None:
+                    deployment = gateway_service.get_deployment(planner_deployment_id)
+                    configured.update(
+                        {
+                            "name": deployment.name,
+                            "provider": deployment.provider,
+                            "model": deployment.model,
+                        }
+                    )
+            except (KeyError, ModelFarmError):
+                pass
+        if model_gateway is None:
+            return QueryDecompositionResult(
+                deterministic,
+                "deterministic_rules",
+                configured=configured,
+                actual={"runtime": "deterministic_rules"},
+                fallback_used=True,
+                warning="The configured planner could not run because Model Gateway is unavailable; deterministic decomposition was used.",
+            )
+        try:
+            generated = model_gateway.generate_sync(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Decompose the business-workflow question into 2 to 4 independently searchable subqueries. "
+                            "Return only a JSON array of strings. Do not return markdown or an object."
+                        ),
+                    },
+                    {"role": "user", "content": query},
+                ],
+                planner_deployment_id,
+                parameters={"temperature": 0, "max_tokens": 240},
+                context=call_context,
+                external_processing_allowed=external_processing_allowed,
+                capability="planner",
+            )
+            planned = _planned_subqueries(generated.text, query, max_subqueries)
+            actual = {
+                "deployment_id": generated.deployment_id,
+                "provider": generated.provider,
+                "model": generated.model,
+                **generated.metadata,
+            }
+            return QueryDecompositionResult(planned, "model_planner", configured=configured, actual=actual)
+        except (ModelFarmError, ValueError) as exc:
+            return QueryDecompositionResult(
+                deterministic,
+                "deterministic_rules",
+                configured=configured,
+                actual={"runtime": "deterministic_rules"},
+                fallback_used=True,
+                warning=f"Configured planner failed validation or execution; deterministic decomposition was used. Error: {exc}",
+            )
+
     def _fragments(self, query: str) -> List[str]:
         fragments: List[str] = []
         for section in self._separator_pattern.split(query):
@@ -1054,6 +1295,52 @@ def _conversation_awareness_enabled(chat_configuration: Dict[str, Any]) -> bool:
     return bool(value)
 
 
+def _configuration_value(chat_configuration: Dict[str, Any], key: str, default: Any = None) -> Any:
+    value = chat_configuration.get(key)
+    metadata = chat_configuration.get("metadata")
+    if value is None and isinstance(metadata, dict):
+        value = metadata.get(key)
+    return default if value is None else value
+
+
+def _citations_enabled(chat_configuration: Dict[str, Any]) -> bool:
+    value = _configuration_value(chat_configuration, "citations_enabled", True)
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(value)
+
+
+def _planned_subqueries(value: str, original_query: str, max_subqueries: int) -> List[str]:
+    text = str(value or "").strip()
+    if text.startswith("```") and text.endswith("```"):
+        text = text[3:-3].strip()
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Planner output was not valid JSON.") from exc
+    if not isinstance(payload, list):
+        raise ValueError("Planner output must be a JSON array of strings.")
+    original = " ".join(original_query.split())
+    unique: List[str] = []
+    seen: set[str] = set()
+    for item in payload:
+        query = " ".join(str(item or "").split()).strip()
+        normalized = query.casefold()
+        if not query or normalized in seen or normalized == original.casefold():
+            continue
+        unique.append(query)
+        seen.add(normalized)
+    if not unique:
+        raise ValueError("Planner output did not contain a usable retrieval subquery.")
+    selected = unique[: max(max_subqueries - 1, 1)]
+    selected.append(original)
+    if len(selected) < 2 or len(selected) > max_subqueries:
+        raise ValueError(f"Planner output must resolve to between 2 and {max_subqueries} subqueries.")
+    return selected
+
+
 def _external_processing_allowed(knowledge_base: Optional[KnowledgeBaseRecord]) -> bool:
     if knowledge_base is None:
         return True
@@ -1077,10 +1364,22 @@ def _with_source_labels(contexts: List[RetrievedContext]) -> List[RetrievedConte
     return labeled
 
 
-def _validate_citations(answer: str, contexts: List[RetrievedContext]) -> Dict[str, Any]:
+def _validate_citations(
+    answer: str,
+    contexts: List[RetrievedContext],
+    enabled: bool = True,
+) -> Dict[str, Any]:
     valid_labels = {str(context.document.metadata.get("source_label") or f"S{context.rank}") for context in contexts}
     cited = set(re.findall(r"\[(S\d+)\]", answer or ""))
     invalid = sorted(cited - valid_labels)
+    if not enabled:
+        return {
+            "status": "disabled",
+            "detail": "Citation validation is disabled for this RAG configuration.",
+            "cited": sorted(cited),
+            "invalid": [],
+            "available": sorted(valid_labels),
+        }
     if not contexts:
         return {"status": "not_applicable", "detail": "No retrieval context required citations.", "cited": sorted(cited), "invalid": invalid}
     if invalid:
@@ -1090,10 +1389,31 @@ def _validate_citations(answer: str, contexts: List[RetrievedContext]) -> Dict[s
     return {"status": "completed", "detail": "All answer citations match retrieved sources.", "cited": sorted(cited), "invalid": [], "available": sorted(valid_labels)}
 
 
+def _citation_source_map(contexts: List[RetrievedContext]) -> Dict[str, Dict[str, Any]]:
+    sources: Dict[str, Dict[str, Any]] = {}
+    for context in contexts:
+        metadata = context.document.metadata
+        label = str(metadata.get("source_label") or f"S{context.rank}")
+        sources[label] = {
+            "context_id": context.document.id,
+            "chunk_id": metadata.get("chunk_id") or context.document.id,
+            "document_id": metadata.get("document_id", ""),
+            "title": metadata.get("title", ""),
+            "chunk_index": metadata.get("chunk_index"),
+            "rank": context.rank,
+        }
+    return sources
+
+
 async def _to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
     import asyncio
 
     return await asyncio.to_thread(func, *args, **kwargs)
+
+
+def _raise_if_cancelled(options: AnswerOptions) -> None:
+    if options.cancellation_token:
+        options.cancellation_token.raise_if_cancelled()
 
 
 def _text_chunks(text: str, size: int) -> List[str]:

@@ -13,8 +13,15 @@ from pydantic import BaseModel, Field
 
 from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions, AnsweringError
 from aragbiz.auth import AuthenticationError, UserRecord
+from aragbiz.cancellation import AnswerCancelled, CancellationCoordinator
 from aragbiz.config import load_config
-from aragbiz.chat import ChatConfigurationRecord, ChatConversationRecord, ChatMessageRecord, ChatSection
+from aragbiz.chat import (
+    ChatConfigurationRecord,
+    ChatConversationRecord,
+    ChatMessageRecord,
+    ChatMessageVersionRecord,
+    ChatSection,
+)
 from aragbiz.conversation import build_conversation_history
 from aragbiz.evaluation import EvaluationCaseRecord, EvaluationRunConfig, EvaluationRunRecord
 from aragbiz.factory import (
@@ -63,6 +70,7 @@ evaluation_service = build_evaluation_service(
     model_farm_service=model_farm_service,
     model_gateway=model_gateway,
 )
+answer_cancellations = CancellationCoordinator()
 app = FastAPI(title="Adaptive RAG Business Workflow QA", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -121,6 +129,17 @@ class ChatConfigurationLimitsResponse(BaseModel):
 class AnswerRequest(BaseModel):
     question: str = Field(..., min_length=1)
     conversation_id: Optional[str] = None
+    knowledge_base_id: Optional[str] = None
+    document_ids: List[str] = Field(default_factory=list)
+    chat_configuration_id: Optional[str] = None
+    chat_configuration: Optional[ChatConfigurationRequest] = None
+    mode: Literal["adaptive", "direct", "simple_rag", "complex_rag"] = "adaptive"
+    retrieval_mode: RetrievalMode = "hybrid"
+    top_k: int = Field(4, ge=1, le=50)
+    request_id: str = ""
+
+
+class RegenerateAnswerRequest(BaseModel):
     knowledge_base_id: Optional[str] = None
     document_ids: List[str] = Field(default_factory=list)
     chat_configuration_id: Optional[str] = None
@@ -212,6 +231,22 @@ class ChatMessageResponse(BaseModel):
     id: str
     conversation_id: str
     role: str
+    content: str
+    contexts: List[Dict[str, Any]]
+    metadata: Dict[str, Any]
+    status: str
+    request_id: str
+    version_count: int = 0
+    latest_version_number: int = 0
+    latest_version_status: str = ""
+    created_at: str
+    updated_at: str
+
+
+class ChatMessageVersionResponse(BaseModel):
+    id: str
+    message_id: str
+    version_number: int
     content: str
     contexts: List[Dict[str, Any]]
     metadata: Dict[str, Any]
@@ -908,13 +943,25 @@ def answer(request: AnswerRequest, authorization: str = Header(default="")) -> A
         context.model_dump() if hasattr(context, "model_dump") else context.dict()
         for context in contexts
     ]
-    chat_service.append_answer_exchange(
+    assistant_message = chat_service.append_answer_exchange(
         conversation.id,
         question=result.question,
         answer=result.answer,
         contexts=context_payloads,
         metadata=result.metadata,
+        request_id=str(result.metadata.get("request_id") or ""),
     )
+    version = chat_service.list_message_versions(assistant_message.id)[-1]
+    result.metadata.update(
+        {
+            "question": result.question,
+            "assistant_message_id": assistant_message.id,
+            "message_version_id": version.id,
+            "message_version_number": version.version_number,
+        }
+    )
+    chat_service.update_message(assistant_message.id, metadata=result.metadata)
+    chat_service.update_message_version(version.id, metadata=result.metadata)
     return AnswerResponse(
         conversation_id=conversation.id,
         question=result.question,
@@ -924,11 +971,38 @@ def answer(request: AnswerRequest, authorization: str = Header(default="")) -> A
     )
 
 
+@app.post("/answer/requests/{request_id}/cancel", status_code=202)
+async def cancel_answer_request(
+    request_id: str,
+    authorization: str = Header(default=""),
+) -> Dict[str, str]:
+    _require_user(authorization)
+    try:
+        status = answer_cancellations.request_cancel(request_id)
+    except KeyError as exc:
+        message = chat_service.find_message_by_request_id(request_id)
+        version = chat_service.find_message_version_by_request_id(request_id)
+        persisted_status = version.status if version else (message.status if message else "")
+        if persisted_status in {"completed", "failed", "cancelled"}:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Answer operation {request_id!r} is already {persisted_status}.",
+            ) from exc
+        raise HTTPException(status_code=404, detail=f"Active answer request not found: {request_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"request_id": request_id, "status": status}
+
+
 @app.post("/answer/stream")
 async def answer_stream(request: AnswerRequest, authorization: str = Header(default="")) -> StreamingResponse:
     user = _require_user(authorization)
     request_id = request.request_id or f"request-{uuid.uuid4().hex}"
     request.request_id = request_id
+    try:
+        cancellation_token = answer_cancellations.register(request_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     async def events():
         partial_answer = ""
@@ -936,6 +1010,8 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
         trace_steps: List[Dict[str, Any]] = []
         assistant_metadata: Dict[str, Any] = {"question": request.question, "request_id": request_id, "trace_steps": trace_steps}
         assistant_message = None
+        assistant_version = None
+        terminal_status = "failed"
         yield _sse(
             "started",
             {
@@ -947,6 +1023,7 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
             },
         )
         try:
+            cancellation_token.raise_if_cancelled()
             conversation_history: List[Dict[str, str]] = []
             if request.conversation_id:
                 await asyncio.to_thread(chat_service.get_conversation, request.conversation_id)
@@ -997,6 +1074,17 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                 status="pending",
                 request_id=request_id,
             )
+            assistant_version = (
+                await asyncio.to_thread(chat_service.list_message_versions, assistant_message.id)
+            )[-1]
+            cancellation_token.raise_if_cancelled()
+            assistant_metadata.update(
+                {
+                    "assistant_message_id": assistant_message.id,
+                    "message_version_id": assistant_version.id,
+                    "message_version_number": assistant_version.version_number,
+                }
+            )
             yield _sse(
                 "started",
                 {
@@ -1004,6 +1092,8 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                     "conversation_id": conversation.id,
                     "user_message_id": user_message.id,
                     "assistant_message_id": assistant_message.id,
+                    "message_version_id": assistant_version.id,
+                    "message_version_number": assistant_version.version_number,
                     "status": "persisted",
                 },
             )
@@ -1017,6 +1107,12 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                 model_gateway=model_gateway,
             )
             await asyncio.to_thread(chat_service.update_message, assistant_message.id, status="streaming", metadata=assistant_metadata)
+            await asyncio.to_thread(
+                chat_service.update_message_version,
+                assistant_version.id,
+                status="streaming",
+                metadata=assistant_metadata,
+            )
             async for event in service.answer_stream(
                 request.question,
                 AnswerOptions(
@@ -1032,6 +1128,7 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                     conversation_history=conversation_history,
                     conversation_history_max_exchanges=history_max_exchanges,
                     conversation_history_max_characters=history_max_characters,
+                    cancellation_token=cancellation_token,
                 ),
             ):
                 if event.type == "trace":
@@ -1040,6 +1137,14 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                     await asyncio.to_thread(
                         chat_service.update_message,
                         assistant_message.id,
+                        content=partial_answer,
+                        contexts=context_payloads,
+                        metadata=assistant_metadata,
+                        status="streaming",
+                    )
+                    await asyncio.to_thread(
+                        chat_service.update_message_version,
+                        assistant_version.id,
                         content=partial_answer,
                         contexts=context_payloads,
                         metadata=assistant_metadata,
@@ -1057,6 +1162,14 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                         metadata=assistant_metadata,
                         status="streaming",
                     )
+                    await asyncio.to_thread(
+                        chat_service.update_message_version,
+                        assistant_version.id,
+                        content=partial_answer,
+                        contexts=context_payloads,
+                        metadata=assistant_metadata,
+                        status="streaming",
+                    )
                     yield _sse("sources", {"contexts": context_payloads})
                 elif event.type == "delta":
                     text = str(event.data.get("text") or "")
@@ -1069,11 +1182,25 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                         metadata=assistant_metadata,
                         status="streaming",
                     )
+                    await asyncio.to_thread(
+                        chat_service.update_message_version,
+                        assistant_version.id,
+                        content=partial_answer,
+                        contexts=context_payloads,
+                        metadata=assistant_metadata,
+                        status="streaming",
+                    )
                     yield _sse("delta", {"text": text})
                 elif event.type == "model_completed":
                     yield _sse("model_completed", event.data)
                 elif event.type == "completed":
                     result = event.data["result"]
+                    result.metadata.update(
+                        {
+                            "message_version_id": assistant_version.id,
+                            "message_version_number": assistant_version.version_number,
+                        }
+                    )
                     response = _answer_response_from_result(
                         conversation.id,
                         result,
@@ -1090,8 +1217,50 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                         metadata=response.metadata,
                         status="completed",
                     )
+                    await asyncio.to_thread(
+                        chat_service.update_message_version,
+                        assistant_version.id,
+                        content=response.answer,
+                        contexts=[_model_dump(context) for context in response.contexts],
+                        metadata=response.metadata,
+                        status="completed",
+                    )
+                    terminal_status = "completed"
                     yield _sse("completed", _model_dump(response))
+        except AnswerCancelled as exc:
+            terminal_status = "cancelled"
+            cancelled_metadata = {**assistant_metadata, "error": str(exc), "cancelled": True}
+            if assistant_message is not None:
+                await asyncio.to_thread(
+                    chat_service.update_message,
+                    assistant_message.id,
+                    content=partial_answer,
+                    contexts=context_payloads,
+                    metadata=cancelled_metadata,
+                    status="cancelled",
+                )
+            if assistant_version is not None:
+                await asyncio.to_thread(
+                    chat_service.update_message_version,
+                    assistant_version.id,
+                    content=partial_answer,
+                    contexts=context_payloads,
+                    metadata=cancelled_metadata,
+                    status="cancelled",
+                )
+            yield _sse(
+                "cancelled",
+                _cancelled_stream_payload(
+                    request_id,
+                    partial_answer,
+                    conversation_id=assistant_message.conversation_id if assistant_message else request.conversation_id or "",
+                    assistant_message=assistant_message,
+                    message_version=assistant_version,
+                ),
+            )
         except asyncio.CancelledError:
+            terminal_status = "cancelled"
+            cancellation_token.cancel("Streaming request was cancelled by the client.")
             if assistant_message is not None:
                 await asyncio.to_thread(
                     chat_service.update_message,
@@ -1101,8 +1270,18 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                     metadata={**assistant_metadata, "error": "Streaming request was cancelled by the client."},
                     status="cancelled",
                 )
+            if assistant_version is not None:
+                await asyncio.to_thread(
+                    chat_service.update_message_version,
+                    assistant_version.id,
+                    content=partial_answer,
+                    contexts=context_payloads,
+                    metadata={**assistant_metadata, "error": "Streaming request was cancelled by the client."},
+                    status="cancelled",
+                )
             raise
         except HTTPException as exc:
+            terminal_status = "failed"
             if assistant_message is not None:
                 await asyncio.to_thread(
                     chat_service.update_message,
@@ -1112,12 +1291,31 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                     metadata={**assistant_metadata, "error": str(exc.detail)},
                     status="failed",
                 )
+            if assistant_version is not None:
+                await asyncio.to_thread(
+                    chat_service.update_message_version,
+                    assistant_version.id,
+                    content=partial_answer,
+                    contexts=context_payloads,
+                    metadata={**assistant_metadata, "error": str(exc.detail)},
+                    status="failed",
+                )
             yield _sse("error", {"status": exc.status_code, "detail": exc.detail, "request_id": request_id})
         except (AnsweringError, KnowledgeProcessingError, ModelFarmError, ValueError) as exc:
+            terminal_status = "failed"
             if assistant_message is not None:
                 await asyncio.to_thread(
                     chat_service.update_message,
                     assistant_message.id,
+                    content=partial_answer,
+                    contexts=context_payloads,
+                    metadata={**assistant_metadata, "error": str(exc)},
+                    status="failed",
+                )
+            if assistant_version is not None:
+                await asyncio.to_thread(
+                    chat_service.update_message_version,
+                    assistant_version.id,
                     content=partial_answer,
                     contexts=context_payloads,
                     metadata={**assistant_metadata, "error": str(exc)},
@@ -1125,6 +1323,7 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                 )
             yield _sse("error", {"status": 400, "detail": str(exc), "request_id": request_id})
         except Exception as exc:
+            terminal_status = "failed"
             if assistant_message is not None:
                 await asyncio.to_thread(
                     chat_service.update_message,
@@ -1134,9 +1333,336 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                     metadata={**assistant_metadata, "error": str(exc)},
                     status="failed",
                 )
+            if assistant_version is not None:
+                await asyncio.to_thread(
+                    chat_service.update_message_version,
+                    assistant_version.id,
+                    content=partial_answer,
+                    contexts=context_payloads,
+                    metadata={**assistant_metadata, "error": str(exc)},
+                    status="failed",
+                )
             yield _sse("error", {"status": 500, "detail": str(exc), "request_id": request_id})
+        finally:
+            answer_cancellations.finish(request_id, terminal_status)
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+async def _stream_existing_answer(
+    message_id: str,
+    request: RegenerateAnswerRequest,
+    user: UserRecord,
+    *,
+    operation: Literal["regenerate", "retry"],
+) -> StreamingResponse:
+    request_id = request.request_id or f"request-{uuid.uuid4().hex}"
+    try:
+        cancellation_token = answer_cancellations.register(request_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    try:
+        target = chat_service.get_message(message_id)
+        if target.role != "assistant":
+            raise HTTPException(status_code=400, detail="Only assistant answers can be regenerated.")
+        messages = chat_service.list_messages(target.conversation_id)
+        latest_assistant = next((message for message in reversed(messages) if message.role == "assistant"), None)
+        versions = chat_service.list_message_versions(target.id)
+        latest_version = versions[-1] if versions else None
+        is_latest = latest_assistant is not None and latest_assistant.id == target.id
+        retryable = target.status in {"failed", "cancelled"} or (
+            latest_version is not None and latest_version.status in {"failed", "cancelled"}
+        )
+        if operation == "regenerate" and (not is_latest or target.status != "completed"):
+            raise HTTPException(
+                status_code=409,
+                detail="Only the latest completed assistant answer can be regenerated.",
+            )
+        if operation == "retry" and (not is_latest or not retryable):
+            raise HTTPException(
+                status_code=409,
+                detail="Only the latest failed or cancelled assistant answer can be retried.",
+            )
+        target_index = next(index for index, message in enumerate(messages) if message.id == target.id)
+        user_index = next(
+            (
+                index
+                for index in range(target_index - 1, -1, -1)
+                if messages[index].role == "user" and messages[index].status == "completed"
+            ),
+            -1,
+        )
+        if user_index < 0:
+            raise HTTPException(status_code=409, detail="The answer has no completed user question to regenerate.")
+        question = str(target.metadata.get("question") or messages[user_index].content).strip()
+        conversation = chat_service.get_conversation(target.conversation_id)
+        chat_configuration_id, chat_configuration = _resolve_answer_chat_configuration(request)  # type: ignore[arg-type]
+        history_max_exchanges, history_max_characters = _conversation_history_limits(chat_configuration)
+        conversation_history = build_conversation_history(
+            messages[:user_index],
+            max_exchanges=history_max_exchanges,
+            max_characters=history_max_characters,
+        )
+        version_metadata = {
+            "question": question,
+            "request_id": request_id,
+            "assistant_message_id": target.id,
+            "chat_configuration_id": chat_configuration_id,
+            "chat_configuration": chat_configuration,
+            "regenerated": operation == "regenerate",
+            "retried": operation == "retry",
+            "trace_steps": [],
+        }
+        version = chat_service.create_message_version(
+            target.id,
+            content="",
+            contexts=[],
+            metadata=version_metadata,
+            status="pending",
+            request_id=request_id,
+        )
+    except HTTPException:
+        answer_cancellations.finish(request_id, "failed")
+        raise
+    except KeyError as exc:
+        answer_cancellations.finish(request_id, "failed")
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        answer_cancellations.finish(request_id, "failed")
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ModelFarmError as exc:
+        answer_cancellations.finish(request_id, "failed")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    async def events():
+        partial_answer = ""
+        context_payloads: List[Dict[str, Any]] = []
+        trace_steps: List[Dict[str, Any]] = []
+        metadata = {
+            **version_metadata,
+            "message_version_id": version.id,
+            "message_version_number": version.version_number,
+            "trace_steps": trace_steps,
+        }
+        terminal_status = "failed"
+        yield _sse(
+            "started",
+            {
+                "request_id": request_id,
+                "conversation_id": conversation.id,
+                "user_message_id": messages[user_index].id,
+                "assistant_message_id": target.id,
+                "message_version_id": version.id,
+                "message_version_number": version.version_number,
+                "status": "persisted",
+            },
+        )
+        try:
+            cancellation_token.raise_if_cancelled()
+            await asyncio.to_thread(
+                chat_service.update_message_version,
+                version.id,
+                status="streaming",
+                metadata=metadata,
+            )
+            service = AdaptiveRAGAnswerService(
+                router=pipeline.router,
+                generator=pipeline.generator,
+                knowledge_service=knowledge_service,
+                bm25_weight=config.bm25_weight,
+                dense_weight=config.dense_weight,
+                model_farm_service=model_farm_service,
+                model_gateway=model_gateway,
+            )
+            async for event in service.answer_stream(
+                question,
+                AnswerOptions(
+                    mode=request.mode,
+                    knowledge_base_id=request.knowledge_base_id,
+                    document_ids=request.document_ids,
+                    retrieval_mode=request.retrieval_mode,
+                    top_k=request.top_k,
+                    chat_configuration=chat_configuration,
+                    request_id=request_id,
+                    user_id=user.id,
+                    conversation_id=conversation.id,
+                    conversation_history=conversation_history,
+                    conversation_history_max_exchanges=history_max_exchanges,
+                    conversation_history_max_characters=history_max_characters,
+                    cancellation_token=cancellation_token,
+                ),
+            ):
+                if event.type == "trace":
+                    trace_steps.append(event.data)
+                    metadata = {**metadata, "trace_steps": trace_steps}
+                    await asyncio.to_thread(
+                        chat_service.update_message_version,
+                        version.id,
+                        content=partial_answer,
+                        contexts=context_payloads,
+                        metadata=metadata,
+                        status="streaming",
+                    )
+                    yield _sse("trace", event.data)
+                elif event.type == "sources":
+                    contexts = [_context_response(context) for context in event.data.get("contexts", [])]
+                    context_payloads = [_model_dump(context) for context in contexts]
+                    await asyncio.to_thread(
+                        chat_service.update_message_version,
+                        version.id,
+                        content=partial_answer,
+                        contexts=context_payloads,
+                        metadata=metadata,
+                        status="streaming",
+                    )
+                    yield _sse("sources", {"contexts": context_payloads})
+                elif event.type == "delta":
+                    text = str(event.data.get("text") or "")
+                    partial_answer += text
+                    await asyncio.to_thread(
+                        chat_service.update_message_version,
+                        version.id,
+                        content=partial_answer,
+                        contexts=context_payloads,
+                        metadata=metadata,
+                        status="streaming",
+                    )
+                    yield _sse("delta", {"text": text})
+                elif event.type == "model_completed":
+                    yield _sse("model_completed", event.data)
+                elif event.type == "completed":
+                    result = event.data["result"]
+                    result.metadata.update(
+                        {
+                            "chat_configuration_id": chat_configuration_id,
+                            "chat_configuration": chat_configuration,
+                            "user_message_id": messages[user_index].id,
+                            "assistant_message_id": target.id,
+                            "message_version_id": version.id,
+                            "message_version_number": version.version_number,
+                            "regenerated": operation == "regenerate",
+                            "retried": operation == "retry",
+                        }
+                    )
+                    response = AnswerResponse(
+                        conversation_id=conversation.id,
+                        question=result.question,
+                        answer=result.answer,
+                        contexts=[_context_response(context) for context in result.contexts],
+                        metadata=result.metadata,
+                    )
+                    await asyncio.to_thread(
+                        chat_service.update_message_version,
+                        version.id,
+                        content=response.answer,
+                        contexts=[_model_dump(context) for context in response.contexts],
+                        metadata=response.metadata,
+                        status="completed",
+                    )
+                    await asyncio.to_thread(chat_service.activate_message_version, version.id)
+                    await asyncio.to_thread(
+                        chat_service.update_conversation,
+                        conversation.id,
+                        knowledge_base_id=request.knowledge_base_id,
+                        chat_configuration_id=chat_configuration_id,
+                        route_mode=request.mode,
+                        retrieval_mode=request.retrieval_mode,
+                        top_k=request.top_k,
+                        metadata={"chat_configuration": chat_configuration},
+                    )
+                    terminal_status = "completed"
+                    yield _sse("completed", _model_dump(response))
+        except AnswerCancelled as exc:
+            terminal_status = "cancelled"
+            cancelled_metadata = {**metadata, "error": str(exc), "cancelled": True}
+            await asyncio.to_thread(
+                chat_service.update_message_version,
+                version.id,
+                content=partial_answer,
+                contexts=context_payloads,
+                metadata=cancelled_metadata,
+                status="cancelled",
+            )
+            yield _sse(
+                "cancelled",
+                _cancelled_stream_payload(
+                    request_id,
+                    partial_answer,
+                    conversation_id=conversation.id,
+                    assistant_message=target,
+                    message_version=version,
+                ),
+            )
+        except asyncio.CancelledError:
+            terminal_status = "cancelled"
+            cancellation_token.cancel(f"{operation.title()} was cancelled by the client.")
+            await asyncio.to_thread(
+                chat_service.update_message_version,
+                version.id,
+                content=partial_answer,
+                contexts=context_payloads,
+                metadata={**metadata, "error": "Regeneration was cancelled by the client."},
+                status="cancelled",
+            )
+            raise
+        except (AnsweringError, KnowledgeProcessingError, ModelFarmError, ValueError) as exc:
+            terminal_status = "failed"
+            await asyncio.to_thread(
+                chat_service.update_message_version,
+                version.id,
+                content=partial_answer,
+                contexts=context_payloads,
+                metadata={**metadata, "error": str(exc)},
+                status="failed",
+            )
+            yield _sse("error", {"status": 400, "detail": str(exc), "request_id": request_id})
+        except Exception as exc:
+            terminal_status = "failed"
+            await asyncio.to_thread(
+                chat_service.update_message_version,
+                version.id,
+                content=partial_answer,
+                contexts=context_payloads,
+                metadata={**metadata, "error": str(exc)},
+                status="failed",
+            )
+            yield _sse("error", {"status": 500, "detail": str(exc), "request_id": request_id})
+        finally:
+            answer_cancellations.finish(request_id, terminal_status)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/chat/messages/{message_id}/regenerate/stream")
+async def regenerate_answer_stream(
+    message_id: str,
+    request: RegenerateAnswerRequest,
+    authorization: str = Header(default=""),
+) -> StreamingResponse:
+    return await _stream_existing_answer(
+        message_id,
+        request,
+        _require_user(authorization),
+        operation="regenerate",
+    )
+
+
+@app.post("/chat/messages/{message_id}/retry/stream")
+async def retry_answer_stream(
+    message_id: str,
+    request: RegenerateAnswerRequest,
+    authorization: str = Header(default=""),
+) -> StreamingResponse:
+    return await _stream_existing_answer(
+        message_id,
+        request,
+        _require_user(authorization),
+        operation="retry",
+    )
 
 
 @app.post("/feedback")
@@ -1254,6 +1780,21 @@ def delete_chat_conversation(conversation_id: str) -> Dict[str, str]:
 def list_chat_messages(conversation_id: str) -> List[ChatMessageResponse]:
     try:
         return [_chat_message_response(record) for record in chat_service.list_messages(conversation_id)]
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/chat/messages/{message_id}/versions", response_model=List[ChatMessageVersionResponse])
+def list_chat_message_versions(
+    message_id: str,
+    authorization: str = Header(default=""),
+) -> List[ChatMessageVersionResponse]:
+    _require_user(authorization)
+    try:
+        return [
+            _chat_message_version_response(record)
+            for record in chat_service.list_message_versions(message_id)
+        ]
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -1577,10 +2118,15 @@ def _resolve_chat_configuration(
 def _chat_configuration_payload(configuration: ChatConfigurationRequest) -> Dict[str, Any]:
     payload = configuration.model_dump() if hasattr(configuration, "model_dump") else configuration.dict()
     payload["humor_level"] = max(0, min(int(payload.get("humor_level", 0)), 5))
+    metadata = dict(payload.get("metadata") or {})
+    metadata.pop("query_embedding_deployment_id", None)
+    payload["metadata"] = metadata
     return payload
 
 
 def _chat_configuration_snapshot(record: ChatConfigurationRecord) -> Dict[str, Any]:
+    metadata = dict(record.metadata)
+    metadata.pop("query_embedding_deployment_id", None)
     return {
         "id": record.id,
         "name": record.name,
@@ -1597,8 +2143,8 @@ def _chat_configuration_snapshot(record: ChatConfigurationRecord) -> Dict[str, A
         "reranker_deployment_id": record.reranker_deployment_id,
         "planner_deployment_id": record.planner_deployment_id,
         "generation_parameters": record.generation_parameters,
-        "citations_enabled": bool(record.metadata.get("citations_enabled", True)),
-        "metadata": record.metadata,
+        "citations_enabled": bool(metadata.get("citations_enabled", True)),
+        "metadata": metadata,
     }
 
 
@@ -1701,6 +2247,10 @@ def _chat_conversation_response(record: ChatConversationRecord) -> ChatConversat
 
 
 def _chat_message_response(record: ChatMessageRecord) -> ChatMessageResponse:
+    versions = chat_service.list_message_versions(record.id) if record.role == "assistant" else []
+    version_count = len(versions)
+    latest_version_number = versions[-1].version_number if versions else 0
+    latest_version_status = versions[-1].status if versions else ""
     return ChatMessageResponse(
         id=record.id,
         conversation_id=record.conversation_id,
@@ -1710,9 +2260,46 @@ def _chat_message_response(record: ChatMessageRecord) -> ChatMessageResponse:
         metadata=record.metadata,
         status=record.status,
         request_id=record.request_id,
+        version_count=version_count,
+        latest_version_number=latest_version_number,
+        latest_version_status=latest_version_status,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
+
+
+def _chat_message_version_response(record: ChatMessageVersionRecord) -> ChatMessageVersionResponse:
+    return ChatMessageVersionResponse(
+        id=record.id,
+        message_id=record.message_id,
+        version_number=record.version_number,
+        content=record.content,
+        contexts=record.contexts,
+        metadata=record.metadata,
+        status=record.status,
+        request_id=record.request_id,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _cancelled_stream_payload(
+    request_id: str,
+    partial_answer: str,
+    *,
+    conversation_id: str,
+    assistant_message: Optional[ChatMessageRecord],
+    message_version: Optional[ChatMessageVersionRecord],
+) -> Dict[str, Any]:
+    return {
+        "request_id": request_id,
+        "conversation_id": conversation_id,
+        "assistant_message_id": assistant_message.id if assistant_message else "",
+        "message_version_id": message_version.id if message_version else "",
+        "message_version_number": message_version.version_number if message_version else 0,
+        "partial_answer": partial_answer,
+        "status": "cancelled",
+    }
 
 
 def _context_response(context: Any) -> ContextResponse:
@@ -1828,7 +2415,9 @@ def _configuration_payload(configuration: Optional[KnowledgeBaseConfigurationReq
 
 
 def _validate_chat_configuration_payload(payload: Dict[str, Any]) -> None:
-    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    metadata = dict(payload.get("metadata") or {}) if isinstance(payload.get("metadata"), dict) else {}
+    metadata.pop("query_embedding_deployment_id", None)
+    payload["metadata"] = metadata
     _validate_conversation_history_setting(
         metadata,
         "conversation_history_exchanges",
@@ -1854,6 +2443,9 @@ def _validate_chat_configuration_payload(payload: Dict[str, Any]) -> None:
     planner_id = str(payload.get("planner_deployment_id") or "").strip()
     if planner_id:
         model_farm_service.resolve(planner_id, "planner")
+    classifier_id = str(metadata.get("classifier_deployment_id") or "").strip()
+    if classifier_id:
+        model_farm_service.resolve(classifier_id, "classifier")
 
 
 def _conversation_history_limits(chat_configuration: Dict[str, Any]) -> tuple[int, int]:

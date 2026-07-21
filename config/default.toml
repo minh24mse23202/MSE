@@ -15,6 +15,7 @@ simple_top_k = 2
 moderate_top_k = 4
 complex_top_k = 6
 model_path = "data/artifacts/query_classifier_distilbert"
+t5_model_path = "data/artifacts/query_classifier_t5"
 fallback_model_path = "data/artifacts/query_classifier_nb.json"
 use_trained_model = true
 

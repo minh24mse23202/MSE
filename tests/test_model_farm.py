@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from aragbiz.cancellation import AnswerCancelled, CancellationToken
 from aragbiz.model_farm import (
     JsonModelFarmRepository,
     ModelCallContext,
@@ -237,6 +238,76 @@ def test_gateway_generation_can_record_planner_capability(tmp_path):
     assert usage.request_id == "request-planner"
 
 
+def test_local_classifier_deployment_returns_normalized_result_and_records_usage(monkeypatch, tmp_path):
+    service = build_service(tmp_path)
+    gateway = ModelGateway(service)
+
+    class StubLocalClassifier:
+        def predict(self, query):
+            assert "invoice" in query.lower()
+            return "moderate"
+
+    monkeypatch.setattr(gateway, "_local_classifier", lambda deployment: StubLocalClassifier())
+    result = asyncio.run(
+        gateway.classify(
+            "How should an invoice mismatch be handled?",
+            "model-local-distilbert",
+            context=ModelCallContext(purpose="query_classification", request_id="request-classifier"),
+        )
+    )
+
+    assert result.label == "moderate"
+    assert result.deployment_id == "model-local-distilbert"
+    assert result.metadata["runtime"] == "huggingface-sequence-classification"
+    usage = service.list_usage(purpose="query_classification")[0]
+    assert usage.capability == "classifier"
+    assert usage.request_id == "request-classifier"
+
+
+def test_remote_classifier_accepts_only_normalized_complexity_labels(tmp_path):
+    service = build_service(tmp_path)
+    connection = create_remote_connection(service)
+    deployment = service.create_deployment_from_template(
+        "openrouter-generation",
+        {
+            "connection_id": connection.id,
+            "name": "Remote classifier",
+            "model": "google/gemma-3-27b-it:free",
+            "capabilities": ["classifier"],
+        },
+    )
+    service.set_health(deployment.id, healthy=True)
+    deployment = service.update_deployment(deployment.id, {"enabled": True})
+    gateway = ModelGateway(service)
+    gateway.litellm_adapter._module = lambda: FakeLiteLLM(response_text='{"label":"complex"}')
+
+    result = asyncio.run(gateway.classify("Compare approval paths.", deployment.id))
+
+    assert result.label == "complex"
+    assert result.metadata["gateway_model"].startswith("openrouter/")
+
+
+def test_remote_classifier_rejects_unconstrained_output(tmp_path):
+    service = build_service(tmp_path)
+    connection = create_remote_connection(service)
+    deployment = service.create_deployment_from_template(
+        "openrouter-generation",
+        {
+            "connection_id": connection.id,
+            "name": "Invalid remote classifier",
+            "model": "google/gemma-3-27b-it:free",
+            "capabilities": ["classifier"],
+        },
+    )
+    service.set_health(deployment.id, healthy=True)
+    deployment = service.update_deployment(deployment.id, {"enabled": True})
+    gateway = ModelGateway(service)
+    gateway.litellm_adapter._module = lambda: FakeLiteLLM(response_text="This looks moderately difficult.")
+
+    with pytest.raises(ModelFarmError, match="invalid label"):
+        asyncio.run(gateway.classify("Compare approval paths.", deployment.id))
+
+
 def test_litellm_stream_forwards_provider_deltas(tmp_path):
     service = build_service(tmp_path)
     connection = create_remote_connection(service)
@@ -454,11 +525,49 @@ def test_stream_fallback_is_allowed_before_first_delta(tmp_path):
     assert fake.called_models == ["openrouter/google/gemma-3-27b-it:free", "gpt-4.1-mini"]
 
 
+def test_stream_cancellation_closes_provider_and_prevents_fallback(tmp_path):
+    service = build_service(tmp_path)
+    first_connection = create_remote_connection(service, name="Cancellation primary connection")
+    second_connection = create_remote_connection(service, provider="openai", name="Cancellation fallback connection")
+    first = create_remote_deployment(service, first_connection, name="Cancellation primary")
+    second = create_remote_deployment(service, second_connection, model="gpt-4.1-mini", name="Cancellation fallback")
+    gateway = ModelGateway(service)
+    fake = CancellableLiteLLM()
+    gateway.litellm_adapter._module = lambda: fake
+    token = CancellationToken("request-cancel-stream")
+
+    async def collect():
+        events = []
+        async for event in gateway.stream(
+            [{"role": "user", "content": "Hello"}],
+            first.id,
+            fallback_deployment_ids=[second.id],
+            context=ModelCallContext(purpose="chat_generation", request_id=token.request_id),
+            cancellation_token=token,
+        ):
+            events.append(event)
+            if event.type == "delta":
+                token.cancel("Stopped after partial output.")
+        return events
+
+    with pytest.raises(AnswerCancelled, match="Stopped after partial output"):
+        asyncio.run(collect())
+
+    assert fake.called_models == ["openrouter/google/gemma-3-27b-it:free"]
+    assert fake.stream.closed is True
+    usage = service.list_usage(purpose="chat_generation")
+    assert len(usage) == 1
+    assert usage[0].status == "cancelled"
+    assert usage[0].request_id == token.request_id
+    assert usage[0].output_tokens >= 1
+
+
 class FakeLiteLLM:
-    def __init__(self, *, stream_parts=None, fail_models=None):
+    def __init__(self, *, stream_parts=None, fail_models=None, response_text="ready"):
         self.calls = []
         self.stream_parts = list(stream_parts or ["ready"])
         self.fail_models = set(fail_models or [])
+        self.response_text = response_text
 
     async def acompletion(self, **kwargs):
         self.calls.append(kwargs)
@@ -467,7 +576,7 @@ class FakeLiteLLM:
         if kwargs.get("stream"):
             return _FakeStream(self.stream_parts)
         return {
-            "choices": [{"message": {"content": "ready"}, "finish_reason": "stop"}],
+            "choices": [{"message": {"content": self.response_text}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 2, "completion_tokens": 1},
         }
 
@@ -540,6 +649,36 @@ class _ImmediateFailureStream:
 
     async def __anext__(self):
         raise TimeoutError("provider timed out before content")
+
+
+class CancellableLiteLLM:
+    model_cost = {"gpt-4.1-mini": {}}
+
+    def __init__(self):
+        self.called_models = []
+        self.stream = _CancellableStream()
+
+    async def acompletion(self, **kwargs):
+        self.called_models.append(kwargs["model"])
+        return self.stream
+
+
+class _CancellableStream:
+    def __init__(self):
+        self.index = 0
+        self.closed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        self.index += 1
+        if self.index == 1:
+            return {"choices": [{"delta": {"content": "partial response"}}]}
+        return {"choices": [{"delta": {"content": "should not be emitted"}}]}
+
+    async def aclose(self):
+        self.closed = True
 
 
 def _legacy_v1_encrypt(value, secret_key):

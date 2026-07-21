@@ -338,6 +338,14 @@ button .icon-label,
   color: rgba(255, 255, 255, 0.78);
 }
 
+.send-action.stop-action {
+  background: linear-gradient(135deg, #b95f5f, #9f4f5f);
+}
+
+.send-action.stop-action:hover:not(:disabled) {
+  background: linear-gradient(135deg, #a94f50, #8d4353);
+}
+
 .auth-error {
   margin: 0;
   padding: 10px 12px;
@@ -917,6 +925,34 @@ button .icon-label,
   text-underline-offset: 2px;
 }
 
+.message-content .inline-citation {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(56, 111, 134, 0.28);
+  border-radius: 999px;
+  background: rgba(126, 164, 179, 0.12);
+  color: #2f667e;
+  padding: 1px 6px;
+  margin: 0 2px;
+  font: inherit;
+  font-size: 0.82em;
+  font-weight: 700;
+  line-height: 1.45;
+  vertical-align: baseline;
+}
+
+.message-content .inline-citation:hover,
+.message-content .inline-citation:focus-visible {
+  background: rgba(126, 164, 179, 0.24);
+  border-color: rgba(56, 111, 134, 0.5);
+}
+
+.message-content .inline-citation.invalid {
+  color: #a15c16;
+  border-color: #efc982;
+  background: #fff7e8;
+}
+
 .message-content blockquote {
   margin: 0.8em 0;
   border-left: 3px solid #9eb8c4;
@@ -1033,6 +1069,48 @@ button .icon-label,
 
 .message-actions .follow-up-resolved-chip:hover {
   background: rgba(126, 164, 179, 0.24);
+}
+
+.message-actions .citation-warning-chip {
+  color: #9a5b16;
+  background: #fff7e8;
+  border: 1px solid #f2d49a;
+  border-radius: 999px;
+  padding: 4px 8px;
+}
+
+.message-actions .citation-warning-chip:hover {
+  background: #ffefce;
+}
+
+.answer-version-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #dbe5ef;
+  border-radius: 999px;
+  background: #fff;
+  padding: 2px 4px;
+}
+
+.message-actions .answer-version-nav button {
+  display: grid;
+  place-items: center;
+  color: #64748b;
+  padding: 2px;
+}
+
+.message-actions .answer-version-nav button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.message-actions .answer-version-nav em {
+  color: #64748b;
+  font-style: normal;
+  font-size: 11px;
+  min-width: 28px;
+  text-align: center;
 }
 
 .conversation-starters {

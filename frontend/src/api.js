@@ -87,6 +87,7 @@ export async function askQuestionStream(question, options = {}, onEvent = () => 
   const response = await fetch(`${API_BASE_URL}/answer/stream`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
+    signal: options.signal,
     body: JSON.stringify({
       question,
       request_id: options.requestId || "",
@@ -101,12 +102,74 @@ export async function askQuestionStream(question, options = {}, onEvent = () => 
     })
   });
   await assertOk(response, "Streaming answer request failed");
+  return consumeSseResponse(response, onEvent);
+}
+
+export async function regenerateAnswerStream(messageId, options = {}, onEvent = () => {}) {
+  const response = await fetch(`${API_BASE_URL}/chat/messages/${encodeURIComponent(messageId)}/regenerate/stream`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    signal: options.signal,
+    body: JSON.stringify({
+      request_id: options.requestId || "",
+      knowledge_base_id: options.knowledgeBaseId || null,
+      document_ids: options.documentIds || [],
+      mode: options.mode || "adaptive",
+      retrieval_mode: options.retrievalMode || "hybrid",
+      top_k: options.topK || 4,
+      chat_configuration_id: options.chatConfigurationId || null,
+      chat_configuration: options.chatConfiguration || null
+    })
+  });
+  await assertOk(response, "Regenerate answer failed");
+  return consumeSseResponse(response, onEvent);
+}
+
+export async function retryAnswerStream(messageId, options = {}, onEvent = () => {}) {
+  const response = await fetch(`${API_BASE_URL}/chat/messages/${encodeURIComponent(messageId)}/retry/stream`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    signal: options.signal,
+    body: JSON.stringify({
+      request_id: options.requestId || "",
+      knowledge_base_id: options.knowledgeBaseId || null,
+      document_ids: options.documentIds || [],
+      mode: options.mode || "adaptive",
+      retrieval_mode: options.retrievalMode || "hybrid",
+      top_k: options.topK || 4,
+      chat_configuration_id: options.chatConfigurationId || null,
+      chat_configuration: options.chatConfiguration || null
+    })
+  });
+  await assertOk(response, "Retry answer failed");
+  return consumeSseResponse(response, onEvent);
+}
+
+export async function cancelAnswerRequest(requestId) {
+  const response = await fetch(`${API_BASE_URL}/answer/requests/${encodeURIComponent(requestId)}/cancel`, {
+    method: "POST",
+    headers: authHeaders()
+  });
+  await assertOk(response, "Stop answer request failed");
+  return response.json();
+}
+
+export async function listChatMessageVersions(messageId) {
+  const response = await fetch(`${API_BASE_URL}/chat/messages/${encodeURIComponent(messageId)}/versions`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Answer versions request failed");
+  return response.json();
+}
+
+async function consumeSseResponse(response, onEvent) {
   if (!response.body) throw new Error("Streaming is not supported by this browser.");
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let completedPayload = null;
+  let cancelledPayload = null;
 
   while (true) {
     const { value, done } = await reader.read();
@@ -119,6 +182,7 @@ export async function askQuestionStream(question, options = {}, onEvent = () => 
       if (!event) continue;
       onEvent(event);
       if (event.type === "completed") completedPayload = event.data;
+      if (event.type === "cancelled") cancelledPayload = event.data;
       if (event.type === "error") {
         throw new Error(event.data?.detail || "Streaming answer failed.");
       }
@@ -130,10 +194,11 @@ export async function askQuestionStream(question, options = {}, onEvent = () => 
     if (event) {
       onEvent(event);
       if (event.type === "completed") completedPayload = event.data;
+      if (event.type === "cancelled") cancelledPayload = event.data;
       if (event.type === "error") throw new Error(event.data?.detail || "Streaming answer failed.");
     }
   }
-  return completedPayload;
+  return completedPayload || cancelledPayload;
 }
 
 function parseSseEvent(raw) {

@@ -86,6 +86,20 @@ class ChatMessageRecord:
     updated_at: str = ""
 
 
+@dataclass
+class ChatMessageVersionRecord:
+    id: str
+    message_id: str
+    version_number: int
+    content: str
+    contexts: List[Dict[str, Any]] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    status: ChatMessageStatus = "completed"
+    request_id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
 class ChatRepository(Protocol):
     def initialize(self) -> None:
         """Initialize chat storage."""
@@ -148,11 +162,50 @@ class ChatRepository(Protocol):
         contexts: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         status: Optional[ChatMessageStatus] = None,
+        request_id: Optional[str] = None,
     ) -> ChatMessageRecord:
         """Update a message."""
 
+    def get_message(self, message_id: str) -> ChatMessageRecord:
+        """Get one message."""
+
+    def find_message_by_request_id(self, request_id: str) -> Optional[ChatMessageRecord]:
+        """Find an assistant message by request ID."""
+
     def list_messages(self, conversation_id: str) -> List[ChatMessageRecord]:
         """List messages for a conversation."""
+
+    def create_message_version(
+        self,
+        message_id: str,
+        *,
+        content: str = "",
+        contexts: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        status: ChatMessageStatus = "pending",
+        request_id: str = "",
+    ) -> ChatMessageVersionRecord:
+        """Create the next version for an assistant message."""
+
+    def update_message_version(
+        self,
+        version_id: str,
+        *,
+        content: Optional[str] = None,
+        contexts: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        status: Optional[ChatMessageStatus] = None,
+    ) -> ChatMessageVersionRecord:
+        """Update a message version."""
+
+    def get_message_version(self, version_id: str) -> ChatMessageVersionRecord:
+        """Get one message version."""
+
+    def find_message_version_by_request_id(self, request_id: str) -> Optional[ChatMessageVersionRecord]:
+        """Find the latest message version by request ID."""
+
+    def list_message_versions(self, message_id: str) -> List[ChatMessageVersionRecord]:
+        """List versions for an assistant message."""
 
     def create_configuration(
         self,
@@ -243,6 +296,11 @@ class ChatService:
         *,
         title: Optional[str] = None,
         pinned: Optional[bool] = None,
+        knowledge_base_id: Optional[str] = None,
+        chat_configuration_id: Optional[str] = None,
+        route_mode: Optional[str] = None,
+        retrieval_mode: Optional[str] = None,
+        top_k: Optional[int] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> ChatConversationRecord:
         self.repository.initialize()
@@ -250,6 +308,11 @@ class ChatService:
             conversation_id,
             title=_clean_title(title) if title is not None else None,
             pinned=pinned,
+            knowledge_base_id=knowledge_base_id,
+            chat_configuration_id=chat_configuration_id,
+            route_mode=route_mode,
+            retrieval_mode=retrieval_mode,
+            top_k=top_k,
             metadata=metadata,
         )
 
@@ -275,6 +338,7 @@ class ChatService:
     ) -> ChatConfigurationRecord:
         self.repository.initialize()
         base_metadata = _ensure_configuration_display_id(metadata or {}, self.repository.list_configurations())
+        base_metadata.pop("query_embedding_deployment_id", None)
         return self.repository.create_configuration(
             _clean_title(name),
             description=description,
@@ -357,6 +421,7 @@ class ChatService:
         model_metadata = dict(current.metadata)
         if metadata is not None:
             model_metadata.update(metadata)
+        model_metadata.pop("query_embedding_deployment_id", None)
         updates = {
             "generator_deployment_id": generator_deployment_id,
             "fallback_deployment_ids": fallback_deployment_ids,
@@ -430,6 +495,7 @@ class ChatService:
         contexts: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         status: Optional[ChatMessageStatus] = None,
+        request_id: Optional[str] = None,
     ) -> ChatMessageRecord:
         self.repository.initialize()
         return self.repository.update_message(
@@ -438,7 +504,16 @@ class ChatService:
             contexts=contexts,
             metadata=metadata,
             status=_clean_message_status(status) if status is not None else None,
+            request_id=request_id,
         )
+
+    def get_message(self, message_id: str) -> ChatMessageRecord:
+        self.repository.initialize()
+        return self.repository.get_message(message_id)
+
+    def find_message_by_request_id(self, request_id: str) -> Optional[ChatMessageRecord]:
+        self.repository.initialize()
+        return self.repository.find_message_by_request_id(request_id)
 
     def ensure_conversation_for_question(
         self,
@@ -488,16 +563,105 @@ class ChatService:
         answer: str,
         contexts: List[Dict[str, Any]],
         metadata: Dict[str, Any],
-    ) -> None:
+        request_id: str = "",
+    ) -> ChatMessageRecord:
         self.repository.initialize()
         self.repository.append_message(conversation_id, "user", question, contexts=[], metadata={}, status="completed")
-        self.repository.append_message(
+        assistant = self.repository.append_message(
             conversation_id,
             "assistant",
             answer,
             contexts=contexts,
             metadata={**metadata, "question": question},
             status="completed",
+            request_id=request_id,
+        )
+        return assistant
+
+    def create_message_version(
+        self,
+        message_id: str,
+        *,
+        content: str = "",
+        contexts: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        status: ChatMessageStatus = "pending",
+        request_id: str = "",
+    ) -> ChatMessageVersionRecord:
+        self.repository.initialize()
+        message = self.repository.get_message(message_id)
+        if message.role != "assistant":
+            raise ValueError("Only assistant messages can have answer versions.")
+        active = [
+            version
+            for version in self.repository.list_message_versions(message_id)
+            if version.status in {"pending", "streaming"}
+        ]
+        if active:
+            raise ValueError("An answer version is already being generated for this message.")
+        return self.repository.create_message_version(
+            message_id,
+            content=content,
+            contexts=contexts,
+            metadata=metadata,
+            status=status,
+            request_id=request_id,
+        )
+
+    def update_message_version(
+        self,
+        version_id: str,
+        *,
+        content: Optional[str] = None,
+        contexts: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        status: Optional[ChatMessageStatus] = None,
+    ) -> ChatMessageVersionRecord:
+        self.repository.initialize()
+        return self.repository.update_message_version(
+            version_id,
+            content=content,
+            contexts=contexts,
+            metadata=metadata,
+            status=status,
+        )
+
+    def list_message_versions(self, message_id: str) -> List[ChatMessageVersionRecord]:
+        self.repository.initialize()
+        self.repository.get_message(message_id)
+        return self.repository.list_message_versions(message_id)
+
+    def find_message_version_by_request_id(self, request_id: str) -> Optional[ChatMessageVersionRecord]:
+        self.repository.initialize()
+        return self.repository.find_message_version_by_request_id(request_id)
+
+    def message_version_summary(self, message_id: str) -> tuple[int, int]:
+        versions = self.list_message_versions(message_id)
+        return len(versions), max((version.version_number for version in versions), default=0)
+
+    def activate_message_version(self, version_id: str) -> ChatMessageRecord:
+        self.repository.initialize()
+        version = self.repository.get_message_version(version_id)
+        if version.status != "completed":
+            raise ValueError("Only a completed answer version can become canonical.")
+        return self.repository.update_message(
+            version.message_id,
+            content=version.content,
+            contexts=version.contexts,
+            metadata=version.metadata,
+            status="completed",
+            request_id=version.request_id,
+        )
+
+    def latest_completed_assistant(self, conversation_id: str) -> Optional[ChatMessageRecord]:
+        messages = self.list_messages(conversation_id)
+        return next(
+            (
+                message
+                for message in reversed(messages)
+                if message.role == "assistant" and message.status == "completed"
+            ),
+            None,
         )
 
 
@@ -520,6 +684,16 @@ class JsonChatRepository:
         if not state["chat_configurations"]:
             default_record = _default_chat_configuration_record()
             state["chat_configurations"][default_record.id] = _configuration_to_dict(default_record)
+            changed = True
+        versioned_message_ids = {
+            str(payload.get("message_id") or "")
+            for payload in state["chat_message_versions"].values()
+        }
+        for message_id, payload in state["chat_messages"].items():
+            if payload.get("role") != "assistant" or message_id in versioned_message_ids:
+                continue
+            version = _version_from_message_payload(payload)
+            state["chat_message_versions"][version.id] = _message_version_to_dict(version)
             changed = True
         if changed:
             self._write(state)
@@ -623,6 +797,13 @@ class JsonChatRepository:
         ]
         for message_id in message_ids:
             state["chat_messages"].pop(message_id, None)
+        version_ids = [
+            version_id
+            for version_id, version in state["chat_message_versions"].items()
+            if version.get("message_id") in message_ids
+        ]
+        for version_id in version_ids:
+            state["chat_message_versions"].pop(version_id, None)
         self._write(state)
 
     def append_message(
@@ -653,6 +834,9 @@ class JsonChatRepository:
             updated_at=now,
         )
         state["chat_messages"][record.id] = _message_to_dict(record)
+        if role == "assistant":
+            version = _version_from_message_payload(_message_to_dict(record))
+            state["chat_message_versions"][version.id] = _message_version_to_dict(version)
         state["chat_conversations"][conversation_id]["updated_at"] = now
         self._write(state)
         return record
@@ -665,6 +849,7 @@ class JsonChatRepository:
         contexts: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         status: Optional[ChatMessageStatus] = None,
+        request_id: Optional[str] = None,
     ) -> ChatMessageRecord:
         state = self._read()
         payload = state["chat_messages"].get(message_id)
@@ -679,12 +864,31 @@ class JsonChatRepository:
             payload["metadata"] = metadata
         if status is not None:
             payload["status"] = _clean_message_status(status)
+        if request_id is not None:
+            payload["request_id"] = request_id
         payload["updated_at"] = now
         conversation = state["chat_conversations"].get(payload["conversation_id"])
         if conversation:
             conversation["updated_at"] = now
         self._write(state)
         return _message_from_dict(payload)
+
+    def get_message(self, message_id: str) -> ChatMessageRecord:
+        state = self._read()
+        payload = state["chat_messages"].get(message_id)
+        if not payload:
+            raise KeyError(f"Message not found: {message_id}")
+        return _message_from_dict(payload)
+
+    def find_message_by_request_id(self, request_id: str) -> Optional[ChatMessageRecord]:
+        state = self._read()
+        matches = [
+            _message_from_dict(payload)
+            for payload in state["chat_messages"].values()
+            if payload.get("role") == "assistant" and payload.get("request_id") == request_id
+        ]
+        matches.sort(key=lambda message: message.updated_at, reverse=True)
+        return matches[0] if matches else None
 
     def list_messages(self, conversation_id: str) -> List[ChatMessageRecord]:
         state = self._read()
@@ -697,6 +901,98 @@ class JsonChatRepository:
         ]
         messages.sort(key=lambda message: message.created_at)
         return messages
+
+    def create_message_version(
+        self,
+        message_id: str,
+        *,
+        content: str = "",
+        contexts: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        status: ChatMessageStatus = "pending",
+        request_id: str = "",
+    ) -> ChatMessageVersionRecord:
+        state = self._read()
+        message = state["chat_messages"].get(message_id)
+        if not message:
+            raise KeyError(f"Message not found: {message_id}")
+        versions = [
+            _message_version_from_dict(payload)
+            for payload in state["chat_message_versions"].values()
+            if payload.get("message_id") == message_id
+        ]
+        if any(version.status in {"pending", "streaming"} for version in versions):
+            raise ValueError("An answer version is already being generated for this message.")
+        now = utc_now()
+        record = ChatMessageVersionRecord(
+            id=f"msgver-{uuid.uuid4().hex}",
+            message_id=message_id,
+            version_number=max((version.version_number for version in versions), default=0) + 1,
+            content=content,
+            contexts=list(contexts or []),
+            metadata=dict(metadata or {}),
+            status=_clean_message_status(status),
+            request_id=request_id,
+            created_at=now,
+            updated_at=now,
+        )
+        state["chat_message_versions"][record.id] = _message_version_to_dict(record)
+        self._write(state)
+        return record
+
+    def update_message_version(
+        self,
+        version_id: str,
+        *,
+        content: Optional[str] = None,
+        contexts: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        status: Optional[ChatMessageStatus] = None,
+    ) -> ChatMessageVersionRecord:
+        state = self._read()
+        payload = state["chat_message_versions"].get(version_id)
+        if not payload:
+            raise KeyError(f"Message version not found: {version_id}")
+        if content is not None:
+            payload["content"] = content
+        if contexts is not None:
+            payload["contexts"] = list(contexts)
+        if metadata is not None:
+            payload["metadata"] = dict(metadata)
+        if status is not None:
+            payload["status"] = _clean_message_status(status)
+        payload["updated_at"] = utc_now()
+        self._write(state)
+        return _message_version_from_dict(payload)
+
+    def get_message_version(self, version_id: str) -> ChatMessageVersionRecord:
+        state = self._read()
+        payload = state["chat_message_versions"].get(version_id)
+        if not payload:
+            raise KeyError(f"Message version not found: {version_id}")
+        return _message_version_from_dict(payload)
+
+    def find_message_version_by_request_id(self, request_id: str) -> Optional[ChatMessageVersionRecord]:
+        state = self._read()
+        matches = [
+            _message_version_from_dict(payload)
+            for payload in state["chat_message_versions"].values()
+            if payload.get("request_id") == request_id
+        ]
+        matches.sort(key=lambda version: (version.updated_at, version.version_number), reverse=True)
+        return matches[0] if matches else None
+
+    def list_message_versions(self, message_id: str) -> List[ChatMessageVersionRecord]:
+        state = self._read()
+        if message_id not in state["chat_messages"]:
+            raise KeyError(f"Message not found: {message_id}")
+        versions = [
+            _message_version_from_dict(payload)
+            for payload in state["chat_message_versions"].values()
+            if payload.get("message_id") == message_id
+        ]
+        versions.sort(key=lambda version: version.version_number)
+        return versions
 
     def create_configuration(
         self,
@@ -858,6 +1154,19 @@ class PostgresChatRepository:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS chat_message_versions (
+            id TEXT PRIMARY KEY,
+            message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+            version_number INTEGER NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            contexts_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+            metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            status TEXT NOT NULL DEFAULT 'completed',
+            request_id TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (message_id, version_number)
+        );
         ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed';
         ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS request_id TEXT NOT NULL DEFAULT '';
         ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT '';
@@ -866,6 +1175,8 @@ class PostgresChatRepository:
         CREATE INDEX IF NOT EXISTS idx_chat_conversations_updated_at ON chat_conversations(updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_id ON chat_messages(conversation_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_chat_messages_request_id ON chat_messages(request_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_message_versions_message ON chat_message_versions(message_id, version_number);
+        CREATE INDEX IF NOT EXISTS idx_chat_message_versions_request ON chat_message_versions(request_id);
         """
         with self.engine.begin() as connection:
             for statement in [part.strip() for part in ddl.split(";") if part.strip()]:
@@ -883,6 +1194,33 @@ class PostgresChatRepository:
                     """
                 ),
                 {**_configuration_to_dict(default_record), "metadata": json.dumps(default_record.metadata)},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO chat_message_versions (
+                        id, message_id, version_number, content, contexts_json, metadata_json,
+                        status, request_id, created_at, updated_at
+                    )
+                    SELECT
+                        'msgver-backfill-' || message.id,
+                        message.id,
+                        1,
+                        message.content,
+                        message.contexts_json,
+                        message.metadata_json,
+                        message.status,
+                        message.request_id,
+                        message.created_at,
+                        COALESCE(NULLIF(message.updated_at, ''), message.created_at)
+                    FROM chat_messages message
+                    WHERE role = 'assistant'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM chat_message_versions version
+                          WHERE version.message_id = message.id
+                      )
+                    """
+                )
             )
 
     def create_conversation(
@@ -1053,6 +1391,26 @@ class PostgresChatRepository:
                 ),
                 {**_message_to_dict(record), "contexts": json.dumps(record.contexts), "metadata": json.dumps(record.metadata)},
             )
+            if role == "assistant":
+                version = _version_from_message_payload(_message_to_dict(record))
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO chat_message_versions (
+                            id, message_id, version_number, content, contexts_json, metadata_json,
+                            status, request_id, created_at, updated_at
+                        ) VALUES (
+                            :id, :message_id, :version_number, :content, CAST(:contexts AS JSONB),
+                            CAST(:metadata AS JSONB), :status, :request_id, :created_at, :updated_at
+                        )
+                        """
+                    ),
+                    {
+                        **_message_version_to_dict(version),
+                        "contexts": json.dumps(version.contexts),
+                        "metadata": json.dumps(version.metadata),
+                    },
+                )
             connection.execute(
                 text("UPDATE chat_conversations SET updated_at = :updated_at WHERE id = :id"),
                 {"id": conversation_id, "updated_at": now},
@@ -1067,6 +1425,7 @@ class PostgresChatRepository:
         contexts: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         status: Optional[ChatMessageStatus] = None,
+        request_id: Optional[str] = None,
     ) -> ChatMessageRecord:
         from sqlalchemy import text
 
@@ -1089,7 +1448,7 @@ class PostgresChatRepository:
             contexts=list(contexts) if contexts is not None else current.contexts,
             metadata=dict(metadata) if metadata is not None else current.metadata,
             status=_clean_message_status(status) if status is not None else current.status,
-            request_id=current.request_id,
+            request_id=request_id if request_id is not None else current.request_id,
             created_at=current.created_at,
             updated_at=now,
         )
@@ -1102,6 +1461,7 @@ class PostgresChatRepository:
                         contexts_json = CAST(:contexts AS JSONB),
                         metadata_json = CAST(:metadata AS JSONB),
                         status = :status,
+                        request_id = :request_id,
                         updated_at = :updated_at
                     WHERE id = :id
                     """
@@ -1114,6 +1474,32 @@ class PostgresChatRepository:
             )
         return updated
 
+    def get_message(self, message_id: str) -> ChatMessageRecord:
+        from sqlalchemy import text
+
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                text("SELECT * FROM chat_messages WHERE id = :id"),
+                {"id": message_id},
+            ).mappings().first()
+        if not row:
+            raise KeyError(f"Message not found: {message_id}")
+        return _message_from_row(row)
+
+    def find_message_by_request_id(self, request_id: str) -> Optional[ChatMessageRecord]:
+        from sqlalchemy import text
+
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT * FROM chat_messages "
+                    "WHERE role = 'assistant' AND request_id = :request_id "
+                    "ORDER BY updated_at DESC LIMIT 1"
+                ),
+                {"request_id": request_id},
+            ).mappings().first()
+        return _message_from_row(row) if row else None
+
     def list_messages(self, conversation_id: str) -> List[ChatMessageRecord]:
         from sqlalchemy import text
 
@@ -1124,6 +1510,162 @@ class PostgresChatRepository:
                 {"id": conversation_id},
             ).mappings()
             return [_message_from_row(row) for row in rows]
+
+    def create_message_version(
+        self,
+        message_id: str,
+        *,
+        content: str = "",
+        contexts: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        status: ChatMessageStatus = "pending",
+        request_id: str = "",
+    ) -> ChatMessageVersionRecord:
+        from sqlalchemy import text
+
+        now = utc_now()
+        with self.engine.begin() as connection:
+            message = connection.execute(
+                text("SELECT id FROM chat_messages WHERE id = :id FOR UPDATE"),
+                {"id": message_id},
+            ).first()
+            if not message:
+                raise KeyError(f"Message not found: {message_id}")
+            active_version = connection.execute(
+                text(
+                    "SELECT id FROM chat_message_versions "
+                    "WHERE message_id = :id AND status IN ('pending', 'streaming') "
+                    "LIMIT 1"
+                ),
+                {"id": message_id},
+            ).first()
+            if active_version:
+                raise ValueError("An answer version is already being generated for this message.")
+            version_number = int(
+                connection.execute(
+                    text(
+                        "SELECT COALESCE(MAX(version_number), 0) + 1 "
+                        "FROM chat_message_versions WHERE message_id = :id"
+                    ),
+                    {"id": message_id},
+                ).scalar_one()
+            )
+            record = ChatMessageVersionRecord(
+                id=f"msgver-{uuid.uuid4().hex}",
+                message_id=message_id,
+                version_number=version_number,
+                content=content,
+                contexts=list(contexts or []),
+                metadata=dict(metadata or {}),
+                status=_clean_message_status(status),
+                request_id=request_id,
+                created_at=now,
+                updated_at=now,
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO chat_message_versions (
+                        id, message_id, version_number, content, contexts_json, metadata_json,
+                        status, request_id, created_at, updated_at
+                    ) VALUES (
+                        :id, :message_id, :version_number, :content, CAST(:contexts AS JSONB),
+                        CAST(:metadata AS JSONB), :status, :request_id, :created_at, :updated_at
+                    )
+                    """
+                ),
+                {
+                    **_message_version_to_dict(record),
+                    "contexts": json.dumps(record.contexts),
+                    "metadata": json.dumps(record.metadata),
+                },
+            )
+        return record
+
+    def update_message_version(
+        self,
+        version_id: str,
+        *,
+        content: Optional[str] = None,
+        contexts: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        status: Optional[ChatMessageStatus] = None,
+    ) -> ChatMessageVersionRecord:
+        from sqlalchemy import text
+
+        current = self.get_message_version(version_id)
+        updated = ChatMessageVersionRecord(
+            id=current.id,
+            message_id=current.message_id,
+            version_number=current.version_number,
+            content=content if content is not None else current.content,
+            contexts=list(contexts) if contexts is not None else current.contexts,
+            metadata=dict(metadata) if metadata is not None else current.metadata,
+            status=_clean_message_status(status) if status is not None else current.status,
+            request_id=current.request_id,
+            created_at=current.created_at,
+            updated_at=utc_now(),
+        )
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    UPDATE chat_message_versions
+                    SET content = :content,
+                        contexts_json = CAST(:contexts AS JSONB),
+                        metadata_json = CAST(:metadata AS JSONB),
+                        status = :status,
+                        updated_at = :updated_at
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    **_message_version_to_dict(updated),
+                    "contexts": json.dumps(updated.contexts),
+                    "metadata": json.dumps(updated.metadata),
+                },
+            )
+        return updated
+
+    def get_message_version(self, version_id: str) -> ChatMessageVersionRecord:
+        from sqlalchemy import text
+
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                text("SELECT * FROM chat_message_versions WHERE id = :id"),
+                {"id": version_id},
+            ).mappings().first()
+        if not row:
+            raise KeyError(f"Message version not found: {version_id}")
+        return _message_version_from_row(row)
+
+    def find_message_version_by_request_id(self, request_id: str) -> Optional[ChatMessageVersionRecord]:
+        from sqlalchemy import text
+
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT * FROM chat_message_versions "
+                    "WHERE request_id = :request_id "
+                    "ORDER BY updated_at DESC, version_number DESC LIMIT 1"
+                ),
+                {"request_id": request_id},
+            ).mappings().first()
+        return _message_version_from_row(row) if row else None
+
+    def list_message_versions(self, message_id: str) -> List[ChatMessageVersionRecord]:
+        from sqlalchemy import text
+
+        self.get_message(message_id)
+        with self.engine.begin() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT * FROM chat_message_versions "
+                    "WHERE message_id = :id ORDER BY version_number"
+                ),
+                {"id": message_id},
+            ).mappings()
+            return [_message_version_from_row(row) for row in rows]
 
     def create_configuration(
         self,
@@ -1316,7 +1858,12 @@ def _clean_message_status(value: Optional[str]) -> ChatMessageStatus:
 
 
 def _empty_chat_state() -> Dict[str, Dict[str, Any]]:
-    return {"chat_conversations": {}, "chat_messages": {}, "chat_configurations": {}}
+    return {
+        "chat_conversations": {},
+        "chat_messages": {},
+        "chat_message_versions": {},
+        "chat_configurations": {},
+    }
 
 
 def _conversation_to_dict(record: ChatConversationRecord) -> Dict[str, Any]:
@@ -1425,6 +1972,37 @@ def _message_to_dict(record: ChatMessageRecord) -> Dict[str, Any]:
     }
 
 
+def _message_version_to_dict(record: ChatMessageVersionRecord) -> Dict[str, Any]:
+    return {
+        "id": record.id,
+        "message_id": record.message_id,
+        "version_number": record.version_number,
+        "content": record.content,
+        "contexts": record.contexts,
+        "metadata": record.metadata,
+        "status": record.status,
+        "request_id": record.request_id,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    }
+
+
+def _version_from_message_payload(payload: Dict[str, Any]) -> ChatMessageVersionRecord:
+    created_at = payload.get("created_at", "")
+    return ChatMessageVersionRecord(
+        id=f"msgver-backfill-{payload['id']}",
+        message_id=payload["id"],
+        version_number=1,
+        content=payload.get("content", ""),
+        contexts=list(payload.get("contexts") or []),
+        metadata=dict(payload.get("metadata") or {}),
+        status=_clean_message_status(payload.get("status")),
+        request_id=payload.get("request_id", ""),
+        created_at=created_at,
+        updated_at=payload.get("updated_at") or created_at,
+    )
+
+
 def _conversation_from_dict(payload: Dict[str, Any]) -> ChatConversationRecord:
     return ChatConversationRecord(
         id=payload["id"],
@@ -1456,6 +2034,21 @@ def _message_from_dict(payload: Dict[str, Any]) -> ChatMessageRecord:
     )
 
 
+def _message_version_from_dict(payload: Dict[str, Any]) -> ChatMessageVersionRecord:
+    return ChatMessageVersionRecord(
+        id=payload["id"],
+        message_id=payload["message_id"],
+        version_number=int(payload.get("version_number") or 1),
+        content=payload.get("content", ""),
+        contexts=list(payload.get("contexts") or []),
+        metadata=dict(payload.get("metadata") or {}),
+        status=_clean_message_status(payload.get("status")),
+        request_id=payload.get("request_id", ""),
+        created_at=payload.get("created_at", ""),
+        updated_at=payload.get("updated_at") or payload.get("created_at", ""),
+    )
+
+
 def _conversation_from_row(row: Any) -> ChatConversationRecord:
     return ChatConversationRecord(
         id=row["id"],
@@ -1478,6 +2071,21 @@ def _message_from_row(row: Any) -> ChatMessageRecord:
         conversation_id=row["conversation_id"],
         role=row["role"],
         content=row["content"],
+        contexts=list(row.get("contexts_json") or []),
+        metadata=dict(row.get("metadata_json") or {}),
+        status=_clean_message_status(row.get("status")),
+        request_id=row.get("request_id") or "",
+        created_at=row.get("created_at") or "",
+        updated_at=row.get("updated_at") or row.get("created_at") or "",
+    )
+
+
+def _message_version_from_row(row: Any) -> ChatMessageVersionRecord:
+    return ChatMessageVersionRecord(
+        id=row["id"],
+        message_id=row["message_id"],
+        version_number=int(row.get("version_number") or 1),
+        content=row.get("content") or "",
         contexts=list(row.get("contexts_json") or []),
         metadata=dict(row.get("metadata_json") or {}),
         status=_clean_message_status(row.get("status")),

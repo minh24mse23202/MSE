@@ -98,7 +98,14 @@ def build_model_gateway(
     *,
     model_farm_service: Optional[ModelFarmService] = None,
 ) -> ModelGateway:
-    return ModelGateway(model_farm_service or build_model_farm_service(config))
+    config = config or load_config()
+    return ModelGateway(
+        model_farm_service or build_model_farm_service(config),
+        classifier_model_paths={
+            "query_classifier_distilbert": config.classifier_model_path,
+            "query_classifier_t5": config.t5_classifier_model_path,
+        },
+    )
 
 
 def build_auth_service(config: Optional[AppConfig] = None) -> AuthService:

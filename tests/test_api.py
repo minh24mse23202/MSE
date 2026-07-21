@@ -394,6 +394,157 @@ def test_answer_stream_persists_failed_partial_message(monkeypatch):
     assert "provider stopped" in messages[1]["metadata"]["error"]
 
 
+def test_cancel_endpoint_tracks_active_and_terminal_requests(monkeypatch):
+    coordinator = api_main.CancellationCoordinator()
+    monkeypatch.setattr(api_main, "answer_cancellations", coordinator)
+    client = TestClient(app)
+    token = coordinator.register("request-active")
+
+    accepted = client.post("/answer/requests/request-active/cancel")
+
+    assert accepted.status_code == 202
+    assert accepted.json()["status"] == "cancel_requested"
+    assert token.is_cancelled is True
+    coordinator.finish("request-active", "cancelled")
+    assert client.post("/answer/requests/request-active/cancel").status_code == 409
+    assert client.post("/answer/requests/request-missing/cancel").status_code == 404
+
+
+def test_regenerate_stream_creates_version_without_adding_history_exchange():
+    client = TestClient(app)
+    initial_response = client.post(
+        "/answer/stream",
+        json={"question": "What is UAT?", "mode": "direct"},
+    )
+    initial_events = _sse_events(initial_response.text)
+    initial = next(event["data"] for event in initial_events if event["type"] == "completed")
+    message_id = initial["metadata"]["assistant_message_id"]
+
+    response = client.post(
+        f"/chat/messages/{message_id}/regenerate/stream",
+        json={"mode": "direct", "request_id": "request-regenerate"},
+    )
+
+    assert response.status_code == 200
+    events = _sse_events(response.text)
+    started = next(event["data"] for event in events if event["type"] == "started")
+    completed = next(event["data"] for event in events if event["type"] == "completed")
+    assert started["message_version_number"] == 2
+    assert completed["metadata"]["message_version_number"] == 2
+    assert completed["metadata"]["regenerated"] is True
+
+    versions = client.get(f"/chat/messages/{message_id}/versions").json()
+    assert [version["version_number"] for version in versions] == [1, 2]
+    assert [version["status"] for version in versions] == ["completed", "completed"]
+    messages = client.get(f"/chat/conversations/{initial['conversation_id']}/messages").json()
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert messages[1]["content"] == completed["answer"]
+    assert messages[1]["version_count"] == 2
+    assert messages[1]["latest_version_number"] == 2
+
+
+def test_regenerate_rejects_non_latest_assistant_message():
+    client = TestClient(app)
+    first = client.post(
+        "/answer",
+        json={"question": "What is UAT?", "mode": "direct"},
+    ).json()
+    first_message = client.get(
+        f"/chat/conversations/{first['conversation_id']}/messages"
+    ).json()[1]
+    client.post(
+        "/answer",
+        json={
+            "conversation_id": first["conversation_id"],
+            "question": "Who approves it?",
+            "mode": "direct",
+        },
+    )
+
+    response = client.post(
+        f"/chat/messages/{first_message['id']}/regenerate/stream",
+        json={"mode": "direct"},
+    )
+
+    assert response.status_code == 409
+    assert "latest completed" in response.json()["detail"]
+
+
+def test_failed_regeneration_preserves_canonical_answer(monkeypatch):
+    client = TestClient(app)
+    initial = client.post(
+        "/answer",
+        json={"question": "What is UAT?", "mode": "direct"},
+    ).json()
+    message = client.get(
+        f"/chat/conversations/{initial['conversation_id']}/messages"
+    ).json()[1]
+    original_content = message["content"]
+
+    async def broken_stream(*args, **kwargs):
+        yield ModelStreamEvent("delta", {"text": "partial retry"})
+        raise ModelFarmError("retry provider stopped")
+
+    monkeypatch.setattr(api_main.model_gateway, "stream", broken_stream)
+    response = client.post(
+        f"/chat/messages/{message['id']}/regenerate/stream",
+        json={"mode": "direct"},
+    )
+
+    assert response.status_code == 200
+    events = _sse_events(response.text)
+    assert events[-1]["type"] == "error"
+    versions = client.get(f"/chat/messages/{message['id']}/versions").json()
+    assert versions[-1]["status"] == "failed"
+    assert versions[-1]["content"] == "partial retry"
+    canonical = client.get(
+        f"/chat/conversations/{initial['conversation_id']}/messages"
+    ).json()[1]
+    assert canonical["status"] == "completed"
+    assert canonical["content"] == original_content
+
+
+def test_retry_failed_answer_creates_version_and_reuses_exchange(monkeypatch):
+    original_stream = api_main.model_gateway.stream
+
+    async def broken_stream(*args, **kwargs):
+        yield ModelStreamEvent("delta", {"text": "partial failed answer"})
+        raise ModelFarmError("provider stopped")
+
+    monkeypatch.setattr(api_main.model_gateway, "stream", broken_stream)
+    client = TestClient(app)
+    failed_response = client.post(
+        "/answer/stream",
+        json={"question": "What is UAT?", "mode": "direct", "request_id": "request-failed-initial"},
+    )
+    failed_events = _sse_events(failed_response.text)
+    started = next(
+        event["data"]
+        for event in failed_events
+        if event["type"] == "started" and event["data"].get("assistant_message_id")
+    )
+    assert failed_events[-1]["type"] == "error"
+
+    monkeypatch.setattr(api_main.model_gateway, "stream", original_stream)
+    retry_response = client.post(
+        f"/chat/messages/{started['assistant_message_id']}/retry/stream",
+        json={"mode": "direct", "request_id": "request-retry-success"},
+    )
+
+    assert retry_response.status_code == 200, retry_response.text
+    retry_events = _sse_events(retry_response.text)
+    retry_started = next(event["data"] for event in retry_events if event["type"] == "started")
+    completed = next(event["data"] for event in retry_events if event["type"] == "completed")
+    assert retry_started["message_version_number"] == 2
+    assert completed["metadata"]["retried"] is True
+    versions = client.get(f"/chat/messages/{started['assistant_message_id']}/versions").json()
+    assert [version["status"] for version in versions] == ["failed", "completed"]
+    messages = client.get(f"/chat/conversations/{started['conversation_id']}/messages").json()
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert messages[1]["status"] == "completed"
+    assert messages[1]["content"] == completed["answer"]
+
+
 def test_knowledge_base_endpoints_ingest_upload(monkeypatch, tmp_path):
     pytest.importorskip("multipart")
     service = KnowledgeService(
