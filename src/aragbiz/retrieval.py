@@ -44,6 +44,15 @@ class InMemoryHybridRetriever:
             for rank, (score, doc) in enumerate(ranked[:top_k], start=1)
         ]
 
+    def score_diagnostics(self, query: str) -> Dict[str, Dict[str, float]]:
+        """Return raw and normalized lexical scores for observability."""
+        raw_bm25 = self._bm25_raw_scores(query)
+        return {
+            "bm25_raw": raw_bm25,
+            "bm25_normalized": _normalize(raw_bm25),
+            "dense_raw": self._dense_scores(query),
+        }
+
     def _build_doc_freqs(self) -> Dict[str, int]:
         freqs: Dict[str, int] = {}
         for tokens in self._doc_tokens.values():
@@ -52,6 +61,9 @@ class InMemoryHybridRetriever:
         return freqs
 
     def _bm25_scores(self, query: str) -> Dict[str, float]:
+        return _normalize(self._bm25_raw_scores(query))
+
+    def _bm25_raw_scores(self, query: str) -> Dict[str, float]:
         query_terms = _tokens(query)
         total_docs = max(len(self.documents), 1)
         scores: Dict[str, float] = {}
@@ -71,7 +83,7 @@ class InMemoryHybridRetriever:
                 denominator = freq + k1 * (1 - b + b * doc_len / max(self._avg_doc_len, 1))
                 score += idf * (freq * (k1 + 1)) / denominator
             scores[doc.id] = score
-        return _normalize(scores)
+        return scores
 
     def _dense_scores(self, query: str) -> Dict[str, float]:
         query_vector = _hashed_vector(query)

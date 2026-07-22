@@ -210,6 +210,13 @@ def test_l2_hybrid_combines_bm25_and_dense_scores(tmp_path):
     assert result.metadata["retrieval_mode"] == "hybrid"
     assert len(result.contexts) == 2
     assert all(context.mode == "hybrid" for context in result.contexts)
+    diagnostics = result.metadata["retrieval_diagnostics"]
+    assert diagnostics["mode"] == "hybrid"
+    assert diagnostics["candidate_count"] >= len(result.contexts)
+    assert all("bm25_raw_score" in item for item in diagnostics["candidates"])
+    assert all("dense_normalized_score" in item for item in diagnostics["candidates"])
+    assert all("hybrid_score" in item for item in diagnostics["candidates"])
+    assert sum(1 for item in diagnostics["candidates"] if item["selected"]) == len(result.contexts)
 
 
 class RuntimeControlGateway:

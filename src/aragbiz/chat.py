@@ -3,6 +3,8 @@
 import json
 import secrets
 import string
+import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +18,23 @@ ChatMessageStatus = Literal["pending", "streaming", "completed", "failed", "canc
 CONFIGURATION_DISPLAY_ID_KEY = "configuration_id"
 CONFIGURATION_DISPLAY_ID_LENGTH = 12
 CONFIGURATION_DISPLAY_ID_ALPHABET = string.ascii_letters + string.digits
+
+
+def _is_postgres_deadlock(error: Exception) -> bool:
+    original = getattr(error, "orig", None)
+    sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
+    return sqlstate == "40P01" or "deadlock detected" in str(error).lower()
+
+
+def _run_with_deadlock_retry(operation: Any, *, attempts: int = 3) -> Any:
+    for attempt in range(attempts):
+        try:
+            return operation()
+        except Exception as error:
+            if not _is_postgres_deadlock(error) or attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * (2**attempt))
+    raise RuntimeError("PostgreSQL operation exhausted its deadlock retries.")
 
 
 @dataclass
@@ -259,6 +278,7 @@ class ChatRepository(Protocol):
 class ChatService:
     def __init__(self, repository: ChatRepository):
         self.repository = repository
+        self.repository.initialize()
 
     def create_conversation(
         self,
@@ -1110,8 +1130,19 @@ class PostgresChatRepository:
         except ImportError as exc:
             raise KnowledgeProcessingError("Install the api extra to use PostgreSQL chat storage.") from exc
         self.engine = create_engine(database_url, future=True)
+        self._initialize_lock = threading.Lock()
+        self._initialized = False
 
     def initialize(self) -> None:
+        if self._initialized:
+            return
+        with self._initialize_lock:
+            if self._initialized:
+                return
+            self._initialize_schema()
+            self._initialized = True
+
+    def _initialize_schema(self) -> None:
         ddl = """
         CREATE TABLE IF NOT EXISTS chat_configurations (
             id TEXT PRIMARY KEY,
@@ -1312,36 +1343,39 @@ class PostgresChatRepository:
         from sqlalchemy import text
 
         current = self.get_conversation(conversation_id)
-        with self.engine.begin() as connection:
-            connection.execute(
-                text(
-                    """
-                    UPDATE chat_conversations
-                    SET title = :title,
-                        pinned = :pinned,
-                        knowledge_base_id = :knowledge_base_id,
-                        chat_configuration_id = :chat_configuration_id,
-                        route_mode = :route_mode,
-                        retrieval_mode = :retrieval_mode,
-                        top_k = :top_k,
-                        metadata_json = CAST(:metadata AS JSONB),
-                        updated_at = :updated_at
-                    WHERE id = :id
-                    """
-                ),
-                {
-                    "id": conversation_id,
-                    "title": title if title is not None else current.title,
-                    "pinned": pinned if pinned is not None else current.pinned,
-                    "knowledge_base_id": knowledge_base_id if knowledge_base_id is not None else current.knowledge_base_id,
-                    "chat_configuration_id": chat_configuration_id if chat_configuration_id is not None else current.chat_configuration_id,
-                    "route_mode": route_mode if route_mode is not None else current.route_mode,
-                    "retrieval_mode": retrieval_mode if retrieval_mode is not None else current.retrieval_mode,
-                    "top_k": top_k if top_k is not None else current.top_k,
-                    "metadata": json.dumps(metadata if metadata is not None else current.metadata),
-                    "updated_at": utc_now(),
-                },
-            )
+        def write() -> None:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        UPDATE chat_conversations
+                        SET title = :title,
+                            pinned = :pinned,
+                            knowledge_base_id = :knowledge_base_id,
+                            chat_configuration_id = :chat_configuration_id,
+                            route_mode = :route_mode,
+                            retrieval_mode = :retrieval_mode,
+                            top_k = :top_k,
+                            metadata_json = CAST(:metadata AS JSONB),
+                            updated_at = :updated_at
+                        WHERE id = :id
+                        """
+                    ),
+                    {
+                        "id": conversation_id,
+                        "title": title if title is not None else current.title,
+                        "pinned": pinned if pinned is not None else current.pinned,
+                        "knowledge_base_id": knowledge_base_id if knowledge_base_id is not None else current.knowledge_base_id,
+                        "chat_configuration_id": chat_configuration_id if chat_configuration_id is not None else current.chat_configuration_id,
+                        "route_mode": route_mode if route_mode is not None else current.route_mode,
+                        "retrieval_mode": retrieval_mode if retrieval_mode is not None else current.retrieval_mode,
+                        "top_k": top_k if top_k is not None else current.top_k,
+                        "metadata": json.dumps(metadata if metadata is not None else current.metadata),
+                        "updated_at": utc_now(),
+                    },
+                )
+
+        _run_with_deadlock_retry(write)
         return self.get_conversation(conversation_id)
 
     def delete_conversation(self, conversation_id: str) -> None:
@@ -1379,42 +1413,50 @@ class PostgresChatRepository:
             created_at=now,
             updated_at=now,
         )
-        with self.engine.begin() as connection:
-            connection.execute(
-                text(
-                    """
-                    INSERT INTO chat_messages
-                        (id, conversation_id, role, content, contexts_json, metadata_json, status, request_id, created_at, updated_at)
-                    VALUES
-                        (:id, :conversation_id, :role, :content, CAST(:contexts AS JSONB), CAST(:metadata AS JSONB), :status, :request_id, :created_at, :updated_at)
-                    """
-                ),
-                {**_message_to_dict(record), "contexts": json.dumps(record.contexts), "metadata": json.dumps(record.metadata)},
-            )
-            if role == "assistant":
-                version = _version_from_message_payload(_message_to_dict(record))
+
+        def write() -> None:
+            with self.engine.begin() as connection:
                 connection.execute(
                     text(
                         """
-                        INSERT INTO chat_message_versions (
-                            id, message_id, version_number, content, contexts_json, metadata_json,
-                            status, request_id, created_at, updated_at
-                        ) VALUES (
-                            :id, :message_id, :version_number, :content, CAST(:contexts AS JSONB),
-                            CAST(:metadata AS JSONB), :status, :request_id, :created_at, :updated_at
-                        )
+                        INSERT INTO chat_messages
+                            (id, conversation_id, role, content, contexts_json, metadata_json, status, request_id, created_at, updated_at)
+                        VALUES
+                            (:id, :conversation_id, :role, :content, CAST(:contexts AS JSONB), CAST(:metadata AS JSONB), :status, :request_id, :created_at, :updated_at)
                         """
                     ),
                     {
-                        **_message_version_to_dict(version),
-                        "contexts": json.dumps(version.contexts),
-                        "metadata": json.dumps(version.metadata),
+                        **_message_to_dict(record),
+                        "contexts": json.dumps(record.contexts),
+                        "metadata": json.dumps(record.metadata),
                     },
                 )
-            connection.execute(
-                text("UPDATE chat_conversations SET updated_at = :updated_at WHERE id = :id"),
-                {"id": conversation_id, "updated_at": now},
-            )
+                if role == "assistant":
+                    version = _version_from_message_payload(_message_to_dict(record))
+                    connection.execute(
+                        text(
+                            """
+                            INSERT INTO chat_message_versions (
+                                id, message_id, version_number, content, contexts_json, metadata_json,
+                                status, request_id, created_at, updated_at
+                            ) VALUES (
+                                :id, :message_id, :version_number, :content, CAST(:contexts AS JSONB),
+                                CAST(:metadata AS JSONB), :status, :request_id, :created_at, :updated_at
+                            )
+                            """
+                        ),
+                        {
+                            **_message_version_to_dict(version),
+                            "contexts": json.dumps(version.contexts),
+                            "metadata": json.dumps(version.metadata),
+                        },
+                    )
+                connection.execute(
+                    text("UPDATE chat_conversations SET updated_at = :updated_at WHERE id = :id"),
+                    {"id": conversation_id, "updated_at": now},
+                )
+
+        _run_with_deadlock_retry(write)
         return record
 
     def update_message(
@@ -1452,26 +1494,35 @@ class PostgresChatRepository:
             created_at=current.created_at,
             updated_at=now,
         )
-        with self.engine.begin() as connection:
-            connection.execute(
-                text(
-                    """
-                    UPDATE chat_messages
-                    SET content = :content,
-                        contexts_json = CAST(:contexts AS JSONB),
-                        metadata_json = CAST(:metadata AS JSONB),
-                        status = :status,
-                        request_id = :request_id,
-                        updated_at = :updated_at
-                    WHERE id = :id
-                    """
-                ),
-                {**_message_to_dict(updated), "contexts": json.dumps(updated.contexts), "metadata": json.dumps(updated.metadata)},
-            )
-            connection.execute(
-                text("UPDATE chat_conversations SET updated_at = :updated_at WHERE id = :id"),
-                {"id": updated.conversation_id, "updated_at": now},
-            )
+
+        def write() -> None:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        UPDATE chat_messages
+                        SET content = :content,
+                            contexts_json = CAST(:contexts AS JSONB),
+                            metadata_json = CAST(:metadata AS JSONB),
+                            status = :status,
+                            request_id = :request_id,
+                            updated_at = :updated_at
+                        WHERE id = :id
+                        """
+                    ),
+                    {
+                        **_message_to_dict(updated),
+                        "contexts": json.dumps(updated.contexts),
+                        "metadata": json.dumps(updated.metadata),
+                    },
+                )
+                if updated.status in {"completed", "failed", "cancelled"}:
+                    connection.execute(
+                        text("UPDATE chat_conversations SET updated_at = :updated_at WHERE id = :id"),
+                        {"id": updated.conversation_id, "updated_at": now},
+                    )
+
+        _run_with_deadlock_retry(write)
         return updated
 
     def get_message(self, message_id: str) -> ChatMessageRecord:

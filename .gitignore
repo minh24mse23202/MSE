@@ -18,6 +18,7 @@ data/raw/*
 data/processed/*
 data/artifacts/*
 data/knowledge/*
+data/traces/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/artifacts/.gitkeep

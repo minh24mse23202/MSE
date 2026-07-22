@@ -37,6 +37,9 @@ class AppConfig:
     auth_json_store: str = "data/knowledge/auth_store.json"
     jobs_json_store: str = "data/knowledge/jobs_store.json"
     blob_store: str = "data/uploads"
+    trace_store: str = "data/traces"
+    trace_retention_days: int = 30
+    trace_max_bytes: int = 10485760
     auth_required: bool = False
     jwt_secret: str = "aragbiz-local-development-secret"
     access_token_ttl_seconds: int = 28800
@@ -143,6 +146,28 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
         blob_store=os.getenv(
             "ARAGBIZ_BLOB_STORE",
             raw.get("jobs", {}).get("blob_store", AppConfig.blob_store),
+        ),
+        trace_store=os.getenv(
+            "ARAGBIZ_TRACE_STORE",
+            raw.get("tracing", {}).get("store", AppConfig.trace_store),
+        ),
+        trace_retention_days=max(
+            1,
+            int(
+                os.getenv(
+                    "ARAGBIZ_TRACE_RETENTION_DAYS",
+                    raw.get("tracing", {}).get("retention_days", AppConfig.trace_retention_days),
+                )
+            ),
+        ),
+        trace_max_bytes=max(
+            65536,
+            int(
+                os.getenv(
+                    "ARAGBIZ_TRACE_MAX_BYTES",
+                    raw.get("tracing", {}).get("max_bytes", AppConfig.trace_max_bytes),
+                )
+            ),
         ),
         auth_required=_parse_bool(
             os.getenv("ARAGBIZ_AUTH_REQUIRED", str(raw.get("auth", {}).get("required", AppConfig.auth_required)))

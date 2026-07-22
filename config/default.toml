@@ -61,6 +61,11 @@ json_store = "data/knowledge/jobs_store.json"
 blob_store = "data/uploads"
 lease_seconds = 120
 
+[tracing]
+store = "data/traces"
+retention_days = 30
+max_bytes = 10485760
+
 [evaluation]
 json_store = "data/knowledge/evaluation_store.json"
 

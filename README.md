@@ -89,6 +89,20 @@ npm run dev
 
 The React app calls the FastAPI backend at `http://127.0.0.1:8000`.
 
+## RAG Observability Traces
+
+Each synchronous or streaming Main-screen answer now creates a durable full-fidelity trace. PostgreSQL stores searchable trace metadata while strict UTF-8 JSON artifacts are gzip-compressed under `data/traces` by default. Apply `alembic upgrade head` before starting the updated API.
+
+Trace retention and payload limits are configured through:
+
+- `ARAGBIZ_TRACE_STORE=data/traces`
+- `ARAGBIZ_TRACE_RETENTION_DAYS=30`
+- `ARAGBIZ_TRACE_MAX_BYTES=10485760`
+
+The Trace popup loads the artifact by `trace_id` and shows hierarchical spans, timings, a latency waterfall, full inputs/outputs, model usage links, and retrieval score diagnostics. JSON can also be retrieved through `GET /traces/{trace_id}`, `GET /chat/messages/{message_id}/trace`, or downloaded through `GET /traces/{trace_id}/download`.
+
+Artifacts include complete prompts, responses, conversation context, and retrieval candidate text for debugging. Credential fields, authorization headers, encrypted secrets, and raw numeric embedding vectors are always redacted.
+
 Run the full local stack with PostgreSQL, migrations, API, and worker:
 
 ```powershell

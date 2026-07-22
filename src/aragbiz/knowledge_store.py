@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -431,8 +432,19 @@ class PostgresKnowledgeRepository:
         self.database_url = database_url
         self.embedding_dimension = embedding_dimension
         self.engine = create_engine(database_url, future=True)
+        self._initialize_lock = threading.Lock()
+        self._initialized = False
 
     def initialize(self) -> None:
+        if self._initialized:
+            return
+        with self._initialize_lock:
+            if self._initialized:
+                return
+            self._initialize_schema()
+            self._initialized = True
+
+    def _initialize_schema(self) -> None:
         ddl = f"""
         CREATE EXTENSION IF NOT EXISTS vector;
         CREATE TABLE IF NOT EXISTS knowledge_bases (

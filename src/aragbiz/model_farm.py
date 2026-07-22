@@ -1127,8 +1127,9 @@ class ModelFarmService:
         if self.global_monthly_budget_usd > 0 and global_spend >= self.global_monthly_budget_usd:
             raise ModelBudgetExceeded("Global Model Farm monthly budget has been reached.")
 
-    def record_usage(self, event: ModelUsageEvent) -> None:
+    def record_usage(self, event: ModelUsageEvent) -> ModelUsageEvent:
         self.repository.append_usage(event)
+        return event
 
     def list_usage(self, *, deployment_id: str = "", purpose: str = "", limit: int = 500) -> List[ModelUsageEvent]:
         return self.repository.list_usage(deployment_id=deployment_id, purpose=purpose, limit=limit)
@@ -1611,7 +1612,7 @@ class ModelGateway:
             try:
                 result = await self._generate_once(deployment, messages, parameters or {})
                 latency = (time.perf_counter() - started) * 1000
-                self._record_completed(deployment, capability, context, result.input_tokens, result.output_tokens, latency, result.estimated_cost_usd, fallback_index)
+                usage_event_id = self._record_completed(deployment, capability, context, result.input_tokens, result.output_tokens, latency, result.estimated_cost_usd, fallback_index)
                 return replace(
                     result,
                     metadata={
@@ -1619,13 +1620,14 @@ class ModelGateway:
                         "fallback_index": fallback_index,
                         "fallback_attempts": fallback_attempts,
                         "latency_ms": round(latency, 3),
+                        "usage_event_id": usage_event_id,
                     },
                 )
             except Exception as exc:  # provider exception types are optional imports
                 latency = (time.perf_counter() - started) * 1000
-                self._record_failed(deployment, capability, context, latency, exc, fallback_index)
+                usage_event_id = self._record_failed(deployment, capability, context, latency, exc, fallback_index)
                 fallback_attempts.append(
-                    _failed_model_attempt(deployment, exc, fallback_index, latency)
+                    {**_failed_model_attempt(deployment, exc, fallback_index, latency), "usage_event_id": usage_event_id}
                 )
                 last_error = exc
                 if not _is_retryable_error(exc) or fallback_index == len(candidates) - 1:
@@ -1681,7 +1683,7 @@ class ModelGateway:
                 input_tokens = int(completed.get("input_tokens") or 0)
                 output_tokens = int(completed.get("output_tokens") or 0)
                 cost = float(completed.get("estimated_cost_usd") or 0.0)
-                self._record_completed(
+                usage_event_id = self._record_completed(
                     deployment, "generation", context, input_tokens, output_tokens, latency, cost, fallback_index,
                     resolved=resolved,
                 )
@@ -1693,6 +1695,7 @@ class ModelGateway:
                     "fallback_index": fallback_index,
                     "fallback_attempts": fallback_attempts,
                     "latency_ms": round(latency, 3),
+                    "usage_event_id": usage_event_id,
                 }
                 yield ModelStreamEvent("model_completed", completed)
                 return
@@ -1715,7 +1718,7 @@ class ModelGateway:
                 raise
             except Exception as exc:
                 latency = (time.perf_counter() - started) * 1000
-                self._record_failed(deployment, "generation", context, latency, exc, fallback_index, resolved=resolved)
+                usage_event_id = self._record_failed(deployment, "generation", context, latency, exc, fallback_index, resolved=resolved)
                 failed_attempt = _failed_model_attempt(
                     deployment,
                     exc,
@@ -1725,6 +1728,7 @@ class ModelGateway:
                     connection_id=resolved.connection.id,
                     access_path=resolved.connection.access_path,
                 )
+                failed_attempt["usage_event_id"] = usage_event_id
                 fallback_attempts.append(failed_attempt)
                 last_error = exc
                 can_fallback = (
@@ -1765,8 +1769,8 @@ class ModelGateway:
         try:
             result = await self._embed_once(deployment, texts, require_connection_enabled=require_enabled)
             latency = (time.perf_counter() - started) * 1000
-            self._record_completed(deployment, "embedding", context, result.input_tokens, 0, latency, result.estimated_cost_usd, 0)
-            return replace(result, metadata={**result.metadata, "latency_ms": round(latency, 3)})
+            usage_event_id = self._record_completed(deployment, "embedding", context, result.input_tokens, 0, latency, result.estimated_cost_usd, 0)
+            return replace(result, metadata={**result.metadata, "latency_ms": round(latency, 3), "usage_event_id": usage_event_id})
         except Exception as exc:
             latency = (time.perf_counter() - started) * 1000
             self._record_failed(deployment, "embedding", context, latency, exc, 0)
@@ -1836,7 +1840,7 @@ class ModelGateway:
                     "access_path": resolved.connection.access_path,
                 }
             latency = (time.perf_counter() - started) * 1000
-            self._record_completed(
+            usage_event_id = self._record_completed(
                 deployment,
                 "classifier",
                 context,
@@ -1855,7 +1859,7 @@ class ModelGateway:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 estimated_cost_usd=cost,
-                metadata={**metadata, "latency_ms": round(latency, 3)},
+                metadata={**metadata, "latency_ms": round(latency, 3), "usage_event_id": usage_event_id},
             )
         except Exception as exc:
             latency = (time.perf_counter() - started) * 1000
@@ -1880,8 +1884,8 @@ class ModelGateway:
             result = await self._rerank_once(deployment, query, documents, top_n)
             latency = (time.perf_counter() - started) * 1000
             input_tokens = _rough_token_count(query + "\n" + "\n".join(documents))
-            self._record_completed(deployment, "rerank", context, input_tokens, 0, latency, result.estimated_cost_usd, 0)
-            return replace(result, metadata={**result.metadata, "latency_ms": round(latency, 3)})
+            usage_event_id = self._record_completed(deployment, "rerank", context, input_tokens, 0, latency, result.estimated_cost_usd, 0)
+            return replace(result, metadata={**result.metadata, "latency_ms": round(latency, 3), "usage_event_id": usage_event_id})
         except Exception as exc:
             latency = (time.perf_counter() - started) * 1000
             self._record_failed(deployment, "rerank", context, latency, exc, 0)
@@ -2132,9 +2136,9 @@ class ModelGateway:
         fallback_index: int,
         *,
         resolved: Optional[ResolvedModel] = None,
-    ) -> None:
+    ) -> str:
         resolved = resolved or self._resolved_for_usage(deployment)
-        self.service.record_usage(
+        event = self.service.record_usage(
             _usage_event(
                 deployment,
                 capability,
@@ -2151,6 +2155,8 @@ class ModelGateway:
             )
         )
 
+        return event.id
+
     def _record_failed(
         self,
         deployment: ModelDeployment,
@@ -2161,9 +2167,9 @@ class ModelGateway:
         fallback_index: int,
         *,
         resolved: Optional[ResolvedModel] = None,
-    ) -> None:
+    ) -> str:
         resolved = resolved or self._resolved_for_usage(deployment)
-        self.service.record_usage(
+        event = self.service.record_usage(
             _usage_event(
                 deployment,
                 capability,
@@ -2177,6 +2183,7 @@ class ModelGateway:
                 gateway_model=resolved.gateway_model if resolved else deployment.model,
             )
         )
+        return event.id
 
     def _record_cancelled(
         self,
@@ -2190,9 +2197,9 @@ class ModelGateway:
         fallback_index: int,
         *,
         resolved: Optional[ResolvedModel] = None,
-    ) -> None:
+    ) -> str:
         resolved = resolved or self._resolved_for_usage(deployment)
-        self.service.record_usage(
+        event = self.service.record_usage(
             _usage_event(
                 deployment,
                 capability,
@@ -2208,6 +2215,7 @@ class ModelGateway:
                 gateway_model=resolved.gateway_model if resolved else deployment.model,
             )
         )
+        return event.id
 
     def _resolved_for_usage(self, deployment: ModelDeployment) -> Optional[ResolvedModel]:
         try:

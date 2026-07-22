@@ -18,6 +18,7 @@ from aragbiz.knowledge import HashEmbeddingModel, KnowledgeService, OverlapChunk
 from aragbiz.knowledge_store import JsonKnowledgeRepository
 from aragbiz.model_farm import JsonModelFarmRepository, ModelFarmError, ModelFarmService, ModelGateway, ModelStreamEvent
 from aragbiz.ragxplain import RagxplainRunner
+from aragbiz.tracing import FileTraceRepository, TraceArtifactStore, TraceService
 
 app = api_main.app
 
@@ -26,6 +27,11 @@ app = api_main.app
 def isolated_chat_service(monkeypatch, tmp_path):
     service = ChatService(JsonChatRepository(str(tmp_path / "chat.json")))
     monkeypatch.setattr(api_main, "chat_service", service)
+    trace_service = TraceService(
+        FileTraceRepository(str(tmp_path / "traces")),
+        TraceArtifactStore(str(tmp_path / "traces")),
+    )
+    monkeypatch.setattr(api_main, "trace_service", trace_service)
     return service
 
 
@@ -49,6 +55,36 @@ def test_answer_endpoint_returns_direct_route_metadata():
     messages = client.get(f"/chat/conversations/{payload['conversation_id']}/messages").json()
     assert [message["role"] for message in messages] == ["user", "assistant"]
     assert messages[1]["metadata"]["question"] == payload["question"]
+
+
+def test_answer_trace_can_be_loaded_by_id_message_and_downloaded():
+    client = TestClient(app)
+    response = client.post(
+        "/answer",
+        json={"question": "What is the workflow status?", "mode": "direct"},
+    )
+    assert response.status_code == 200
+    answer = response.json()
+    trace_id = answer["metadata"]["trace_id"]
+    message_id = answer["metadata"]["assistant_message_id"]
+
+    by_id = client.get(f"/traces/{trace_id}")
+    assert by_id.status_code == 200
+    report = by_id.json()
+    assert report["schema_version"] == "1.0"
+    assert report["status"] == "completed"
+    assert report["message_id"] == message_id
+    assert any(span["name"] == "Generator execution" for span in report["spans"])
+
+    by_message = client.get(f"/chat/messages/{message_id}/trace?version_number=1")
+    assert by_message.status_code == 200
+    assert by_message.json()["trace_id"] == trace_id
+
+    downloaded = client.get(f"/traces/{trace_id}/download")
+    assert downloaded.status_code == 200
+    assert downloaded.headers["content-disposition"].endswith(f'"{trace_id}.json"')
+    assert downloaded.json()["trace_id"] == trace_id
+    assert client.get("/traces/trace-missing").status_code == 404
 
 
 def test_answer_endpoint_rejects_adaptive_without_knowledge_base():

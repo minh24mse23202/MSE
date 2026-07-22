@@ -293,6 +293,7 @@ class KnowledgeService:
         model_gateway: Optional[ModelGateway] = None,
     ):
         self.repository = repository
+        self.repository.initialize()
         self.chunker = chunker
         self.default_embedder = embedder
         self._embedding_dimension = embedder.dimension

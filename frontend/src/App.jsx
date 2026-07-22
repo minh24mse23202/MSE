@@ -18,6 +18,7 @@ import {
   Database,
   Eye,
   EyeOff,
+  Download,
   ExternalLink,
   FileText,
   Filter,
@@ -62,10 +63,13 @@ import {
   deleteKnowledgeDocument,
   deleteModelDeployment,
   getChatConfigurationLimits,
+  getChatMessageTrace,
+  getTrace,
   getModelUsageSummary,
   getCurrentUser,
   getKnowledgeProcessingTrace,
   getRagxplainViewerUrl,
+  downloadTrace,
   ingestWebsiteSource,
   listChatConfigurations,
   listChatConversations,
@@ -1835,7 +1839,24 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
           </button>
         </div>
       )}
-      {popup && <TraceModal popup={popup} onClose={() => setPopup(null)} />}
+      {popup && <TraceModal popup={popup} onClose={() => setPopup(null)} onOpenSource={(candidate) => {
+        const sourceId = candidate.chunk_id;
+        const currentContexts = popup.message.contexts || [];
+        const exists = currentContexts.some((context) => context.id === sourceId);
+        const diagnosticContext = {
+          id: sourceId,
+          rank: candidate.selected_rank || candidate.bm25_rank || candidate.dense_rank || 0,
+          score: candidate.hybrid_score || candidate.dense_raw_score || candidate.bm25_raw_score || 0,
+          mode: candidate.retrieval_step ? "multi-step" : "diagnostic",
+          text: candidate.text || "",
+          metadata: { ...(candidate.metadata || {}), document_id: candidate.document_id, diagnostic_candidate: true }
+        };
+        setPopup({
+          type: "source",
+          message: { ...popup.message, contexts: exists ? currentContexts : [...currentContexts, diagnosticContext] },
+          selectedSourceId: sourceId
+        });
+      }} />}
     </section>
   );
 }
@@ -2902,24 +2923,62 @@ function KnowledgeBaseSummary({ selectedKnowledgeBase, collapsed = false, onTogg
     </section>
   );
 }
-function TraceModal({ popup, onClose }) {
+function TraceModal({ popup, onClose, onOpenSource }) {
   const { type, message, focusStep = "", selectedSourceId = "", sourceLabel = "" } = popup;
   const contexts = message.contexts || [];
-  const traceSteps = Array.isArray(message.metadata?.trace_steps) ? message.metadata.trace_steps : [];
+  const legacyTraceSteps = Array.isArray(message.metadata?.trace_steps) ? message.metadata.trace_steps : [];
   const [sourceQuery, setSourceQuery] = useState("");
   const [activeSourceId, setActiveSourceId] = useState(selectedSourceId || contexts[0]?.id || "");
   const [traceQuery, setTraceQuery] = useState("");
   const [selectedTraceIndex, setSelectedTraceIndex] = useState(0);
+  const [traceReport, setTraceReport] = useState(null);
+  const [traceLoading, setTraceLoading] = useState(false);
+  const [traceError, setTraceError] = useState("");
+  const [traceTab, setTraceTab] = useState("inputs");
+  const [traceOverviewCollapsed, setTraceOverviewCollapsed] = useState(true);
+  const durableSpans = Array.isArray(traceReport?.spans) ? traceReport.spans : [];
+  const executionSpans = durableSpans.filter(
+    (span) => !(span.category === "orchestration" && !span.parent_span_id)
+  );
+  const traceSteps = durableSpans.length > 0
+    ? executionSpans.map((span) => ({
+        step: span.name,
+        status: span.status,
+        detail: span.detail,
+        metadata: { ...(span.metrics || {}), duration_ms: span.duration_ms, category: span.category },
+        span
+      }))
+    : legacyTraceSteps;
 
   useEffect(() => {
     setSourceQuery("");
     setActiveSourceId(selectedSourceId || contexts[0]?.id || "");
     setTraceQuery("");
+    setTraceTab("inputs");
+    setTraceOverviewCollapsed(true);
     const focusedIndex = focusStep
       ? traceSteps.findIndex((step) => step.step === focusStep)
       : -1;
     setSelectedTraceIndex(focusedIndex >= 0 ? focusedIndex : 0);
-  }, [message.id, type, focusStep, selectedSourceId]);
+  }, [message.id, type, focusStep, selectedSourceId, traceReport?.trace_id]);
+
+  useEffect(() => {
+    let active = true;
+    if (type !== "trace") return () => { active = false; };
+    setTraceReport(null);
+    setTraceError("");
+    const traceId = message.metadata?.trace_id;
+    if (!traceId && !message.id) return () => { active = false; };
+    setTraceLoading(true);
+    const request = traceId
+      ? getTrace(traceId)
+      : getChatMessageTrace(message.id, popup.versionNumber || message.latest_version_number || null);
+    request
+      .then((report) => { if (active) setTraceReport(report); })
+      .catch((error) => { if (active && traceId) setTraceError(error.message); })
+      .finally(() => { if (active) setTraceLoading(false); });
+    return () => { active = false; };
+  }, [message.id, message.metadata?.trace_id, message.latest_version_number, popup.versionNumber, type]);
 
   async function copyText(text) {
     try {
@@ -2949,6 +3008,8 @@ function TraceModal({ popup, onClose }) {
   });
   const selectedTraceItem = filteredTraceItems.find((item) => item.index === selectedTraceIndex) || filteredTraceItems[0];
   const selectedTrace = selectedTraceItem?.step;
+  const selectedSpan = selectedTrace?.span;
+  const retrievalCandidates = traceRetrievalCandidates(selectedSpan);
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
@@ -3033,21 +3094,50 @@ function TraceModal({ popup, onClose }) {
         ) : (
           <div className="trace-layout">
             <aside className="trace-steps">
-              <h3><IconLabel icon={GitBranch}>Steps Overview</IconLabel></h3>
+              <h3><IconLabel icon={GitBranch}>Execution spans</IconLabel></h3>
               <label className="trace-side-search">
                 <input value={traceQuery} onChange={(event) => setTraceQuery(event.target.value)} placeholder="Search trace" />
               </label>
+              {traceLoading && <p className="muted-text">Loading durable trace...</p>}
+              {traceError && <p className="trace-load-warning">{traceError} Showing embedded trace steps.</p>}
               {filteredTraceItems.length === 0 ? (
                 <p className="muted-text">No trace steps match.</p>
               ) : filteredTraceItems.map(({ step, index }) => (
                 <button key={`${step.step}-${index}`} className={index === selectedTraceItem?.index ? "active" : ""} type="button" onClick={() => setSelectedTraceIndex(index)}>
                   <span>{index + 1}. {step.step}</span>
-                  <em>{step.status}</em>
+                  <em>{formatTraceDuration(step.span?.duration_ms || step.metadata?.duration_ms)} · {step.status}</em>
                 </button>
               ))}
             </aside>
             <div className="trace-content">
-              <TraceSummary metadata={message.metadata || {}} />
+              <div className="trace-toolbar">
+                <div className="trace-toolbar-header">
+                  <button
+                    type="button"
+                    className="trace-overview-toggle"
+                    aria-expanded={!traceOverviewCollapsed}
+                    aria-controls="trace-overview-content"
+                    onClick={() => setTraceOverviewCollapsed((collapsed) => !collapsed)}
+                  >
+                    <IconOnly icon={ChevronRight} />
+                    <span>Trace overview</span>
+                    <em>{executionSpans.length || traceSteps.length} steps</em>
+                  </button>
+                  <div className="trace-toolbar-actions">
+                    <button type="button" className="secondary-action compact-action" onClick={() => copyText(JSON.stringify(traceReport || traceSteps, null, 2))}><IconLabel icon={Copy}>Copy JSON</IconLabel></button>
+                    <button type="button" className="secondary-action compact-action" disabled={!traceReport?.trace_id} onClick={() => downloadTrace(traceReport.trace_id)}><IconLabel icon={Download}>Download JSON</IconLabel></button>
+                  </div>
+                </div>
+                {!traceOverviewCollapsed && (
+                  <div className="trace-overview-content" id="trace-overview-content">
+                    <TraceSummary metadata={message.metadata || {}} report={traceReport} />
+                    {executionSpans.length > 0 && <TraceWaterfall spans={durableSpans} selectedSpanId={selectedSpan?.span_id} onSelect={(spanId) => {
+                      const index = executionSpans.findIndex((span) => span.span_id === spanId);
+                      if (index >= 0) setSelectedTraceIndex(index);
+                    }} />}
+                  </div>
+                )}
+              </div>
               {selectedTrace ? (
                 <article className="trace-step-detail">
                   <header>
@@ -3055,22 +3145,37 @@ function TraceModal({ popup, onClose }) {
                       <p className="eyebrow">Selected step</p>
                       <h3>{selectedTrace.step}</h3>
                     </div>
-                    <span className="status-pill">{selectedTrace.status}</span>
+                    <span className="status-pill">{formatTraceDuration(selectedSpan?.duration_ms || selectedTrace.metadata?.duration_ms)} · {selectedTrace.status}</span>
                   </header>
                   <p>{selectedTrace.detail}</p>
-                  <div className="trace-metadata-grid">
-                    {Object.entries(selectedTrace.metadata || {}).map(([key, value]) => (
-                      <div key={key}>
-                        <dt>{key}</dt>
-                        <dd>{formatMetadataValue(value)}</dd>
+                  {selectedSpan ? (
+                    <>
+                      <div className="trace-detail-tabs" role="tablist">
+                        {["inputs", "outputs", "metrics", "model usage", "raw json"].map((tab) => (
+                          <button key={tab} type="button" className={traceTab === tab ? "active" : ""} onClick={() => setTraceTab(tab)}>{tab}</button>
+                        ))}
                       </div>
-                    ))}
-                    {Object.keys(selectedTrace.metadata || {}).length === 0 && <p className="muted-text">No metadata for this step.</p>}
-                  </div>
-                  <details className="raw-json-panel">
-                    <summary>Raw step JSON</summary>
-                    <pre>{JSON.stringify(selectedTrace, null, 2)}</pre>
-                  </details>
+                      {traceTab === "inputs" && <TraceJsonPanel value={selectedSpan.input || {}} empty="No input payload recorded." />}
+                      {traceTab === "outputs" && (
+                        <>
+                          {retrievalCandidates.length > 0 && <TraceRetrievalTable candidates={retrievalCandidates} onOpenSource={onOpenSource} />}
+                          <TraceJsonPanel value={selectedSpan.output || {}} empty="No output payload recorded." />
+                        </>
+                      )}
+                      {traceTab === "metrics" && <TraceFacts value={{ duration_ms: selectedSpan.duration_ms, ...(selectedSpan.metrics || {}) }} />}
+                      {traceTab === "model usage" && <TraceJsonPanel value={{ usage_event_ids: selectedSpan.model_usage_event_ids || [], metrics: selectedSpan.metrics || {} }} empty="No Model Gateway usage event was linked." />}
+                      {traceTab === "raw json" && <TraceJsonPanel value={selectedSpan} />}
+                    </>
+                  ) : (
+                    <>
+                      <div className="trace-metadata-grid">
+                        {Object.entries(selectedTrace.metadata || {}).map(([key, value]) => (
+                          <div key={key}><dt>{key}</dt><dd>{formatMetadataValue(value)}</dd></div>
+                        ))}
+                      </div>
+                      <TraceJsonPanel value={selectedTrace} />
+                    </>
+                  )}
                 </article>
               ) : (
                 <div className="empty-state"><strong>No trace metadata returned</strong><p>Ask a new question to generate trace steps.</p></div>
@@ -3083,11 +3188,12 @@ function TraceModal({ popup, onClose }) {
   );
 }
 
-function TraceSummary({ metadata }) {
+function TraceSummary({ metadata, report }) {
   const classifier = metadata.actual_classifier || {};
   const planner = metadata.actual_planner || {};
   const embedding = metadata.query_embedding || {};
   const citationStatus = metadata.citation_validation?.status || (metadata.citations_enabled ? "-" : "disabled");
+  const summary = report?.summary || metadata.trace_summary || {};
   return (
     <section className="trace-summary-card">
       <div><dt>Route</dt><dd>{metadata.route_label || metadata.route_level || "-"}</dd></div>
@@ -3123,9 +3229,92 @@ function TraceSummary({ metadata }) {
       </div>
       <div><dt>Citations</dt><dd>{citationStatus}</dd></div>
       <div><dt>Latency</dt><dd>{metadata.latency_ms ? `${metadata.latency_ms} ms` : "-"}</dd></div>
+      <div><dt>Total trace</dt><dd>{formatTraceDuration(summary.duration_ms)}</dd></div>
+      <div><dt>Tokens</dt><dd>{summary.total_tokens ?? "-"}</dd></div>
+      <div><dt>Cost</dt><dd>${Number(summary.estimated_cost_usd || 0).toFixed(6)}</dd></div>
+      <div><dt>Warnings</dt><dd>{summary.warning_count ?? 0}</dd></div>
       <div><dt>Knowledge base</dt><dd>{metadata.knowledge_base_name || "-"}</dd></div>
     </section>
   );
+}
+
+function TraceWaterfall({ spans, selectedSpanId, onSelect }) {
+  const durations = spans.map((span) => Number(span.duration_ms || 0));
+  const total = Math.max(Number(spans.at(-1)?.finished_at ? new Date(spans.at(-1).finished_at) - new Date(spans[0]?.started_at) : 0), ...durations, 1);
+  const origin = new Date(spans[0]?.started_at || 0).getTime();
+  const isOrchestrationSpan = (span) => span.category === "orchestration" && !span.parent_span_id;
+  const executionSpanCount = spans.filter((span) => !isOrchestrationSpan(span)).length;
+  return (
+    <section className="trace-waterfall" aria-label="Latency waterfall">
+      <header><strong>Latency waterfall</strong><span>{executionSpanCount} steps + total</span></header>
+      <div className="trace-waterfall-rows">
+        {spans.map((span, index) => {
+          const offset = Math.max(new Date(span.started_at).getTime() - origin, 0);
+          const barStyle = { marginLeft: `${Math.min((offset / total) * 100, 94)}%`, width: `${Math.max((Number(span.duration_ms || 0) / total) * 100, 1)}%` };
+          if (isOrchestrationSpan(span)) {
+            return (
+              <div key={span.span_id} className="trace-waterfall-total" title={`Total execution: ${formatTraceDuration(span.duration_ms)}`}>
+                <span>Total</span>
+                <i style={barStyle} />
+              </div>
+            );
+          }
+          const stepNumber = spans.slice(0, index + 1).filter((item) => !isOrchestrationSpan(item)).length;
+          return (
+            <button key={span.span_id} type="button" className={span.span_id === selectedSpanId ? "active" : ""} onClick={() => onSelect(span.span_id)} title={`${span.name}: ${formatTraceDuration(span.duration_ms)}`}>
+              <span>{stepNumber}</span>
+              <i style={barStyle} />
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function TraceJsonPanel({ value, empty = "" }) {
+  if (empty && (!value || Object.keys(value).length === 0)) return <p className="muted-text">{empty}</p>;
+  return <pre className="trace-json-view">{JSON.stringify(value, null, 2)}</pre>;
+}
+
+function TraceFacts({ value }) {
+  return <dl className="trace-metadata-grid">{Object.entries(value || {}).map(([key, item]) => <div key={key}><dt>{key}</dt><dd>{formatMetadataValue(item)}</dd></div>)}</dl>;
+}
+
+function TraceRetrievalTable({ candidates, onOpenSource }) {
+  return (
+    <div className="trace-retrieval-table-wrap">
+      <table className="trace-retrieval-table">
+        <thead><tr><th>Selected</th><th>Chunk</th><th>BM25 raw</th><th>BM25 norm</th><th>Dense</th><th>Dense norm</th><th>Hybrid</th><th>Rank</th></tr></thead>
+        <tbody>{candidates.map((candidate, index) => (
+          <tr key={candidate.chunk_id || index} className={candidate.selected ? "selected" : ""}>
+            <td>{candidate.selected ? "Yes" : "No"}</td><td title={candidate.document_id}><button type="button" onClick={() => onOpenSource?.(candidate)}>{candidate.chunk_id || "-"}</button></td>
+            <td>{formatTraceScore(candidate.bm25_raw_score)}</td><td>{formatTraceScore(candidate.bm25_normalized_score)}</td>
+            <td>{formatTraceScore(candidate.dense_raw_score)}</td><td>{formatTraceScore(candidate.dense_normalized_score)}</td>
+            <td>{formatTraceScore(candidate.hybrid_score)}</td><td>{candidate.selected_rank ?? "-"}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
+
+function traceRetrievalCandidates(span) {
+  if (!span?.output) return [];
+  if (Array.isArray(span.output.candidates)) return span.output.candidates;
+  const steps = span.output.diagnostics?.steps;
+  if (!Array.isArray(steps)) return [];
+  return steps.flatMap((step) => Array.isArray(step.candidates) ? step.candidates.map((candidate) => ({ ...candidate, retrieval_step: step.retrieval_step })) : []);
+}
+
+function formatTraceDuration(value) {
+  const milliseconds = Number(value || 0);
+  if (milliseconds >= 1000) return `${(milliseconds / 1000).toFixed(2)} s`;
+  return `${milliseconds.toFixed(milliseconds < 10 ? 2 : 0)} ms`;
+}
+
+function formatTraceScore(value) {
+  return Number.isFinite(Number(value)) ? Number(value).toFixed(4) : "-";
 }
 function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAction }) {
   const [items, setItems] = useState([]);

@@ -34,6 +34,7 @@ from aragbiz.factory import (
     build_model_farm_service,
     build_model_gateway,
     build_sample_pipeline,
+    build_trace_service,
 )
 from aragbiz.feedback import append_feedback
 from aragbiz.schemas import RetrievalMode
@@ -63,6 +64,8 @@ chat_service = build_chat_service(config)
 auth_service = build_auth_service(config)
 job_service = build_job_service(config)
 blob_store = build_blob_store(config)
+trace_service = build_trace_service(config)
+trace_service.purge_expired(limit=100)
 evaluation_service = build_evaluation_service(
     config,
     knowledge_service=knowledge_service,
@@ -874,6 +877,8 @@ def cancel_job(job_id: str, authorization: str = Header(default="")) -> JobRespo
 @app.post("/answer", response_model=AnswerResponse)
 def answer(request: AnswerRequest, authorization: str = Header(default="")) -> AnswerResponse:
     user = _require_user(authorization)
+    request_id = request.request_id or f"request-{uuid.uuid4().hex}"
+    recorder = trace_service.create_recorder(request_id, conversation_id=request.conversation_id or "")
     service = AdaptiveRAGAnswerService(
         router=pipeline.router,
         generator=pipeline.generator,
@@ -904,12 +909,13 @@ def answer(request: AnswerRequest, authorization: str = Header(default="")) -> A
                 retrieval_mode=request.retrieval_mode,
                 top_k=request.top_k,
                 chat_configuration=chat_configuration,
-                request_id=request.request_id or f"request-{uuid.uuid4().hex}",
+                request_id=request_id,
                 user_id=user.id,
                 conversation_id=request.conversation_id or "",
                 conversation_history=conversation_history,
                 conversation_history_max_exchanges=history_max_exchanges,
                 conversation_history_max_characters=history_max_characters,
+                trace_recorder=recorder,
             ),
         )
         result.metadata["chat_configuration_id"] = chat_configuration_id
@@ -925,8 +931,10 @@ def answer(request: AnswerRequest, authorization: str = Header(default="")) -> A
             chat_configuration=chat_configuration,
         )
     except KeyError as exc:
+        recorder.finalize("failed", error=str(exc))
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (AnsweringError, KnowledgeProcessingError, ModelFarmError, ValueError) as exc:
+        recorder.finalize("failed", error=str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     contexts = [
         ContextResponse(
@@ -952,12 +960,36 @@ def answer(request: AnswerRequest, authorization: str = Header(default="")) -> A
         request_id=str(result.metadata.get("request_id") or ""),
     )
     version = chat_service.list_message_versions(assistant_message.id)[-1]
+    recorder.update_links(
+        conversation_id=conversation.id,
+        message_id=assistant_message.id,
+        message_version_id=version.id,
+    )
+    recorder.add_instant_span(
+        "Message persistence",
+        "persistence",
+        input_payload={"conversation_id": conversation.id, "request_id": request_id},
+        output_payload={
+            "assistant_message_id": assistant_message.id,
+            "message_version_id": version.id,
+            "message_version_number": version.version_number,
+        },
+    )
+    recorder.add_instant_span(
+        "Chat output",
+        "output",
+        input_payload={"answer": result.answer, "contexts": context_payloads},
+        output_payload={"status": "completed", "characters": len(result.answer)},
+    )
+    recorder.finalize("completed", route_level=str(result.metadata.get("route_level") or ""))
     result.metadata.update(
         {
             "question": result.question,
             "assistant_message_id": assistant_message.id,
             "message_version_id": version.id,
             "message_version_number": version.version_number,
+            "trace_id": recorder.trace_id,
+            "trace_summary": dict(recorder.report.get("summary") or {}),
         }
     )
     chat_service.update_message(assistant_message.id, metadata=result.metadata)
@@ -1003,6 +1035,7 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
         cancellation_token = answer_cancellations.register(request_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    recorder = trace_service.create_recorder(request_id, conversation_id=request.conversation_id or "")
 
     async def events():
         partial_answer = ""
@@ -1019,6 +1052,7 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                 "conversation_id": request.conversation_id or "",
                 "user_message_id": "",
                 "assistant_message_id": "",
+                "trace_id": recorder.trace_id,
                 "status": "accepted",
             },
         )
@@ -1077,6 +1111,11 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
             assistant_version = (
                 await asyncio.to_thread(chat_service.list_message_versions, assistant_message.id)
             )[-1]
+            recorder.update_links(
+                conversation_id=conversation.id,
+                message_id=assistant_message.id,
+                message_version_id=assistant_version.id,
+            )
             cancellation_token.raise_if_cancelled()
             assistant_metadata.update(
                 {
@@ -1094,6 +1133,7 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                     "assistant_message_id": assistant_message.id,
                     "message_version_id": assistant_version.id,
                     "message_version_number": assistant_version.version_number,
+                    "trace_id": recorder.trace_id,
                     "status": "persisted",
                 },
             )
@@ -1129,6 +1169,7 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                     conversation_history_max_exchanges=history_max_exchanges,
                     conversation_history_max_characters=history_max_characters,
                     cancellation_token=cancellation_token,
+                    trace_recorder=recorder,
                 ),
             ):
                 if event.type == "trace":
@@ -1225,11 +1266,55 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                         metadata=response.metadata,
                         status="completed",
                     )
+                    recorder.add_instant_span(
+                        "Message persistence",
+                        "persistence",
+                        input_payload={"request_id": request_id, "conversation_id": conversation.id},
+                        output_payload={
+                            "assistant_message_id": assistant_message.id,
+                            "message_version_id": assistant_version.id,
+                            "message_version_number": assistant_version.version_number,
+                        },
+                    )
+                    recorder.add_instant_span(
+                        "Chat output",
+                        "output",
+                        input_payload={"answer": response.answer, "contexts": [_model_dump(item) for item in response.contexts]},
+                        output_payload={"status": "completed", "characters": len(response.answer)},
+                    )
+                    recorder.finalize("completed", route_level=str(response.metadata.get("route_level") or ""))
+                    response.metadata.update(
+                        {"trace_id": recorder.trace_id, "trace_summary": dict(recorder.report.get("summary") or {})}
+                    )
+                    await asyncio.to_thread(
+                        chat_service.update_message,
+                        assistant_message.id,
+                        metadata=response.metadata,
+                    )
+                    await asyncio.to_thread(
+                        chat_service.update_message_version,
+                        assistant_version.id,
+                        metadata=response.metadata,
+                    )
                     terminal_status = "completed"
                     yield _sse("completed", _model_dump(response))
         except AnswerCancelled as exc:
             terminal_status = "cancelled"
-            cancelled_metadata = {**assistant_metadata, "error": str(exc), "cancelled": True}
+            recorder.add_instant_span(
+                "Chat output",
+                "output",
+                status="cancelled",
+                input_payload={"partial_answer": partial_answer, "contexts": context_payloads},
+                output_payload={"status": "cancelled"},
+            )
+            recorder.finalize("cancelled", error=str(exc))
+            cancelled_metadata = {
+                **assistant_metadata,
+                "error": str(exc),
+                "cancelled": True,
+                "trace_id": recorder.trace_id,
+                "trace_summary": dict(recorder.report.get("summary") or {}),
+            }
             if assistant_message is not None:
                 await asyncio.to_thread(
                     chat_service.update_message,
@@ -1261,13 +1346,14 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
         except asyncio.CancelledError:
             terminal_status = "cancelled"
             cancellation_token.cancel("Streaming request was cancelled by the client.")
+            recorder.finalize("cancelled", error="Streaming request was cancelled by the client.")
             if assistant_message is not None:
                 await asyncio.to_thread(
                     chat_service.update_message,
                     assistant_message.id,
                     content=partial_answer,
                     contexts=context_payloads,
-                    metadata={**assistant_metadata, "error": "Streaming request was cancelled by the client."},
+                    metadata={**assistant_metadata, "error": "Streaming request was cancelled by the client.", "trace_id": recorder.trace_id, "trace_summary": dict(recorder.report.get("summary") or {})},
                     status="cancelled",
                 )
             if assistant_version is not None:
@@ -1276,19 +1362,20 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                     assistant_version.id,
                     content=partial_answer,
                     contexts=context_payloads,
-                    metadata={**assistant_metadata, "error": "Streaming request was cancelled by the client."},
+                    metadata={**assistant_metadata, "error": "Streaming request was cancelled by the client.", "trace_id": recorder.trace_id, "trace_summary": dict(recorder.report.get("summary") or {})},
                     status="cancelled",
                 )
             raise
         except HTTPException as exc:
             terminal_status = "failed"
+            recorder.finalize("failed", error=str(exc.detail))
             if assistant_message is not None:
                 await asyncio.to_thread(
                     chat_service.update_message,
                     assistant_message.id,
                     content=partial_answer,
                     contexts=context_payloads,
-                    metadata={**assistant_metadata, "error": str(exc.detail)},
+                    metadata={**assistant_metadata, "error": str(exc.detail), "trace_id": recorder.trace_id, "trace_summary": dict(recorder.report.get("summary") or {})},
                     status="failed",
                 )
             if assistant_version is not None:
@@ -1297,19 +1384,20 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                     assistant_version.id,
                     content=partial_answer,
                     contexts=context_payloads,
-                    metadata={**assistant_metadata, "error": str(exc.detail)},
+                    metadata={**assistant_metadata, "error": str(exc.detail), "trace_id": recorder.trace_id, "trace_summary": dict(recorder.report.get("summary") or {})},
                     status="failed",
                 )
             yield _sse("error", {"status": exc.status_code, "detail": exc.detail, "request_id": request_id})
         except (AnsweringError, KnowledgeProcessingError, ModelFarmError, ValueError) as exc:
             terminal_status = "failed"
+            recorder.finalize("failed", error=str(exc))
             if assistant_message is not None:
                 await asyncio.to_thread(
                     chat_service.update_message,
                     assistant_message.id,
                     content=partial_answer,
                     contexts=context_payloads,
-                    metadata={**assistant_metadata, "error": str(exc)},
+                    metadata={**assistant_metadata, "error": str(exc), "trace_id": recorder.trace_id, "trace_summary": dict(recorder.report.get("summary") or {})},
                     status="failed",
                 )
             if assistant_version is not None:
@@ -1318,19 +1406,20 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                     assistant_version.id,
                     content=partial_answer,
                     contexts=context_payloads,
-                    metadata={**assistant_metadata, "error": str(exc)},
+                    metadata={**assistant_metadata, "error": str(exc), "trace_id": recorder.trace_id, "trace_summary": dict(recorder.report.get("summary") or {})},
                     status="failed",
                 )
             yield _sse("error", {"status": 400, "detail": str(exc), "request_id": request_id})
         except Exception as exc:
             terminal_status = "failed"
+            recorder.finalize("failed", error=str(exc))
             if assistant_message is not None:
                 await asyncio.to_thread(
                     chat_service.update_message,
                     assistant_message.id,
                     content=partial_answer,
                     contexts=context_payloads,
-                    metadata={**assistant_metadata, "error": str(exc)},
+                    metadata={**assistant_metadata, "error": str(exc), "trace_id": recorder.trace_id, "trace_summary": dict(recorder.report.get("summary") or {})},
                     status="failed",
                 )
             if assistant_version is not None:
@@ -1339,7 +1428,7 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                     assistant_version.id,
                     content=partial_answer,
                     contexts=context_payloads,
-                    metadata={**assistant_metadata, "error": str(exc)},
+                    metadata={**assistant_metadata, "error": str(exc), "trace_id": recorder.trace_id, "trace_summary": dict(recorder.report.get("summary") or {})},
                     status="failed",
                 )
             yield _sse("error", {"status": 500, "detail": str(exc), "request_id": request_id})
@@ -1361,6 +1450,7 @@ async def _stream_existing_answer(
         cancellation_token = answer_cancellations.register(request_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    recorder = trace_service.create_recorder(request_id)
     try:
         target = chat_service.get_message(message_id)
         if target.role != "assistant":
@@ -1421,17 +1511,26 @@ async def _stream_existing_answer(
             status="pending",
             request_id=request_id,
         )
+        recorder.update_links(
+            conversation_id=conversation.id,
+            message_id=target.id,
+            message_version_id=version.id,
+        )
     except HTTPException:
         answer_cancellations.finish(request_id, "failed")
+        recorder.finalize("failed", error="Answer version request validation failed.")
         raise
     except KeyError as exc:
         answer_cancellations.finish(request_id, "failed")
+        recorder.finalize("failed", error=str(exc))
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         answer_cancellations.finish(request_id, "failed")
+        recorder.finalize("failed", error=str(exc))
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ModelFarmError as exc:
         answer_cancellations.finish(request_id, "failed")
+        recorder.finalize("failed", error=str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     async def events():
@@ -1443,6 +1542,7 @@ async def _stream_existing_answer(
             "message_version_id": version.id,
             "message_version_number": version.version_number,
             "trace_steps": trace_steps,
+            "trace_id": recorder.trace_id,
         }
         terminal_status = "failed"
         yield _sse(
@@ -1454,6 +1554,7 @@ async def _stream_existing_answer(
                 "assistant_message_id": target.id,
                 "message_version_id": version.id,
                 "message_version_number": version.version_number,
+                "trace_id": recorder.trace_id,
                 "status": "persisted",
             },
         )
@@ -1490,6 +1591,7 @@ async def _stream_existing_answer(
                     conversation_history_max_exchanges=history_max_exchanges,
                     conversation_history_max_characters=history_max_characters,
                     cancellation_token=cancellation_token,
+                    trace_recorder=recorder,
                 ),
             ):
                 if event.type == "trace":
@@ -1570,11 +1672,38 @@ async def _stream_existing_answer(
                         top_k=request.top_k,
                         metadata={"chat_configuration": chat_configuration},
                     )
+                    recorder.add_instant_span(
+                        "Message persistence",
+                        "persistence",
+                        input_payload={"request_id": request_id, "operation": operation},
+                        output_payload={
+                            "assistant_message_id": target.id,
+                            "message_version_id": version.id,
+                            "message_version_number": version.version_number,
+                        },
+                    )
+                    recorder.add_instant_span(
+                        "Chat output",
+                        "output",
+                        input_payload={"answer": response.answer, "contexts": [_model_dump(item) for item in response.contexts]},
+                        output_payload={"status": "completed", "operation": operation},
+                    )
+                    recorder.finalize("completed", route_level=str(response.metadata.get("route_level") or ""))
+                    response.metadata.update(
+                        {"trace_id": recorder.trace_id, "trace_summary": dict(recorder.report.get("summary") or {})}
+                    )
+                    await asyncio.to_thread(
+                        chat_service.update_message_version,
+                        version.id,
+                        metadata=response.metadata,
+                    )
+                    await asyncio.to_thread(chat_service.activate_message_version, version.id)
                     terminal_status = "completed"
                     yield _sse("completed", _model_dump(response))
         except AnswerCancelled as exc:
             terminal_status = "cancelled"
-            cancelled_metadata = {**metadata, "error": str(exc), "cancelled": True}
+            recorder.finalize("cancelled", error=str(exc))
+            cancelled_metadata = {**metadata, "error": str(exc), "cancelled": True, "trace_id": recorder.trace_id, "trace_summary": dict(recorder.report.get("summary") or {})}
             await asyncio.to_thread(
                 chat_service.update_message_version,
                 version.id,
@@ -1596,34 +1725,37 @@ async def _stream_existing_answer(
         except asyncio.CancelledError:
             terminal_status = "cancelled"
             cancellation_token.cancel(f"{operation.title()} was cancelled by the client.")
+            recorder.finalize("cancelled", error=f"{operation.title()} was cancelled by the client.")
             await asyncio.to_thread(
                 chat_service.update_message_version,
                 version.id,
                 content=partial_answer,
                 contexts=context_payloads,
-                metadata={**metadata, "error": "Regeneration was cancelled by the client."},
+                metadata={**metadata, "error": "Regeneration was cancelled by the client.", "trace_id": recorder.trace_id, "trace_summary": dict(recorder.report.get("summary") or {})},
                 status="cancelled",
             )
             raise
         except (AnsweringError, KnowledgeProcessingError, ModelFarmError, ValueError) as exc:
             terminal_status = "failed"
+            recorder.finalize("failed", error=str(exc))
             await asyncio.to_thread(
                 chat_service.update_message_version,
                 version.id,
                 content=partial_answer,
                 contexts=context_payloads,
-                metadata={**metadata, "error": str(exc)},
+                metadata={**metadata, "error": str(exc), "trace_id": recorder.trace_id, "trace_summary": dict(recorder.report.get("summary") or {})},
                 status="failed",
             )
             yield _sse("error", {"status": 400, "detail": str(exc), "request_id": request_id})
         except Exception as exc:
             terminal_status = "failed"
+            recorder.finalize("failed", error=str(exc))
             await asyncio.to_thread(
                 chat_service.update_message_version,
                 version.id,
                 content=partial_answer,
                 contexts=context_payloads,
-                metadata={**metadata, "error": str(exc)},
+                metadata={**metadata, "error": str(exc), "trace_id": recorder.trace_id, "trace_summary": dict(recorder.report.get("summary") or {})},
                 status="failed",
             )
             yield _sse("error", {"status": 500, "detail": str(exc), "request_id": request_id})
@@ -1670,6 +1802,51 @@ def feedback(request: FeedbackRequest) -> Dict[str, str]:
     payload = request.model_dump() if hasattr(request, "model_dump") else request.dict()
     append_feedback(config.feedback_store, payload)
     return {"status": "recorded"}
+
+
+@app.get("/traces/{trace_id}/download")
+def download_trace(trace_id: str, authorization: str = Header(default="")) -> JSONResponse:
+    _require_user(authorization)
+    try:
+        report = trace_service.get_report(trace_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return JSONResponse(
+        content=jsonable_encoder(report),
+        headers={"Content-Disposition": f'attachment; filename="{trace_id}.json"'},
+    )
+
+
+@app.get("/traces/{trace_id}", response_model=Dict[str, Any])
+def get_trace(trace_id: str, authorization: str = Header(default="")) -> Dict[str, Any]:
+    _require_user(authorization)
+    try:
+        return trace_service.get_report(trace_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/chat/messages/{message_id}/trace", response_model=Dict[str, Any])
+def get_message_trace(
+    message_id: str,
+    version_number: Optional[int] = Query(default=None, ge=1),
+    authorization: str = Header(default=""),
+) -> Dict[str, Any]:
+    _require_user(authorization)
+    try:
+        message = chat_service.get_message(message_id)
+        message_version_id = ""
+        if version_number is not None:
+            version = next(
+                (item for item in chat_service.list_message_versions(message.id) if item.version_number == version_number),
+                None,
+            )
+            if version is None:
+                raise KeyError(f"Answer version not found: {message_id} version {version_number}")
+            message_version_id = version.id
+        return trace_service.find_message_report(message.id, message_version_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/chat/configurations", response_model=List[ChatConfigurationResponse])

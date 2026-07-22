@@ -162,6 +162,39 @@ export async function listChatMessageVersions(messageId) {
   return response.json();
 }
 
+export async function getTrace(traceId) {
+  const response = await fetch(`${API_BASE_URL}/traces/${encodeURIComponent(traceId)}`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Trace request failed");
+  return response.json();
+}
+
+export async function getChatMessageTrace(messageId, versionNumber = null) {
+  const params = new URLSearchParams();
+  if (versionNumber) params.set("version_number", String(versionNumber));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(`${API_BASE_URL}/chat/messages/${encodeURIComponent(messageId)}/trace${suffix}`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Message trace request failed");
+  return response.json();
+}
+
+export async function downloadTrace(traceId) {
+  const response = await fetch(`${API_BASE_URL}/traces/${encodeURIComponent(traceId)}/download`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Trace download failed");
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${traceId}.json`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 async function consumeSseResponse(response, onEvent) {
   if (!response.body) throw new Error("Streaming is not supported by this browser.");
 

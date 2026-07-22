@@ -31,6 +31,7 @@ from aragbiz.model_farm import ModelCallContext, ModelFarmError, ModelFarmServic
 from aragbiz.retrieval import InMemoryHybridRetriever
 from aragbiz.routing import AdaptiveRouter
 from aragbiz.schemas import AnswerResult, ComplexityLabel, Document, RetrievedContext, RetrievalMode
+from aragbiz.tracing import SpanHandle, TraceRecorder
 
 AnswerMode = Literal["adaptive", "direct", "simple_rag", "complex_rag"]
 RouteLevel = Literal["l1_direct", "l2_simple_rag", "l3_complex_rag"]
@@ -55,6 +56,7 @@ class AnswerOptions:
     conversation_history_max_exchanges: int = DEFAULT_HISTORY_MAX_EXCHANGES
     conversation_history_max_characters: int = DEFAULT_HISTORY_MAX_CHARACTERS
     cancellation_token: Optional[CancellationToken] = None
+    trace_recorder: Optional[TraceRecorder] = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,7 @@ class PreparedAnswer:
     decomposition: QueryDecompositionResult
     retrieval_steps: List[Dict[str, Any]]
     aggregation_summary: Dict[str, Any]
+    retrieval_diagnostics: Dict[str, Any]
     query_embedding: Dict[str, Any]
     citations_enabled: bool
     prompt: PromptBuildResult
@@ -166,6 +169,17 @@ class AdaptiveRAGAnswerService:
 
         answer_parts: List[str] = []
         model_completed: Dict[str, Any] = {}
+        generation_span = _begin_span(
+            resolved_options,
+            "Generator execution",
+            "generation",
+            {
+                "messages": [{"role": "user", "content": prepared.prompt.prompt}],
+                "parameters": prepared.chat_configuration.get("generation_parameters", {}),
+                "configured_deployment_id": prepared.chat_configuration.get("generator_deployment_id", ""),
+                "fallback_deployment_ids": prepared.chat_configuration.get("fallback_deployment_ids", []),
+            },
+        )
         try:
             async for event in self._stream_generation(prepared):
                 _raise_if_cancelled(resolved_options)
@@ -211,6 +225,21 @@ class AdaptiveRAGAnswerService:
                 "finish_reason": model_completed.get("finish_reason", ""),
             },
         )
+        _finish_span(
+            resolved_options,
+            generation_span,
+            status=str(generation.status or "completed"),
+            detail=f"Streamed {generation.provider}/{generation.model} generator output.",
+            output_payload={
+                "answer": answer_text,
+                "provider": generation.provider,
+                "model": generation.model,
+                "finish_reason": generation.metadata.get("finish_reason", ""),
+                "metadata": generation.metadata,
+            },
+            metrics=_generation_metrics(generation),
+            model_usage_event_ids=_usage_event_ids(generation.metadata),
+        )
         result = self._finalize_answer(prepared, generation)
         for step in result.metadata.get("trace_steps", [])[len(prepared.trace_steps) :]:
             yield AnswerStreamEvent("trace", step)
@@ -220,6 +249,13 @@ class AdaptiveRAGAnswerService:
         options = options or AnswerOptions()
         start = time.perf_counter()
         original_query = str(query or "").strip()
+        if options.trace_recorder is not None:
+            options.trace_recorder.add_instant_span(
+                "Chat input",
+                "input",
+                input_payload={"query": original_query, "characters": len(original_query)},
+                output_payload={"accepted": bool(original_query)},
+            )
         top_k = max(1, min(int(options.top_k), 50))
         selected_document_ids = _normalize_document_ids(options.document_ids)
         chat_configuration = dict(options.chat_configuration or {})
@@ -243,6 +279,32 @@ class AdaptiveRAGAnswerService:
             if conversation_awareness_enabled
             else []
         )
+        if options.trace_recorder is not None:
+            options.trace_recorder.add_instant_span(
+                "Conversation context",
+                "conversation",
+                status="completed" if conversation_history else "skipped",
+                input_payload={
+                    "enabled": conversation_awareness_enabled,
+                    "max_exchanges": conversation_history_max_exchanges,
+                    "max_characters": conversation_history_max_characters,
+                },
+                output_payload={
+                    "history": conversation_history,
+                    "exchange_count": conversation_history_exchange_count(conversation_history),
+                    "character_count": conversation_history_characters(conversation_history),
+                },
+            )
+        reformulation_span = _begin_span(
+            options,
+            "Query reformulation",
+            "planning",
+            {
+                "original_query": original_query,
+                "conversation_history": conversation_history,
+                "planner_deployment_id": chat_configuration.get("planner_deployment_id", ""),
+            },
+        )
         reformulation = self.query_reformulator.reformulate(
             original_query,
             conversation_history,
@@ -261,6 +323,29 @@ class AdaptiveRAGAnswerService:
             history_max_characters=conversation_history_max_characters,
         )
         standalone_query = reformulation.standalone_query
+        _finish_span(
+            options,
+            reformulation_span,
+            status="warning" if reformulation.warning else ("completed" if reformulation.rewritten else "skipped"),
+            detail=reformulation.warning or reformulation.strategy,
+            output_payload={
+                "standalone_query": standalone_query,
+                "rewritten": reformulation.rewritten,
+                "follow_up_detected": reformulation.follow_up_detected,
+                "strategy": reformulation.strategy,
+                "planner": reformulation.planner_metadata,
+            },
+            warning=reformulation.warning,
+        )
+        classification_span = _begin_span(
+            options,
+            "Query complexity classifier",
+            "classification",
+            {
+                "query": standalone_query,
+                "configured_deployment_id": _configuration_value(chat_configuration, "classifier_deployment_id", ""),
+            },
+        )
         classification = self._classify_query(
             standalone_query,
             chat_configuration,
@@ -269,7 +354,34 @@ class AdaptiveRAGAnswerService:
             external_processing_allowed,
         )
         complexity_label = classification.label
+        _finish_span(
+            options,
+            classification_span,
+            status="warning" if classification.warning else "completed",
+            detail=classification.warning or f"Predicted {complexity_label} complexity.",
+            output_payload={
+                "label": complexity_label,
+                "configured": classification.configured,
+                "actual": classification.actual,
+                "fallback_used": classification.fallback_used,
+            },
+            metrics={
+                "latency_ms": classification.actual.get("latency_ms", 0),
+                "input_tokens": classification.actual.get("input_tokens", 0),
+                "output_tokens": classification.actual.get("output_tokens", 0),
+                "estimated_cost_usd": classification.actual.get("estimated_cost_usd", 0.0),
+            },
+            model_usage_event_ids=_usage_event_ids(classification.actual),
+            warning=classification.warning,
+        )
         route_level = self._resolve_route(options.mode, complexity_label)
+        if options.trace_recorder is not None:
+            options.trace_recorder.add_instant_span(
+                "Route decision",
+                "routing",
+                input_payload={"requested_mode": options.mode, "complexity_label": complexity_label},
+                output_payload={"route_level": route_level, "route_label": _route_label(route_level)},
+            )
         if route_level == "l2_simple_rag" and knowledge_base is None:
             raise AnsweringError("Select a knowledge base before using L2 Simple RAG.")
         if route_level == "l3_complex_rag" and knowledge_base is None:
@@ -353,6 +465,7 @@ class AdaptiveRAGAnswerService:
         decomposition = QueryDecompositionResult([], "not_applicable")
         retrieval_steps: List[Dict[str, Any]] = []
         aggregation_summary: Dict[str, Any] = {}
+        retrieval_diagnostics: Dict[str, Any] = {}
         query_embedding = self.knowledge_service.query_embedding_details(knowledge_base.id) if knowledge_base else {}
         query_embedding = {
             **query_embedding,
@@ -364,13 +477,40 @@ class AdaptiveRAGAnswerService:
         }
         if route_level == "l2_simple_rag":
             assert knowledge_base is not None
-            contexts = self.retriever.search(
+            retrieval_span = _begin_span(
+                options,
+                "Knowledge base retrieval",
+                "retrieval",
+                {
+                    "query": standalone_query,
+                    "knowledge_base_id": knowledge_base.id,
+                    "mode": options.retrieval_mode,
+                    "top_k": top_k,
+                    "document_ids": selected_document_ids,
+                    "query_embedding": query_embedding,
+                },
+            )
+            contexts, retrieval_diagnostics = self.retriever.search_with_diagnostics(
                 query=standalone_query,
                 knowledge_base_id=knowledge_base.id,
                 top_k=top_k,
                 mode=options.retrieval_mode,
                 document_ids=selected_document_ids,
             )
+            _finish_span(
+                options,
+                retrieval_span,
+                status="completed" if contexts else "empty",
+                detail=f"Retrieved {len(contexts)} chunk(s) from {knowledge_base.name}.",
+                output_payload={"contexts": _context_payloads(contexts), **retrieval_diagnostics},
+                metrics={
+                    "candidate_count": retrieval_diagnostics.get("candidate_count", 0),
+                    "selected_count": len(contexts),
+                    "bm25_weight": self.retriever.bm25_weight,
+                    "dense_weight": self.retriever.dense_weight,
+                },
+            )
+            _record_retrieval_component_spans(options, retrieval_diagnostics, retrieval_span)
             trace_steps.append(
                 _trace_step(
                     "Knowledge base retrieval",
@@ -391,6 +531,15 @@ class AdaptiveRAGAnswerService:
             retrieval_mode = options.retrieval_mode
         elif route_level == "l3_complex_rag":
             assert knowledge_base is not None
+            decomposition_span = _begin_span(
+                options,
+                "Query decomposition",
+                "planning",
+                {
+                    "standalone_query": standalone_query,
+                    "planner_deployment_id": _configuration_value(chat_configuration, "planner_deployment_id", ""),
+                },
+            )
             decomposition = self.decomposer.decompose_with_planner(
                 standalone_query,
                 planner_deployment_id=str(
@@ -407,6 +556,27 @@ class AdaptiveRAGAnswerService:
                 external_processing_allowed=external_processing_allowed,
             )
             decomposed_queries = decomposition.queries
+            _finish_span(
+                options,
+                decomposition_span,
+                status="warning" if decomposition.warning else "completed",
+                detail=decomposition.warning or decomposition.strategy,
+                output_payload={
+                    "queries": decomposed_queries,
+                    "strategy": decomposition.strategy,
+                    "configured": decomposition.configured,
+                    "actual": decomposition.actual,
+                    "fallback_used": decomposition.fallback_used,
+                },
+                metrics={
+                    "subquery_count": len(decomposed_queries),
+                    "input_tokens": decomposition.actual.get("input_tokens", 0),
+                    "output_tokens": decomposition.actual.get("output_tokens", 0),
+                    "estimated_cost_usd": decomposition.actual.get("estimated_cost_usd", 0.0),
+                },
+                model_usage_event_ids=_usage_event_ids(decomposition.actual),
+                warning=decomposition.warning,
+            )
             trace_steps.append(
                 _trace_step(
                     "Query decomposition",
@@ -421,13 +591,49 @@ class AdaptiveRAGAnswerService:
                     },
                 )
             )
-            contexts, retrieval_steps, aggregation_summary = self._retrieve_multi_step(
+            retrieval_span = _begin_span(
+                options,
+                "Multi-step retrieval",
+                "retrieval",
+                {
+                    "subqueries": decomposed_queries,
+                    "knowledge_base_id": knowledge_base.id,
+                    "mode": options.retrieval_mode,
+                    "top_k": top_k,
+                    "document_ids": selected_document_ids,
+                    "query_embedding": query_embedding,
+                },
+            )
+            contexts, retrieval_steps, aggregation_summary, retrieval_diagnostics = self._retrieve_multi_step(
                 decomposed_queries=decomposed_queries,
                 knowledge_base=knowledge_base,
                 top_k=top_k,
                 mode=options.retrieval_mode,
                 document_ids=selected_document_ids,
             )
+            _finish_span(
+                options,
+                retrieval_span,
+                status="completed" if aggregation_summary.get("candidate_count", 0) else "empty",
+                detail=f"Ran {len(retrieval_steps)} retrieval step(s).",
+                output_payload={
+                    "retrieval_steps": retrieval_steps,
+                    "diagnostics": retrieval_diagnostics,
+                    "selected_contexts": _context_payloads(contexts),
+                },
+                metrics=aggregation_summary,
+            )
+            for diagnostic_step in list(retrieval_diagnostics.get("steps") or []):
+                _record_retrieval_component_spans(options, diagnostic_step, retrieval_span)
+            if options.trace_recorder is not None:
+                options.trace_recorder.add_instant_span(
+                    "Context aggregation",
+                    "aggregation",
+                    status="completed" if contexts else "empty",
+                    input_payload={"retrieval_steps": retrieval_steps},
+                    output_payload={"contexts": _context_payloads(contexts)},
+                    metrics=aggregation_summary,
+                )
             trace_steps.append(
                 _trace_step(
                     "Multi-step retrieval",
@@ -458,6 +664,16 @@ class AdaptiveRAGAnswerService:
         reranker_deployment_id = str(chat_configuration.get("reranker_deployment_id") or "").strip()
         if contexts and reranker_deployment_id and self.model_gateway is not None:
             original_contexts = contexts
+            rerank_span = _begin_span(
+                options,
+                "Context reranking",
+                "reranking",
+                {
+                    "query": standalone_query,
+                    "deployment_id": reranker_deployment_id,
+                    "candidates": _context_payloads(original_contexts),
+                },
+            )
             try:
                 reranked = self.model_gateway.rerank_sync(
                     standalone_query,
@@ -484,6 +700,24 @@ class AdaptiveRAGAnswerService:
                     if 0 <= item.index < len(original_contexts)
                 ]
                 contexts = _with_source_labels(contexts)
+                _finish_span(
+                    options,
+                    rerank_span,
+                    detail=f"Reranked {len(contexts)} context chunk(s).",
+                    output_payload={
+                        "before": _context_payloads(original_contexts),
+                        "after": _context_payloads(contexts),
+                        "metadata": reranked.metadata,
+                    },
+                    metrics={
+                        "candidate_count": len(original_contexts),
+                        "selected_count": len(contexts),
+                        "input_tokens": reranked.metadata.get("input_tokens", 0),
+                        "output_tokens": reranked.metadata.get("output_tokens", 0),
+                        "estimated_cost_usd": reranked.metadata.get("estimated_cost_usd", 0.0),
+                    },
+                    model_usage_event_ids=_usage_event_ids(reranked.metadata),
+                )
                 trace_steps.append(
                     _trace_step(
                         "Context reranking",
@@ -493,6 +727,14 @@ class AdaptiveRAGAnswerService:
                     )
                 )
             except ModelFarmError as exc:
+                _finish_span(
+                    options,
+                    rerank_span,
+                    status="warning",
+                    detail="Reranker failed open; original retrieval order was retained.",
+                    output_payload={"contexts": _context_payloads(original_contexts)},
+                    warning=str(exc),
+                )
                 trace_steps.append(
                     _trace_step(
                         "Context reranking",
@@ -503,6 +745,19 @@ class AdaptiveRAGAnswerService:
                 )
 
         citations_enabled = _citations_enabled(chat_configuration)
+        prompt_span = _begin_span(
+            options,
+            "Prompt builder",
+            "prompt",
+            {
+                "original_query": original_query,
+                "standalone_query": standalone_query,
+                "conversation_history": conversation_history,
+                "contexts": _context_payloads(contexts),
+                "chat_configuration": chat_configuration,
+                "route_level": route_level,
+            },
+        )
         prompt = self.prompt_builder.build(
             original_query,
             contexts,
@@ -510,6 +765,17 @@ class AdaptiveRAGAnswerService:
             route_level=route_level,
             conversation_history=conversation_history,
             standalone_query=standalone_query,
+        )
+        _finish_span(
+            options,
+            prompt_span,
+            detail=f"Built generator prompt with {prompt.context_count} context chunk(s).",
+            output_payload={
+                "prompt": prompt.prompt,
+                "prompt_preview": prompt.prompt_preview,
+                "metadata": prompt.metadata,
+            },
+            metrics={"input_chars": prompt.input_chars, "context_count": prompt.context_count},
         )
         trace_steps.append(
             _trace_step(
@@ -544,6 +810,7 @@ class AdaptiveRAGAnswerService:
             decomposition=decomposition,
             retrieval_steps=retrieval_steps,
             aggregation_summary=aggregation_summary,
+            retrieval_diagnostics=retrieval_diagnostics,
             query_embedding=query_embedding,
             citations_enabled=citations_enabled,
             prompt=prompt,
@@ -638,14 +905,47 @@ class AdaptiveRAGAnswerService:
         )
 
     def _generate_answer(self, prepared: PreparedAnswer) -> GeneratorResult:
+        generation_span = _begin_span(
+            prepared.options,
+            "Generator execution",
+            "generation",
+            {
+                "messages": [{"role": "user", "content": prepared.prompt.prompt}],
+                "parameters": prepared.chat_configuration.get("generation_parameters", {}),
+                "configured_deployment_id": prepared.chat_configuration.get("generator_deployment_id", ""),
+                "fallback_deployment_ids": prepared.chat_configuration.get("fallback_deployment_ids", []),
+            },
+        )
         try:
             generator = self.generator_resolver.resolve(
                 prepared.chat_configuration,
                 external_processing_allowed=prepared.external_processing_allowed,
                 call_context=self._call_context(prepared),
             )
-            return generator.generate(self._generation_request(prepared))
+            result = generator.generate(self._generation_request(prepared))
+            _finish_span(
+                prepared.options,
+                generation_span,
+                status=str(result.status or "completed"),
+                detail=f"Executed {result.provider}/{result.model} generator.",
+                output_payload={
+                    "answer": result.answer,
+                    "provider": result.provider,
+                    "model": result.model,
+                    "metadata": result.metadata,
+                },
+                metrics=_generation_metrics(result),
+                model_usage_event_ids=_usage_event_ids(result.metadata),
+            )
+            return result
         except (GeneratorConfigurationError, GeneratorExecutionError) as exc:
+            _finish_span(
+                prepared.options,
+                generation_span,
+                status="failed",
+                detail="Generator execution failed.",
+                error=str(exc),
+            )
             raise AnsweringError(str(exc)) from exc
 
     async def _stream_generation(self, prepared: PreparedAnswer) -> AsyncIterator[AnswerStreamEvent]:
@@ -706,6 +1006,27 @@ class AdaptiveRAGAnswerService:
                     dict(failed_attempt),
                 )
             )
+            if prepared.options.trace_recorder is not None:
+                prepared.options.trace_recorder.add_observed_span(
+                    "Generator fallback attempt",
+                    "generation",
+                    duration_ms=float(failed_attempt.get("latency_ms") or 0.0),
+                    status="failed",
+                    detail=(
+                        f"{failed_attempt.get('deployment_name') or deployment_id} failed; "
+                        "the next configured fallback was attempted."
+                    ),
+                    input_payload={
+                        "deployment_id": deployment_id,
+                        "provider": failed_attempt.get("provider", ""),
+                        "model": failed_attempt.get("model", ""),
+                        "fallback_index": failed_attempt.get("fallback_index", 0),
+                    },
+                    output_payload={"attempt": failed_attempt},
+                    metrics={"latency_ms": failed_attempt.get("latency_ms", 0)},
+                    model_usage_event_ids=_usage_event_ids(failed_attempt),
+                    error=str(failed_attempt.get("error") or failed_attempt.get("detail") or "Provider attempt failed."),
+                )
         configured_deployment_id = str(prepared.chat_configuration.get("generator_deployment_id") or "")
         configured_generator = {
             "deployment_id": configured_deployment_id,
@@ -763,6 +1084,32 @@ class AdaptiveRAGAnswerService:
             prepared.contexts,
             enabled=prepared.citations_enabled,
         )
+        citation_span = _begin_span(
+            prepared.options,
+            "Citation validation",
+            "validation",
+            {
+                "answer": generation.answer,
+                "available_sources": _citation_source_map(prepared.contexts),
+                "enabled": prepared.citations_enabled,
+            },
+        )
+        _finish_span(
+            prepared.options,
+            citation_span,
+            status=citation_validation["status"],
+            detail=citation_validation["detail"],
+            output_payload=citation_validation,
+            metrics={
+                "cited_count": len(citation_validation.get("cited") or []),
+                "invalid_count": len(citation_validation.get("invalid") or []),
+            },
+            warning=(
+                citation_validation["detail"]
+                if citation_validation["status"] == "warning"
+                else ""
+            ),
+        )
         trace_steps.append(
             _trace_step(
                 "Citation validation",
@@ -805,6 +1152,7 @@ class AdaptiveRAGAnswerService:
             "planner_fallback_used": prepared.decomposition.fallback_used,
             "retrieval_steps": prepared.retrieval_steps,
             "aggregation_summary": prepared.aggregation_summary,
+            "retrieval_diagnostics": prepared.retrieval_diagnostics,
             "latency_ms": elapsed_ms,
             "generator": generation.model,
             "configured_generator": configured_generator,
@@ -823,6 +1171,9 @@ class AdaptiveRAGAnswerService:
             "citations_enabled": prepared.citations_enabled,
             "external_processing_allowed": prepared.external_processing_allowed,
         }
+        if prepared.options.trace_recorder is not None:
+            metadata["trace_id"] = prepared.options.trace_recorder.trace_id
+            metadata["trace_summary"] = dict(prepared.options.trace_recorder.report.get("summary") or {})
         if prepared.knowledge_base is not None:
             metadata.update(
                 {
@@ -842,14 +1193,15 @@ class AdaptiveRAGAnswerService:
         top_k: int,
         mode: RetrievalMode,
         document_ids: Optional[List[str]] = None,
-    ) -> Tuple[List[RetrievedContext], List[Dict[str, Any]], Dict[str, Any]]:
+    ) -> Tuple[List[RetrievedContext], List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
         per_step_top_k = max(2, min(top_k, 8))
         candidates: Dict[str, Dict[str, Any]] = {}
         retrieval_steps: List[Dict[str, Any]] = []
         total_retrieved = 0
+        diagnostic_steps: List[Dict[str, Any]] = []
 
         for subquery_index, subquery in enumerate(decomposed_queries, start=1):
-            step_contexts = self.retriever.search(
+            step_contexts, step_diagnostics = self.retriever.search_with_diagnostics(
                 query=subquery,
                 knowledge_base_id=knowledge_base.id,
                 top_k=per_step_top_k,
@@ -857,6 +1209,13 @@ class AdaptiveRAGAnswerService:
                 document_ids=document_ids,
             )
             total_retrieved += len(step_contexts)
+            diagnostic_steps.append(
+                {
+                    "retrieval_step": f"step-{subquery_index}",
+                    "subquery_index": subquery_index,
+                    **step_diagnostics,
+                }
+            )
             retrieval_steps.append(
                 {
                     "retrieval_step": f"step-{subquery_index}",
@@ -949,7 +1308,12 @@ class AdaptiveRAGAnswerService:
             "per_step_top_k": per_step_top_k,
             "selected_context_ids": [context.document.id for context in selected],
         }
-        return selected, retrieval_steps, aggregation_summary
+        return selected, retrieval_steps, aggregation_summary, {
+            "mode": mode,
+            "subquery_count": len(decomposed_queries),
+            "steps": diagnostic_steps,
+            "aggregation": aggregation_summary,
+        }
 
     def _validate_document_filter(
         self,
@@ -1140,14 +1504,110 @@ class KnowledgeBaseRetriever:
         mode: RetrievalMode = "hybrid",
         document_ids: Optional[List[str]] = None,
     ) -> List[RetrievedContext]:
+        contexts, _ = self.search_with_diagnostics(
+            query,
+            knowledge_base_id,
+            top_k=top_k,
+            mode=mode,
+            document_ids=document_ids,
+        )
+        return contexts
+
+    def search_with_diagnostics(
+        self,
+        query: str,
+        knowledge_base_id: str,
+        top_k: int = 4,
+        mode: RetrievalMode = "hybrid",
+        document_ids: Optional[List[str]] = None,
+    ) -> Tuple[List[RetrievedContext], Dict[str, Any]]:
         document_ids = _normalize_document_ids(document_ids)
+        candidate_limit = max(top_k * 4, 25) if mode == "hybrid" else top_k
+        bm25_contexts: List[RetrievedContext] = []
+        dense_contexts: List[RetrievedContext] = []
+        bm25_raw: Dict[str, float] = {}
+        bm25_duration_ms = 0.0
+        dense_duration_ms = 0.0
+        hybrid_duration_ms = 0.0
         if mode == "bm25":
-            return self._bm25_search(query, knowledge_base_id, top_k, document_ids=document_ids)
-        if mode == "dense":
-            return self._dense_search(query, knowledge_base_id, top_k, document_ids=document_ids)
-        if mode == "hybrid":
-            return self._hybrid_search(query, knowledge_base_id, top_k, document_ids=document_ids)
-        raise AnsweringError(f"Unsupported retrieval mode: {mode}")
+            component_started = time.perf_counter()
+            bm25_contexts, bm25_raw = self._bm25_search_details(
+                query, knowledge_base_id, candidate_limit, document_ids=document_ids
+            )
+            bm25_duration_ms = (time.perf_counter() - component_started) * 1000
+            contexts = bm25_contexts[:top_k]
+        elif mode == "dense":
+            component_started = time.perf_counter()
+            dense_contexts = self._dense_search(query, knowledge_base_id, candidate_limit, document_ids=document_ids)
+            dense_duration_ms = (time.perf_counter() - component_started) * 1000
+            contexts = dense_contexts[:top_k]
+        elif mode == "hybrid":
+            component_started = time.perf_counter()
+            bm25_contexts, bm25_raw = self._bm25_search_details(
+                query, knowledge_base_id, candidate_limit, document_ids=document_ids
+            )
+            bm25_duration_ms = (time.perf_counter() - component_started) * 1000
+            component_started = time.perf_counter()
+            dense_contexts = self._dense_search(query, knowledge_base_id, candidate_limit, document_ids=document_ids)
+            dense_duration_ms = (time.perf_counter() - component_started) * 1000
+            component_started = time.perf_counter()
+            contexts = self._combine_hybrid(bm25_contexts, dense_contexts, top_k)
+            hybrid_duration_ms = (time.perf_counter() - component_started) * 1000
+        else:
+            raise AnsweringError(f"Unsupported retrieval mode: {mode}")
+
+        bm25_scores = {context.document.id: context.score for context in bm25_contexts}
+        dense_scores = {context.document.id: context.score for context in dense_contexts}
+        normalized_bm25 = _normalize_scores(bm25_scores)
+        normalized_dense = _normalize_scores(dense_scores)
+        bm25_ranks = {context.document.id: context.rank for context in bm25_contexts}
+        dense_ranks = {context.document.id: context.rank for context in dense_contexts}
+        selected_ranks = {context.document.id: context.rank for context in contexts}
+        documents = {context.document.id: context.document for context in [*bm25_contexts, *dense_contexts, *contexts]}
+        candidates = []
+        for document_id, document in documents.items():
+            normalized_lexical = normalized_bm25.get(document_id, 0.0)
+            normalized_vector = normalized_dense.get(document_id, 0.0)
+            hybrid_score = (
+                self.bm25_weight * normalized_lexical + self.dense_weight * normalized_vector
+                if mode == "hybrid"
+                else (normalized_lexical if mode == "bm25" else normalized_vector)
+            )
+            candidates.append(
+                {
+                    "chunk_id": document_id,
+                    "document_id": document.metadata.get("document_id", ""),
+                    "text": document.text,
+                    "metadata": document.metadata,
+                    "bm25_raw_score": round(float(bm25_raw.get(document_id, bm25_scores.get(document_id, 0.0))), 8),
+                    "bm25_normalized_score": round(float(normalized_lexical), 8),
+                    "bm25_rank": bm25_ranks.get(document_id),
+                    "dense_raw_score": round(float(dense_scores.get(document_id, 0.0)), 8),
+                    "dense_normalized_score": round(float(normalized_vector), 8),
+                    "dense_rank": dense_ranks.get(document_id),
+                    "bm25_weighted_score": round(self.bm25_weight * normalized_lexical, 8),
+                    "dense_weighted_score": round(self.dense_weight * normalized_vector, 8),
+                    "hybrid_score": round(float(hybrid_score), 8),
+                    "selected": document_id in selected_ranks,
+                    "selected_rank": selected_ranks.get(document_id),
+                }
+            )
+        candidates.sort(key=lambda item: (item["selected_rank"] is not None, item["hybrid_score"]), reverse=True)
+        return contexts, {
+            "query": query,
+            "mode": mode,
+            "top_k": top_k,
+            "candidate_limit": candidate_limit,
+            "document_filter_ids": document_ids,
+            "bm25_weight": self.bm25_weight,
+            "dense_weight": self.dense_weight,
+            "candidate_count": len(candidates),
+            "selected_count": len(contexts),
+            "bm25_duration_ms": round(bm25_duration_ms, 3),
+            "dense_duration_ms": round(dense_duration_ms, 3),
+            "hybrid_duration_ms": round(hybrid_duration_ms, 3),
+            "candidates": candidates,
+        }
 
     def _bm25_search(
         self,
@@ -1156,15 +1616,27 @@ class KnowledgeBaseRetriever:
         top_k: int,
         document_ids: Optional[List[str]] = None,
     ) -> List[RetrievedContext]:
+        contexts, _ = self._bm25_search_details(query, knowledge_base_id, top_k, document_ids)
+        return contexts
+
+    def _bm25_search_details(
+        self,
+        query: str,
+        knowledge_base_id: str,
+        top_k: int,
+        document_ids: Optional[List[str]] = None,
+    ) -> Tuple[List[RetrievedContext], Dict[str, float]]:
         chunks = self._filtered_chunks(knowledge_base_id, document_ids)
         if not chunks:
-            return []
+            return [], {}
         retriever = InMemoryHybridRetriever(
             [_document_from_chunk(chunk) for chunk in chunks],
             bm25_weight=self.bm25_weight,
             dense_weight=self.dense_weight,
         )
-        return retriever.search(query, top_k=min(top_k, len(chunks)), mode="bm25")
+        contexts = retriever.search(query, top_k=min(top_k, len(chunks)), mode="bm25")
+        raw_scores = retriever.score_diagnostics(query)["bm25_raw"]
+        return contexts, raw_scores
 
     def _dense_search(
         self,
@@ -1202,6 +1674,14 @@ class KnowledgeBaseRetriever:
         candidate_limit = max(top_k * 4, 25)
         bm25_contexts = self._bm25_search(query, knowledge_base_id, candidate_limit, document_ids=document_ids)
         dense_contexts = self._dense_search(query, knowledge_base_id, candidate_limit, document_ids=document_ids)
+        return self._combine_hybrid(bm25_contexts, dense_contexts, top_k)
+
+    def _combine_hybrid(
+        self,
+        bm25_contexts: List[RetrievedContext],
+        dense_contexts: List[RetrievedContext],
+        top_k: int,
+    ) -> List[RetrievedContext]:
         bm25_scores = {context.document.id: context.score for context in bm25_contexts}
         dense_scores = {context.document.id: context.score for context in dense_contexts}
         documents = {context.document.id: context.document for context in [*bm25_contexts, *dense_contexts]}
@@ -1281,6 +1761,139 @@ def _trace_step(step: str, status: str, detail: str, metadata: Optional[Dict[str
         "detail": detail,
         "metadata": metadata or {},
     }
+
+
+def _begin_span(
+    options: AnswerOptions,
+    name: str,
+    category: str,
+    input_payload: Optional[Dict[str, Any]] = None,
+) -> Optional[SpanHandle]:
+    if options.trace_recorder is None:
+        return None
+    return options.trace_recorder.begin_span(name, category, input_payload=input_payload)
+
+
+def _finish_span(
+    options: AnswerOptions,
+    handle: Optional[SpanHandle],
+    *,
+    status: str = "completed",
+    detail: str = "",
+    output_payload: Optional[Dict[str, Any]] = None,
+    metrics: Optional[Dict[str, Any]] = None,
+    model_usage_event_ids: Optional[List[str]] = None,
+    warning: str = "",
+    error: str = "",
+) -> Optional[Dict[str, Any]]:
+    if options.trace_recorder is None or handle is None:
+        return None
+    return options.trace_recorder.finish_span(
+        handle,
+        status=status,
+        detail=detail,
+        output_payload=output_payload,
+        metrics=metrics,
+        model_usage_event_ids=model_usage_event_ids,
+        warning=warning,
+        error=error,
+    )
+
+
+def _context_payloads(contexts: List[RetrievedContext]) -> List[Dict[str, Any]]:
+    return [
+        {
+            "id": context.document.id,
+            "rank": context.rank,
+            "score": context.score,
+            "mode": context.mode,
+            "text": context.document.text,
+            "metadata": context.document.metadata,
+        }
+        for context in contexts
+    ]
+
+
+def _usage_event_ids(metadata: Dict[str, Any]) -> List[str]:
+    values = metadata.get("usage_event_ids")
+    if isinstance(values, list):
+        return [str(value) for value in values if value]
+    value = metadata.get("usage_event_id")
+    return [str(value)] if value else []
+
+
+def _generation_metrics(generation: GeneratorResult) -> Dict[str, Any]:
+    return {
+        "input_chars": generation.input_chars,
+        "output_chars": generation.output_chars,
+        "input_tokens": int(generation.metadata.get("input_tokens") or 0),
+        "output_tokens": int(generation.metadata.get("output_tokens") or 0),
+        "estimated_cost_usd": float(generation.metadata.get("estimated_cost_usd") or 0.0),
+        "latency_ms": float(generation.metadata.get("latency_ms") or 0.0),
+        "fallback_index": int(generation.metadata.get("fallback_index") or 0),
+    }
+
+
+def _record_retrieval_component_spans(
+    options: AnswerOptions,
+    diagnostics: Dict[str, Any],
+    parent: Optional[SpanHandle],
+) -> None:
+    recorder = options.trace_recorder
+    if recorder is None:
+        return
+    mode = str(diagnostics.get("mode") or "")
+    candidates = list(diagnostics.get("candidates") or [])
+    parent_span_id = parent.span_id if parent else ""
+    common_input = {
+        "query": diagnostics.get("query", ""),
+        "retrieval_step": diagnostics.get("retrieval_step", ""),
+        "subquery_index": diagnostics.get("subquery_index"),
+        "document_filter_ids": diagnostics.get("document_filter_ids", []),
+    }
+    if mode in {"bm25", "hybrid"}:
+        recorder.add_observed_span(
+            "BM25 retrieval",
+            "retrieval.bm25",
+            duration_ms=float(diagnostics.get("bm25_duration_ms") or 0.0),
+            input_payload=common_input,
+            output_payload={"candidates": candidates},
+            metrics={
+                "candidate_count": len(candidates),
+                "selected_count": sum(1 for item in candidates if item.get("selected")),
+            },
+            parent_span_id=parent_span_id,
+        )
+    if mode in {"dense", "hybrid"}:
+        recorder.add_observed_span(
+            "Dense retrieval",
+            "retrieval.dense",
+            duration_ms=float(diagnostics.get("dense_duration_ms") or 0.0),
+            input_payload=common_input,
+            output_payload={"candidates": candidates},
+            metrics={
+                "candidate_count": len(candidates),
+                "selected_count": sum(1 for item in candidates if item.get("selected")),
+            },
+            parent_span_id=parent_span_id,
+        )
+    if mode == "hybrid":
+        recorder.add_observed_span(
+            "Hybrid score normalization",
+            "retrieval.hybrid",
+            duration_ms=float(diagnostics.get("hybrid_duration_ms") or 0.0),
+            input_payload={
+                **common_input,
+                "bm25_weight": diagnostics.get("bm25_weight", 0.0),
+                "dense_weight": diagnostics.get("dense_weight", 0.0),
+            },
+            output_payload={"candidates": candidates},
+            metrics={
+                "candidate_count": len(candidates),
+                "selected_count": sum(1 for item in candidates if item.get("selected")),
+            },
+            parent_span_id=parent_span_id,
+        )
 
 
 def _conversation_awareness_enabled(chat_configuration: Dict[str, Any]) -> bool:

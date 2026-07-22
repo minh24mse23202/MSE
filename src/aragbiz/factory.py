@@ -30,6 +30,12 @@ from aragbiz.pipeline import RAGPipeline
 from aragbiz.retrieval import InMemoryHybridRetriever
 from aragbiz.routing import AdaptiveRouter, RouterConfig
 from aragbiz.ragxplain import RagxplainRunner
+from aragbiz.tracing import (
+    FileTraceRepository,
+    PostgresTraceRepository,
+    TraceArtifactStore,
+    TraceService,
+)
 
 
 def build_sample_pipeline(config: Optional[AppConfig] = None) -> RAGPipeline:
@@ -142,6 +148,20 @@ def build_job_service(config: Optional[AppConfig] = None) -> JobService:
 def build_blob_store(config: Optional[AppConfig] = None) -> LocalBlobStore:
     config = config or load_config()
     return LocalBlobStore(config.blob_store)
+
+
+def build_trace_service(config: Optional[AppConfig] = None) -> TraceService:
+    config = config or load_config()
+    if config.knowledge_backend.lower() == "json":
+        repository = FileTraceRepository(config.trace_store)
+    else:
+        repository = PostgresTraceRepository(config.knowledge_database_url)
+    return TraceService(
+        repository,
+        TraceArtifactStore(config.trace_store),
+        retention_days=config.trace_retention_days,
+        max_bytes=config.trace_max_bytes,
+    )
 
 
 def build_knowledge_service(
