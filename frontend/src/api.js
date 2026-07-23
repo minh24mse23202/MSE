@@ -362,6 +362,15 @@ export async function listModelDeployments({ capability = "", enabled = "" } = {
   return response.json();
 }
 
+export async function listAgentTools(publicWebEnabled = false) {
+  const params = new URLSearchParams({ public_web_enabled: String(Boolean(publicWebEnabled)) });
+  const response = await fetch(`${API_BASE_URL}/rag/agent-tools?${params.toString()}`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Agent tools request failed");
+  return response.json();
+}
+
 export async function listModelConnections({ provider = "", enabled = "" } = {}) {
   const params = new URLSearchParams();
   if (provider) params.set("provider", provider);

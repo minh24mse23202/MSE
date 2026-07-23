@@ -12,6 +12,7 @@ class RouterConfig:
     simple_top_k: int = 2
     moderate_top_k: int = 4
     complex_top_k: int = 6
+    advanced_top_k: int = 8
 
 
 class AdaptiveRouter:
@@ -25,4 +26,6 @@ class AdaptiveRouter:
             return RAGStrategy(complexity_label=label, retrieval_mode="bm25", top_k=self.config.simple_top_k, multi_step=False)
         if label == "moderate":
             return RAGStrategy(complexity_label=label, retrieval_mode="hybrid", top_k=self.config.moderate_top_k, multi_step=False)
-        return RAGStrategy(complexity_label=label, retrieval_mode="hybrid", top_k=self.config.complex_top_k, multi_step=True)
+        if label == "complex":
+            return RAGStrategy(complexity_label=label, retrieval_mode="hybrid", top_k=self.config.complex_top_k, multi_step=True)
+        return RAGStrategy(complexity_label=label, retrieval_mode="hybrid", top_k=self.config.advanced_top_k, multi_step=True)

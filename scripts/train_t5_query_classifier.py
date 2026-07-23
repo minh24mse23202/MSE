@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import random
 from pathlib import Path
-from typing import List, Tuple
+from typing import List
 
 from aragbiz.classifier import T5QueryClassifier, evaluate_classifier
 from aragbiz.config import load_config
 from aragbiz.data import load_qac_jsonl
 from aragbiz.factory import existing_dataset_path
-from aragbiz.schemas import QACRecord
+from aragbiz.schemas import COMPLEXITY_LABELS, QACRecord
+from aragbiz.training import grouped_stratified_split
 
 
 def main() -> None:
@@ -18,8 +18,8 @@ def main() -> None:
     parser.add_argument("--dataset", default=None, help="Primary QAC JSONL path.")
     parser.add_argument("--extra-dataset", action="append", default=[], help="Additional QAC JSONL path.")
     parser.add_argument("--model-name", default="t5-small")
-    parser.add_argument("--output-dir", default="data/artifacts/query_classifier_t5_small")
-    parser.add_argument("--metrics-output", default="docs/evaluation/t5_query_classifier_metrics.json")
+    parser.add_argument("--output-dir", default="data/artifacts/query_classifier_t5_v2")
+    parser.add_argument("--metrics-output", default="docs/evaluation/t5_query_classifier_v2_metrics.json")
     parser.add_argument("--validation-ratio", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--epochs", type=float, default=3.0)
@@ -42,7 +42,9 @@ def main() -> None:
     records = load_qac_jsonl(dataset_path)
     for extra_dataset in args.extra_dataset:
         records.extend(load_qac_jsonl(extra_dataset))
-    train_records, validation_records = split_records(records, args.validation_ratio, args.seed)
+    train_records, validation_records, split_manifest = grouped_stratified_split(
+        records, args.validation_ratio, args.seed
+    )
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     model = AutoModelForSeq2SeqLM.from_pretrained(args.model_name)
@@ -70,6 +72,10 @@ def main() -> None:
     trainer.train()
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
+    write_json(
+        {"artifact_version": 2, "architecture": "t5", "complexity_labels": list(COMPLEXITY_LABELS)},
+        str(Path(args.output_dir) / "classifier_manifest.json"),
+    )
 
     classifier = T5QueryClassifier(args.output_dir, max_length=args.max_length, generation_max_length=args.target_max_length)
     metrics_payload = {
@@ -79,6 +85,9 @@ def main() -> None:
         "model_path": args.output_dir,
         "train_records": len(train_records),
         "validation_records": len(validation_records),
+        "complexity_labels": list(COMPLEXITY_LABELS),
+        "artifact_version": 2,
+        "split": split_manifest,
         "metrics": evaluate_classifier(validation_records, classifier),
     }
     write_json(metrics_payload, args.metrics_output)
@@ -140,6 +149,7 @@ def make_training_args(TrainingArguments, output_dir: str, learning_rate: float,
     kwargs = {
         "output_dir": output_dir,
         "save_strategy": "epoch",
+        "save_total_limit": 1,
         "learning_rate": learning_rate,
         "per_device_train_batch_size": batch_size,
         "per_device_eval_batch_size": batch_size,
@@ -172,15 +182,6 @@ def make_trainer(Trainer, model, training_args, train_dataset, validation_datase
     elif "tokenizer" in parameters:
         kwargs["tokenizer"] = tokenizer
     return Trainer(**kwargs)
-
-
-def split_records(records: List[QACRecord], validation_ratio: float, seed: int) -> Tuple[List[QACRecord], List[QACRecord]]:
-    if not 0.0 < validation_ratio < 1.0:
-        raise ValueError("--validation-ratio must be between 0 and 1")
-    shuffled = list(records)
-    random.Random(seed).shuffle(shuffled)
-    validation_size = max(1, int(len(shuffled) * validation_ratio))
-    return shuffled[validation_size:], shuffled[:validation_size]
 
 
 def write_json(payload: dict, path: str) -> None:

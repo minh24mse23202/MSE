@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions, AnsweringError
+from aragbiz.agent import AgentToolRegistry
 from aragbiz.auth import AuthenticationError, UserRecord
 from aragbiz.cancellation import AnswerCancelled, CancellationCoordinator
 from aragbiz.config import load_config
@@ -74,6 +75,7 @@ evaluation_service = build_evaluation_service(
     model_gateway=model_gateway,
 )
 answer_cancellations = CancellationCoordinator()
+agent_tool_registry = AgentToolRegistry()
 app = FastAPI(title="Adaptive RAG Business Workflow QA", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -136,7 +138,7 @@ class AnswerRequest(BaseModel):
     document_ids: List[str] = Field(default_factory=list)
     chat_configuration_id: Optional[str] = None
     chat_configuration: Optional[ChatConfigurationRequest] = None
-    mode: Literal["adaptive", "direct", "simple_rag", "complex_rag"] = "adaptive"
+    mode: Literal["adaptive", "direct", "simple_rag", "complex_rag", "advanced_rag"] = "adaptive"
     retrieval_mode: RetrievalMode = "hybrid"
     top_k: int = Field(4, ge=1, le=50)
     request_id: str = ""
@@ -147,7 +149,7 @@ class RegenerateAnswerRequest(BaseModel):
     document_ids: List[str] = Field(default_factory=list)
     chat_configuration_id: Optional[str] = None
     chat_configuration: Optional[ChatConfigurationRequest] = None
-    mode: Literal["adaptive", "direct", "simple_rag", "complex_rag"] = "adaptive"
+    mode: Literal["adaptive", "direct", "simple_rag", "complex_rag", "advanced_rag"] = "adaptive"
     retrieval_mode: RetrievalMode = "hybrid"
     top_k: int = Field(4, ge=1, le=50)
     request_id: str = ""
@@ -874,6 +876,18 @@ def cancel_job(job_id: str, authorization: str = Header(default="")) -> JobRespo
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/rag/agent-tools", response_model=List[Dict[str, Any]])
+def list_agent_tools(
+    public_web_enabled: bool = False,
+    authorization: str = Header(default=""),
+) -> List[Dict[str, Any]]:
+    _require_user(authorization)
+    return [
+        tool.to_dict()
+        for tool in agent_tool_registry.list_tools(public_web_enabled=public_web_enabled)
+    ]
+
+
 @app.post("/answer", response_model=AnswerResponse)
 def answer(request: AnswerRequest, authorization: str = Header(default="")) -> AnswerResponse:
     user = _require_user(authorization)
@@ -887,6 +901,7 @@ def answer(request: AnswerRequest, authorization: str = Header(default="")) -> A
         dense_weight=config.dense_weight,
         model_farm_service=model_farm_service,
         model_gateway=model_gateway,
+        agent_tool_registry=agent_tool_registry,
     )
     try:
         conversation_history: List[Dict[str, str]] = []
@@ -1145,6 +1160,7 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                 dense_weight=config.dense_weight,
                 model_farm_service=model_farm_service,
                 model_gateway=model_gateway,
+                agent_tool_registry=agent_tool_registry,
             )
             await asyncio.to_thread(chat_service.update_message, assistant_message.id, status="streaming", metadata=assistant_metadata)
             await asyncio.to_thread(
@@ -1574,6 +1590,7 @@ async def _stream_existing_answer(
                 dense_weight=config.dense_weight,
                 model_farm_service=model_farm_service,
                 model_gateway=model_gateway,
+                agent_tool_registry=agent_tool_registry,
             )
             async for event in service.answer_stream(
                 question,

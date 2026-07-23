@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass, field
+import hashlib
+import asyncio
+from dataclasses import dataclass, field, replace
 import json
-from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, Tuple
 
 from aragbiz.cancellation import AnswerCancelled, CancellationToken
+from aragbiz.agent import AgentActionError, AgentToolRegistry, parse_agent_action
+from aragbiz.classifier import ClassificationPrediction, predict_scored
 from aragbiz.conversation import (
     DEFAULT_HISTORY_MAX_CHARACTERS,
     DEFAULT_HISTORY_MAX_EXCHANGES,
@@ -26,15 +30,15 @@ from aragbiz.generation import (
     PromptBuildResult,
     PromptBuilder,
 )
-from aragbiz.knowledge import KnowledgeBaseRecord, KnowledgeService, StoredKnowledgeChunk
+from aragbiz.knowledge import KnowledgeBaseRecord, KnowledgeService, StoredKnowledgeChunk, load_public_website
 from aragbiz.model_farm import ModelCallContext, ModelFarmError, ModelFarmService, ModelGateway
 from aragbiz.retrieval import InMemoryHybridRetriever
 from aragbiz.routing import AdaptiveRouter
 from aragbiz.schemas import AnswerResult, ComplexityLabel, Document, RetrievedContext, RetrievalMode
 from aragbiz.tracing import SpanHandle, TraceRecorder
 
-AnswerMode = Literal["adaptive", "direct", "simple_rag", "complex_rag"]
-RouteLevel = Literal["l1_direct", "l2_simple_rag", "l3_complex_rag"]
+AnswerMode = Literal["adaptive", "direct", "simple_rag", "complex_rag", "advanced_rag"]
+RouteLevel = Literal["l1_direct", "l2_simple_rag", "l3_complex_rag", "l4_advanced_rag"]
 
 
 class AnsweringError(ValueError):
@@ -57,6 +61,7 @@ class AnswerOptions:
     conversation_history_max_characters: int = DEFAULT_HISTORY_MAX_CHARACTERS
     cancellation_token: Optional[CancellationToken] = None
     trace_recorder: Optional[TraceRecorder] = None
+    progress_callback: Optional[Callable[["AnswerStreamEvent"], None]] = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +71,12 @@ class QueryClassificationExecution:
     actual: Dict[str, Any]
     fallback_used: bool = False
     warning: str = ""
+    predicted_label: ComplexityLabel = "simple"
+    probabilities: Dict[str, float] = field(default_factory=dict)
+    confidence: float = 1.0
+    margin: float = 1.0
+    escalated: bool = False
+    escalation_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -109,6 +120,7 @@ class PreparedAnswer:
     citations_enabled: bool
     prompt: PromptBuildResult
     trace_steps: List[Dict[str, Any]]
+    agent_metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -129,6 +141,7 @@ class AdaptiveRAGAnswerService:
         generator_resolver: Optional[GeneratorResolver] = None,
         query_decomposer: Optional["QueryDecomposer"] = None,
         query_reformulator: Optional[QueryReformulator] = None,
+        agent_tool_registry: Optional[AgentToolRegistry] = None,
         model_farm_service: Optional[ModelFarmService] = None,
         model_gateway: Optional[ModelGateway] = None,
     ):
@@ -145,6 +158,7 @@ class AdaptiveRAGAnswerService:
         )
         self.decomposer = query_decomposer or QueryDecomposer()
         self.query_reformulator = query_reformulator or QueryReformulator()
+        self.agent_tool_registry = agent_tool_registry or AgentToolRegistry()
         self.retriever = KnowledgeBaseRetriever(
             knowledge_service=knowledge_service,
             bm25_weight=bm25_weight,
@@ -159,7 +173,29 @@ class AdaptiveRAGAnswerService:
     async def answer_stream(self, query: str, options: Optional[AnswerOptions] = None) -> AsyncIterator[AnswerStreamEvent]:
         resolved_options = options or AnswerOptions()
         _raise_if_cancelled(resolved_options)
-        prepared = await _to_thread(self._prepare_answer, query, resolved_options)
+        progress_queue: asyncio.Queue[AnswerStreamEvent] = asyncio.Queue()
+        event_loop = asyncio.get_running_loop()
+
+        def publish(event: AnswerStreamEvent) -> None:
+            event_loop.call_soon_threadsafe(progress_queue.put_nowait, event)
+
+        resolved_options = replace(resolved_options, progress_callback=publish)
+        preparation = asyncio.create_task(_to_thread(self._prepare_answer, query, resolved_options))
+        while not preparation.done():
+            try:
+                yield await asyncio.wait_for(progress_queue.get(), timeout=0.1)
+            except asyncio.TimeoutError:
+                try:
+                    _raise_if_cancelled(resolved_options)
+                except AnswerCancelled:
+                    try:
+                        await preparation
+                    except AnswerCancelled:
+                        pass
+                    raise
+        prepared = await preparation
+        while not progress_queue.empty():
+            yield progress_queue.get_nowait()
         _raise_if_cancelled(resolved_options)
         for step in prepared.trace_steps:
             _raise_if_cancelled(resolved_options)
@@ -266,6 +302,8 @@ class AdaptiveRAGAnswerService:
             raise AnsweringError("Select a knowledge base before using L2 Simple RAG.")
         if options.mode == "complex_rag" and knowledge_base is None:
             raise AnsweringError("Select a knowledge base before using L3 Complex RAG.")
+        if options.mode == "advanced_rag" and knowledge_base is None:
+            raise AnsweringError("Select a knowledge base before using L4 Advanced RAG.")
         external_processing_allowed = _external_processing_allowed(knowledge_base)
         conversation_awareness_enabled = _conversation_awareness_enabled(chat_configuration)
         conversation_history_max_exchanges = max(1, int(options.conversation_history_max_exchanges))
@@ -358,9 +396,18 @@ class AdaptiveRAGAnswerService:
             options,
             classification_span,
             status="warning" if classification.warning else "completed",
-            detail=classification.warning or f"Predicted {complexity_label} complexity.",
+            detail=classification.warning or (
+                f"Predicted {classification.predicted_label} complexity"
+                + (f" and escalated routing to {classification.label}." if classification.escalated else ".")
+            ),
             output_payload={
-                "label": complexity_label,
+                "predicted_label": classification.predicted_label,
+                "routed_label": classification.label,
+                "probabilities": classification.probabilities,
+                "confidence": classification.confidence,
+                "margin": classification.margin,
+                "escalated": classification.escalated,
+                "escalation_reason": classification.escalation_reason,
                 "configured": classification.configured,
                 "actual": classification.actual,
                 "fallback_used": classification.fallback_used,
@@ -379,14 +426,24 @@ class AdaptiveRAGAnswerService:
             options.trace_recorder.add_instant_span(
                 "Route decision",
                 "routing",
-                input_payload={"requested_mode": options.mode, "complexity_label": complexity_label},
-                output_payload={"route_level": route_level, "route_label": _route_label(route_level)},
+                input_payload={
+                    "requested_mode": options.mode,
+                    "predicted_label": classification.predicted_label,
+                    "routed_label": complexity_label,
+                },
+                output_payload={
+                    "route_level": route_level,
+                    "route_label": _route_label(route_level),
+                    "confidence_escalation": classification.escalated,
+                },
             )
         if route_level == "l2_simple_rag" and knowledge_base is None:
             raise AnsweringError("Select a knowledge base before using L2 Simple RAG.")
         if route_level == "l3_complex_rag" and knowledge_base is None:
             raise AnsweringError("Select a knowledge base before using L3 Complex RAG.")
-        if route_level in {"l2_simple_rag", "l3_complex_rag"}:
+        if route_level == "l4_advanced_rag" and knowledge_base is None:
+            raise AnsweringError("Select a knowledge base before using L4 Advanced RAG.")
+        if route_level in {"l2_simple_rag", "l3_complex_rag", "l4_advanced_rag"}:
             selected_document_ids = self._validate_document_filter(knowledge_base, selected_document_ids)
         else:
             selected_document_ids = []
@@ -444,6 +501,13 @@ class AdaptiveRAGAnswerService:
                 classification.warning or f"Predicted {complexity_label} query complexity.",
                 {
                     "complexity_label": complexity_label,
+                    "predicted_label": classification.predicted_label,
+                    "routed_label": classification.label,
+                    "probabilities": classification.probabilities,
+                    "confidence": classification.confidence,
+                    "margin": classification.margin,
+                    "escalated": classification.escalated,
+                    "escalation_reason": classification.escalation_reason,
                     "configured_classifier": classification.configured,
                     "actual_classifier": classification.actual,
                     "fallback_used": classification.fallback_used,
@@ -460,17 +524,18 @@ class AdaptiveRAGAnswerService:
 
         contexts: List[RetrievedContext] = []
         retrieval_mode: str = "none"
-        retrieval_used = route_level in {"l2_simple_rag", "l3_complex_rag"}
+        retrieval_used = route_level in {"l2_simple_rag", "l3_complex_rag", "l4_advanced_rag"}
         decomposed_queries: List[str] = []
         decomposition = QueryDecompositionResult([], "not_applicable")
         retrieval_steps: List[Dict[str, Any]] = []
         aggregation_summary: Dict[str, Any] = {}
         retrieval_diagnostics: Dict[str, Any] = {}
+        agent_metadata: Dict[str, Any] = {}
         query_embedding = self.knowledge_service.query_embedding_details(knowledge_base.id) if knowledge_base else {}
         query_embedding = {
             **query_embedding,
             "used": bool(
-                route_level in {"l2_simple_rag", "l3_complex_rag"}
+                route_level in {"l2_simple_rag", "l3_complex_rag", "l4_advanced_rag"}
                 and options.retrieval_mode in {"dense", "hybrid"}
             ),
             "retrieval_mode": options.retrieval_mode if retrieval_used else "none",
@@ -659,6 +724,52 @@ class AdaptiveRAGAnswerService:
                 )
             )
             retrieval_mode = options.retrieval_mode
+        elif route_level == "l4_advanced_rag":
+            assert knowledge_base is not None
+            agent_result = self._run_agentic_retrieval(
+                standalone_query,
+                knowledge_base,
+                selected_document_ids,
+                options,
+                chat_configuration,
+                external_processing_allowed,
+                top_k,
+            )
+            contexts = list(agent_result["contexts"])
+            retrieval_steps = list(agent_result["steps"])
+            retrieval_diagnostics = dict(agent_result["diagnostics"])
+            aggregation_summary = dict(agent_result["summary"])
+            agent_metadata = dict(agent_result["metadata"])
+            retrieval_mode = options.retrieval_mode
+            trace_steps.append(
+                _trace_step(
+                    "L4 agent tool loop",
+                    "warning" if agent_metadata.get("fallback_used") else "completed",
+                    str(agent_metadata.get("detail") or "Completed bounded L4 agent execution."),
+                    agent_metadata,
+                )
+            )
+            if agent_metadata.get("fallback_used"):
+                decomposition = self.decomposer.decompose_with_planner(standalone_query)
+                decomposed_queries = decomposition.queries
+                contexts, fallback_steps, aggregation_summary, fallback_diagnostics = self._retrieve_multi_step(
+                    decomposed_queries=decomposed_queries,
+                    knowledge_base=knowledge_base,
+                    top_k=top_k,
+                    mode=options.retrieval_mode,
+                    document_ids=selected_document_ids,
+                )
+                retrieval_steps.extend(fallback_steps)
+                retrieval_diagnostics["l3_fallback"] = fallback_diagnostics
+                agent_metadata["fallback_route_level"] = "l3_complex_rag"
+                trace_steps.append(
+                    _trace_step(
+                        "L3 fallback retrieval",
+                        "warning",
+                        "L4 could not complete, so deterministic L3 decomposition and retrieval were used.",
+                        {"decomposed_queries": decomposed_queries, **aggregation_summary},
+                    )
+                )
 
         contexts = _with_source_labels(contexts)
         reranker_deployment_id = str(chat_configuration.get("reranker_deployment_id") or "").strip()
@@ -815,6 +926,7 @@ class AdaptiveRAGAnswerService:
             citations_enabled=citations_enabled,
             prompt=prompt,
             trace_steps=trace_steps,
+            agent_metadata=agent_metadata,
         )
 
     def _classify_query(
@@ -832,9 +944,53 @@ class AdaptiveRAGAnswerService:
             "model": type(self.router.classifier).__name__,
             "runtime": "process_default",
         }
+        confidence_threshold = _bounded_float(
+            _configuration_value(chat_configuration, "classifier_confidence_threshold", 0.60), 0.60, 0.0, 1.0
+        )
+        margin_threshold = _bounded_float(
+            _configuration_value(chat_configuration, "classifier_margin_threshold", 0.15), 0.15, 0.0, 1.0
+        )
+
+        def execution(
+            prediction: ClassificationPrediction,
+            configured: Dict[str, Any],
+            actual: Dict[str, Any],
+            fallback_used: bool = False,
+            warning: str = "",
+        ) -> QueryClassificationExecution:
+            routed_label, escalation_reason = _confidence_routed_label(
+                prediction,
+                options.mode,
+                confidence_threshold,
+                margin_threshold,
+            )
+            actual = {
+                **actual,
+                "supported_labels": prediction.supported_labels,
+                "probabilities": prediction.probabilities,
+                "confidence": prediction.confidence,
+                "margin": prediction.margin,
+                "confidence_threshold": confidence_threshold,
+                "margin_threshold": margin_threshold,
+                "legacy_three_class": "advanced" not in prediction.supported_labels,
+            }
+            return QueryClassificationExecution(
+                routed_label,
+                configured,
+                actual,
+                fallback_used,
+                warning,
+                prediction.label,
+                prediction.probabilities,
+                prediction.confidence,
+                prediction.margin,
+                bool(escalation_reason),
+                escalation_reason,
+            )
+
         if not deployment_id:
-            label = self.router.classifier.predict(query)
-            return QueryClassificationExecution(label, dict(default_descriptor), dict(default_descriptor))
+            prediction = predict_scored(self.router.classifier, query)
+            return execution(prediction, dict(default_descriptor), dict(default_descriptor))
 
         configured = {"deployment_id": deployment_id}
         if self.model_farm_service is not None:
@@ -850,12 +1006,12 @@ class AdaptiveRAGAnswerService:
             except KeyError:
                 pass
         if self.model_gateway is None:
-            label = self.router.classifier.predict(query)
+            prediction = predict_scored(self.router.classifier, query)
             warning = (
                 f"Configured classifier {configured.get('name') or deployment_id} could not run because "
                 "Model Gateway is unavailable; the process-default classifier was used."
             )
-            return QueryClassificationExecution(label, configured, default_descriptor, True, warning)
+            return execution(prediction, configured, default_descriptor, True, warning)
         try:
             result = self.model_gateway.classify_sync(
                 query,
@@ -875,14 +1031,22 @@ class AdaptiveRAGAnswerService:
                 "model": result.model,
                 **result.metadata,
             }
-            return QueryClassificationExecution(result.label, configured, actual)
+            prediction = ClassificationPrediction(
+                label=result.label,  # type: ignore[arg-type]
+                probabilities=result.probabilities,
+                confidence=result.confidence,
+                margin=result.margin,
+                supported_labels=result.supported_labels,
+                latency_ms=float(result.metadata.get("latency_ms") or 0.0),
+            )
+            return execution(prediction, configured, actual)
         except ModelFarmError as exc:
-            label = self.router.classifier.predict(query)
+            prediction = predict_scored(self.router.classifier, query)
             warning = (
                 f"Configured classifier {configured.get('name') or deployment_id} failed; "
-                f"the process-default classifier predicted {label}. Error: {exc}"
+                f"the process-default classifier predicted {prediction.label}. Error: {exc}"
             )
-            return QueryClassificationExecution(label, configured, default_descriptor, True, warning)
+            return execution(prediction, configured, default_descriptor, True, warning)
 
     def _generation_request(self, prepared: PreparedAnswer) -> GenerationRequest:
         return GenerationRequest(
@@ -1136,6 +1300,13 @@ class AdaptiveRAGAnswerService:
             "route_level": prepared.route_level,
             "route_label": _route_label(prepared.route_level),
             "complexity_label": prepared.complexity_label,
+            "predicted_complexity_label": prepared.classification.predicted_label,
+            "routed_complexity_label": prepared.classification.label,
+            "complexity_probabilities": prepared.classification.probabilities,
+            "classifier_confidence": prepared.classification.confidence,
+            "classifier_margin": prepared.classification.margin,
+            "classifier_escalated": prepared.classification.escalated,
+            "classifier_escalation_reason": prepared.classification.escalation_reason,
             "configured_classifier": prepared.classification.configured,
             "actual_classifier": prepared.classification.actual,
             "classifier_fallback_used": prepared.classification.fallback_used,
@@ -1145,13 +1316,39 @@ class AdaptiveRAGAnswerService:
             "top_k": prepared.top_k,
             "document_filter_ids": prepared.document_ids,
             "document_filter_count": len(prepared.document_ids),
-            "multi_step": prepared.route_level == "l3_complex_rag",
+            "multi_step": prepared.route_level in {"l3_complex_rag", "l4_advanced_rag"},
             "decomposed_queries": prepared.decomposed_queries,
-            "configured_planner": prepared.decomposition.configured,
-            "actual_planner": prepared.decomposition.actual,
-            "planner_fallback_used": prepared.decomposition.fallback_used,
+            "configured_planner": (
+                {"deployment_id": prepared.agent_metadata.get("planner_deployment_id", "")}
+                if prepared.route_level == "l4_advanced_rag"
+                else prepared.decomposition.configured
+            ),
+            "actual_planner": (
+                prepared.agent_metadata.get("actual_planner", {})
+                if prepared.route_level == "l4_advanced_rag"
+                else prepared.decomposition.actual
+            ),
+            "planner_fallback_used": (
+                bool(prepared.agent_metadata.get("fallback_used"))
+                if prepared.route_level == "l4_advanced_rag"
+                else prepared.decomposition.fallback_used
+            ),
             "retrieval_steps": prepared.retrieval_steps,
             "aggregation_summary": prepared.aggregation_summary,
+            "agent": prepared.agent_metadata,
+            "agent_iterations": prepared.agent_metadata.get("iterations", 0),
+            "agent_tool_calls": prepared.agent_metadata.get("tool_calls", 0),
+            "agent_stopping_reason": prepared.agent_metadata.get("stopping_reason", ""),
+            "agent_fallback_used": bool(prepared.agent_metadata.get("fallback_used")),
+            "agent_evidence_sources": [
+                {
+                    "id": context.document.id,
+                    "source_type": context.document.metadata.get("source_type", "knowledge_base"),
+                    "title": context.document.metadata.get("title", ""),
+                    "url": context.document.metadata.get("url", ""),
+                }
+                for context in prepared.contexts
+            ] if prepared.route_level == "l4_advanced_rag" else [],
             "retrieval_diagnostics": prepared.retrieval_diagnostics,
             "latency_ms": elapsed_ms,
             "generator": generation.model,
@@ -1315,6 +1512,421 @@ class AdaptiveRAGAnswerService:
             "aggregation": aggregation_summary,
         }
 
+    def _run_agentic_retrieval(
+        self,
+        query: str,
+        knowledge_base: KnowledgeBaseRecord,
+        document_ids: List[str],
+        options: AnswerOptions,
+        chat_configuration: Dict[str, Any],
+        external_processing_allowed: bool,
+        top_k: int,
+    ) -> Dict[str, Any]:
+        planner_deployment_id = str(_configuration_value(chat_configuration, "planner_deployment_id", "")).strip()
+        maximum_iterations = _bounded_int(_configuration_value(chat_configuration, "agent_max_iterations", 5), 5, 1, 8)
+        maximum_tool_calls = _bounded_int(_configuration_value(chat_configuration, "agent_max_tool_calls", 8), 8, 1, 12)
+        timeout_seconds = _bounded_int(_configuration_value(chat_configuration, "agent_timeout_seconds", 90), 90, 30, 180)
+        public_web_enabled = _configuration_bool(chat_configuration, "agent_public_web_enabled", False)
+        metadata: Dict[str, Any] = {
+            "planner_deployment_id": planner_deployment_id,
+            "max_iterations": maximum_iterations,
+            "max_tool_calls": maximum_tool_calls,
+            "timeout_seconds": timeout_seconds,
+            "public_web_enabled": public_web_enabled,
+            "fallback_used": False,
+            "stopping_reason": "",
+        }
+        available_tools = self.agent_tool_registry.planner_tools(public_web_enabled=public_web_enabled)
+        allowed_actions = self.agent_tool_registry.available_names(public_web_enabled=public_web_enabled)
+        metadata["available_tools"] = sorted(allowed_actions)
+        agent_span = _begin_span(
+            options,
+            "L4 agent tool loop",
+            "agent",
+            {
+                "query": query,
+                "knowledge_base_id": knowledge_base.id,
+                "document_ids": document_ids,
+                "tools": available_tools,
+                "limits": {
+                    "iterations": maximum_iterations,
+                    "tool_calls": maximum_tool_calls,
+                    "timeout_seconds": timeout_seconds,
+                },
+            },
+        )
+
+        def fallback(reason: str, *, iterations: int = 0, tool_calls: int = 0) -> Dict[str, Any]:
+            metadata.update(
+                {
+                    "fallback_used": True,
+                    "stopping_reason": reason,
+                    "iterations": iterations,
+                    "tool_calls": tool_calls,
+                    "detail": f"L4 fell back to L3: {reason}",
+                }
+            )
+            _finish_span(
+                options,
+                agent_span,
+                status="warning",
+                detail=metadata["detail"],
+                output_payload={"evidence": [], "metadata": metadata},
+                warning=metadata["detail"],
+            )
+            _publish_progress(
+                options,
+                AnswerStreamEvent(
+                    "trace",
+                    _trace_step("L4 fallback decision", "warning", metadata["detail"], dict(metadata)),
+                ),
+            )
+            return {"contexts": [], "steps": [], "diagnostics": {}, "summary": {}, "metadata": metadata}
+
+        if not planner_deployment_id:
+            return fallback("no planner deployment is configured")
+        if self.model_gateway is None:
+            return fallback("Model Gateway is unavailable")
+
+        evidence: Dict[str, RetrievedContext] = {}
+        steps: List[Dict[str, Any]] = []
+        observations: List[Dict[str, Any]] = []
+        invalid_actions = 0
+        tool_calls = 0
+        started = time.perf_counter()
+        stopping_reason = "iteration_limit"
+        planner_usage_event_ids: List[str] = []
+        for iteration in range(1, maximum_iterations + 1):
+            if options.cancellation_token:
+                options.cancellation_token.raise_if_cancelled()
+            if time.perf_counter() - started >= timeout_seconds:
+                stopping_reason = "timeout"
+                break
+            iteration_span = _begin_span(
+                options,
+                f"L4 agent iteration {iteration}",
+                "agent_iteration",
+                {
+                    "iteration": iteration,
+                    "evidence": _context_payloads(list(evidence.values())),
+                    "observations": observations[-4:],
+                },
+                parent_span_id=agent_span.span_id if agent_span else "",
+            )
+            state = {
+                "question": query,
+                "iteration": iteration,
+                "remaining_tool_calls": maximum_tool_calls - tool_calls,
+                "evidence": [
+                    {
+                        "chunk_id": context.document.id,
+                        "title": context.document.metadata.get("title", ""),
+                        "excerpt": context.document.text[:500],
+                    }
+                    for context in evidence.values()
+                ],
+                "observations": observations[-4:],
+                "tools": available_tools,
+            }
+            try:
+                generated = self.model_gateway.generate_sync(
+                    [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Select exactly one tool action for evidence-based business-workflow QA. "
+                                "Return one JSON object with action, arguments, and a short reason. "
+                                "Do not provide chain-of-thought. Use finish only when evidence is sufficient."
+                            ),
+                        },
+                        {"role": "user", "content": json.dumps(state, ensure_ascii=False)},
+                    ],
+                    planner_deployment_id,
+                    parameters={"temperature": 0, "max_tokens": 300},
+                    context=ModelCallContext(
+                        purpose="l4_agent_planning",
+                        request_id=options.request_id,
+                        user_id=options.user_id,
+                        conversation_id=options.conversation_id,
+                        knowledge_base_id=knowledge_base.id,
+                    ),
+                    external_processing_allowed=external_processing_allowed,
+                    capability="planner",
+                )
+                usage_event_id = str(generated.metadata.get("usage_event_id") or "")
+                if usage_event_id:
+                    planner_usage_event_ids.append(usage_event_id)
+                metadata["actual_planner"] = {
+                    "deployment_id": generated.deployment_id,
+                    "provider": generated.provider,
+                    "model": generated.model,
+                    "input_tokens": generated.input_tokens,
+                    "output_tokens": generated.output_tokens,
+                    "estimated_cost_usd": generated.estimated_cost_usd,
+                    **generated.metadata,
+                }
+                action = parse_agent_action(generated.text, allowed_actions)
+                invalid_actions = 0
+            except (ModelFarmError, AgentActionError) as exc:
+                invalid_actions += 1
+                observations.append({"iteration": iteration, "status": "invalid_planner_action", "error": str(exc)})
+                _finish_span(
+                    options,
+                    iteration_span,
+                    status="warning",
+                    detail="Planner action failed validation or execution.",
+                    output_payload={"error": str(exc)},
+                    warning=str(exc),
+                )
+                _publish_progress(
+                    options,
+                    AnswerStreamEvent(
+                        "trace",
+                        _trace_step(
+                            f"L4 agent iteration {iteration}",
+                            "warning",
+                            "Planner action failed validation or execution.",
+                            observations[-1],
+                        ),
+                    ),
+                )
+                if invalid_actions >= 2:
+                    return fallback("planner failed or returned invalid actions twice", iterations=iteration, tool_calls=tool_calls)
+                continue
+
+            if action.action == "finish":
+                stopping_reason = "planner_finished"
+                steps.append({"iteration": iteration, "action": "finish", "reason": action.reason, "status": "completed"})
+                _finish_span(
+                    options,
+                    iteration_span,
+                    detail="Planner determined that the gathered evidence is sufficient.",
+                    output_payload={"action": action.action, "reason": action.reason},
+                    model_usage_event_ids=_usage_event_ids(generated.metadata),
+                )
+                _publish_progress(
+                    options,
+                    AnswerStreamEvent(
+                        "trace",
+                        _trace_step(
+                            f"L4 agent iteration {iteration}",
+                            "completed",
+                            "Planner determined that the gathered evidence is sufficient.",
+                            steps[-1],
+                        ),
+                    ),
+                )
+                break
+            if tool_calls >= maximum_tool_calls:
+                stopping_reason = "tool_call_limit"
+                _finish_span(options, iteration_span, status="warning", detail="Tool-call limit reached.")
+                break
+
+            tool_calls += 1
+            try:
+                tool_output, new_contexts = self._execute_agent_tool(
+                    action.action,
+                    action.arguments,
+                    query,
+                    knowledge_base,
+                    document_ids,
+                    list(evidence.values()),
+                    options,
+                    chat_configuration,
+                    external_processing_allowed,
+                    top_k,
+                )
+                for context in new_contexts:
+                    evidence[context.document.id] = context
+                observation = {
+                    "iteration": iteration,
+                    "action": action.action,
+                    "reason": action.reason,
+                    "status": "completed",
+                    "output": tool_output,
+                }
+                observations.append(observation)
+                steps.append(observation)
+                _finish_span(
+                    options,
+                    iteration_span,
+                    detail=f"Executed agent tool {action.action}.",
+                    output_payload={**observation, "evidence_count": len(evidence)},
+                    metrics={"tool_calls": tool_calls, "evidence_count": len(evidence)},
+                    model_usage_event_ids=_usage_event_ids(generated.metadata),
+                )
+                _publish_progress(
+                    options,
+                    AnswerStreamEvent(
+                        "trace",
+                        _trace_step(
+                            f"L4 agent iteration {iteration}",
+                            "completed",
+                            f"Executed agent tool {action.action}.",
+                            observation,
+                        ),
+                    ),
+                )
+                _publish_progress(
+                    options,
+                    AnswerStreamEvent("sources", {"contexts": list(evidence.values())}),
+                )
+            except (AnsweringError, ModelFarmError, ValueError) as exc:
+                observation = {"iteration": iteration, "action": action.action, "status": "failed", "error": str(exc)}
+                observations.append(observation)
+                steps.append(observation)
+                _finish_span(
+                    options,
+                    iteration_span,
+                    status="warning",
+                    detail=f"Agent tool {action.action} failed; the planner may recover.",
+                    output_payload=observation,
+                    warning=str(exc),
+                    model_usage_event_ids=_usage_event_ids(generated.metadata),
+                )
+                _publish_progress(
+                    options,
+                    AnswerStreamEvent(
+                        "trace",
+                        _trace_step(
+                            f"L4 agent iteration {iteration}",
+                            "warning",
+                            f"Agent tool {action.action} failed; the planner may recover.",
+                            observation,
+                        ),
+                    ),
+                )
+
+        if not evidence:
+            return fallback("the agent collected no usable evidence", iterations=len(steps), tool_calls=tool_calls)
+        if stopping_reason in {"iteration_limit", "tool_call_limit", "timeout"}:
+            completion_status = "bounded_completion"
+        else:
+            completion_status = "completed"
+        selected = sorted(evidence.values(), key=lambda item: item.score, reverse=True)[:top_k]
+        selected = [
+            RetrievedContext(context.document, context.score, rank, context.mode)
+            for rank, context in enumerate(selected, start=1)
+        ]
+        metadata.update(
+            {
+                "iterations": max((step.get("iteration", 0) for step in steps), default=0),
+                "tool_calls": tool_calls,
+                "stopping_reason": stopping_reason,
+                "completion_status": completion_status,
+                "evidence_count": len(evidence),
+                "selected_evidence_count": len(selected),
+                "planner_usage_event_ids": planner_usage_event_ids,
+                "detail": f"L4 completed with {len(selected)} evidence source(s) after {tool_calls} tool call(s).",
+            }
+        )
+        summary = {
+            "iteration_count": metadata["iterations"],
+            "tool_call_count": tool_calls,
+            "unique_context_count": len(evidence),
+            "selected_context_count": len(selected),
+            "top_k": top_k,
+        }
+        _finish_span(
+            options,
+            agent_span,
+            status="completed" if completion_status == "completed" else "warning",
+            detail=metadata["detail"],
+            output_payload={"evidence": _context_payloads(selected), "steps": steps, "metadata": metadata},
+            metrics=summary,
+            model_usage_event_ids=planner_usage_event_ids,
+            warning=("Agent stopped at a configured bound." if completion_status == "bounded_completion" else ""),
+        )
+        return {
+            "contexts": selected,
+            "steps": steps,
+            "diagnostics": {"mode": "agentic", "steps": steps},
+            "summary": summary,
+            "metadata": metadata,
+        }
+
+    def _execute_agent_tool(
+        self,
+        action: str,
+        arguments: Dict[str, Any],
+        original_query: str,
+        knowledge_base: KnowledgeBaseRecord,
+        document_ids: List[str],
+        evidence: List[RetrievedContext],
+        options: AnswerOptions,
+        chat_configuration: Dict[str, Any],
+        external_processing_allowed: bool,
+        top_k: int,
+    ) -> Tuple[Dict[str, Any], List[RetrievedContext]]:
+        if options.cancellation_token:
+            options.cancellation_token.raise_if_cancelled()
+        if action == "search_knowledge_base":
+            query = str(arguments.get("query") or original_query).strip()
+            requested_top_k = _bounded_int(arguments.get("top_k", top_k), top_k, 1, min(12, top_k * 2))
+            contexts, diagnostics = self.retriever.search_with_diagnostics(
+                query=query,
+                knowledge_base_id=knowledge_base.id,
+                top_k=requested_top_k,
+                mode=options.retrieval_mode,
+                document_ids=document_ids,
+            )
+            return {"query": query, "context_ids": [item.document.id for item in contexts], "diagnostics": diagnostics}, contexts
+        if action == "inspect_source":
+            chunk_id = str(arguments.get("chunk_id") or "").strip()
+            context = next((item for item in evidence if item.document.id == chunk_id), None)
+            if context is None:
+                chunk = next((item for item in self.knowledge_service.list_chunks(knowledge_base.id, limit=10000) if item.id == chunk_id), None)
+                if chunk is None or (document_ids and chunk.document_id not in document_ids):
+                    raise AnsweringError("Requested chunk is outside the selected knowledge scope.")
+                context = RetrievedContext(_document_from_chunk(chunk), 1.0, len(evidence) + 1, options.retrieval_mode)
+            return {"chunk_id": chunk_id, "text": context.document.text, "metadata": context.document.metadata}, [context]
+        if action == "rerank_evidence":
+            if not evidence:
+                raise AnsweringError("No evidence is available to rerank.")
+            deployment_id = str(_configuration_value(chat_configuration, "reranker_deployment_id", "")).strip()
+            if not deployment_id or self.model_gateway is None:
+                return {"status": "skipped", "reason": "No reranker deployment is configured."}, evidence
+            reranked = self.model_gateway.rerank_sync(
+                str(arguments.get("query") or original_query),
+                [item.document.text for item in evidence],
+                deployment_id,
+                top_n=min(top_k, len(evidence)),
+                context=ModelCallContext(
+                    purpose="l4_agent_rerank",
+                    request_id=options.request_id,
+                    user_id=options.user_id,
+                    conversation_id=options.conversation_id,
+                    knowledge_base_id=knowledge_base.id,
+                ),
+                external_processing_allowed=external_processing_allowed,
+            )
+            contexts = [
+                RetrievedContext(evidence[item.index].document, item.score, rank, evidence[item.index].mode)
+                for rank, item in enumerate(reranked.items, start=1)
+                if 0 <= item.index < len(evidence)
+            ]
+            return {"context_ids": [item.document.id for item in contexts], "metadata": reranked.metadata}, contexts
+        if action == "fetch_public_url":
+            if not _configuration_bool(chat_configuration, "agent_public_web_enabled", False):
+                raise AnsweringError("Public web tools are disabled in this RAG configuration.")
+            url = str(arguments.get("url") or "").strip()
+            document_input = load_public_website(url)
+            identifier = f"web-{hashlib.sha256(document_input.uri.encode('utf-8')).hexdigest()[:24]}"
+            document = Document(
+                identifier,
+                document_input.text,
+                {
+                    **document_input.metadata,
+                    "title": document_input.title,
+                    "url": document_input.uri,
+                    "source_type": "website",
+                    "request_scoped": True,
+                },
+            )
+            context = RetrievedContext(document, 1.0, len(evidence) + 1, "hybrid")
+            return {"url": document_input.uri, "title": document_input.title, "characters": len(document_input.text)}, [context]
+        raise AnsweringError(f"Unsupported L4 agent action: {action}")
+
     def _validate_document_filter(
         self,
         knowledge_base: Optional[KnowledgeBaseRecord],
@@ -1337,12 +1949,16 @@ class AdaptiveRAGAnswerService:
             return "l2_simple_rag"
         if mode == "complex_rag":
             return "l3_complex_rag"
+        if mode == "advanced_rag":
+            return "l4_advanced_rag"
         if mode == "adaptive":
             if complexity_label == "simple":
                 return "l1_direct"
             if complexity_label == "moderate":
                 return "l2_simple_rag"
-            return "l3_complex_rag"
+            if complexity_label == "complex":
+                return "l3_complex_rag"
+            return "l4_advanced_rag"
         raise AnsweringError(f"Unsupported answer mode: {mode}")
 
     def _selected_knowledge_base(self, knowledge_base_id: Optional[str]) -> Optional[KnowledgeBaseRecord]:
@@ -1751,7 +2367,9 @@ def _route_label(route_level: RouteLevel) -> str:
         return "L1 Direct Generation"
     if route_level == "l2_simple_rag":
         return "L2 Simple RAG"
-    return "L3 Complex RAG"
+    if route_level == "l3_complex_rag":
+        return "L3 Complex RAG"
+    return "L4 Advanced RAG"
 
 
 def _trace_step(step: str, status: str, detail: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -1768,10 +2386,16 @@ def _begin_span(
     name: str,
     category: str,
     input_payload: Optional[Dict[str, Any]] = None,
+    parent_span_id: str = "",
 ) -> Optional[SpanHandle]:
     if options.trace_recorder is None:
         return None
-    return options.trace_recorder.begin_span(name, category, input_payload=input_payload)
+    return options.trace_recorder.begin_span(
+        name,
+        category,
+        input_payload=input_payload,
+        parent_span_id=parent_span_id,
+    )
 
 
 def _finish_span(
@@ -1916,6 +2540,54 @@ def _configuration_value(chat_configuration: Dict[str, Any], key: str, default: 
     return default if value is None else value
 
 
+def _configuration_bool(chat_configuration: Dict[str, Any], key: str, default: bool) -> bool:
+    value = _configuration_value(chat_configuration, key, default)
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(value)
+
+
+def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(parsed, maximum))
+
+
+def _bounded_float(value: Any, default: float, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(parsed, maximum))
+
+
+def _confidence_routed_label(
+    prediction: ClassificationPrediction,
+    mode: AnswerMode,
+    confidence_threshold: float,
+    margin_threshold: float,
+) -> Tuple[ComplexityLabel, str]:
+    if mode != "adaptive":
+        return prediction.label, ""
+    low_confidence = prediction.confidence < confidence_threshold
+    low_margin = prediction.margin < margin_threshold
+    if not low_confidence and not low_margin:
+        return prediction.label, ""
+    labels: List[ComplexityLabel] = ["simple", "moderate", "complex", "advanced"]
+    index = labels.index(prediction.label)
+    routed = labels[min(index + 1, len(labels) - 1)]
+    if routed == prediction.label:
+        return routed, ""
+    reasons = []
+    if low_confidence:
+        reasons.append(f"confidence {prediction.confidence:.3f} < {confidence_threshold:.3f}")
+    if low_margin:
+        reasons.append(f"margin {prediction.margin:.3f} < {margin_threshold:.3f}")
+    return routed, "Escalated one complexity level because " + " and ".join(reasons) + "."
+
+
 def _citations_enabled(chat_configuration: Dict[str, Any]) -> bool:
     value = _configuration_value(chat_configuration, "citations_enabled", True)
     if isinstance(value, str):
@@ -2027,6 +2699,11 @@ async def _to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
 def _raise_if_cancelled(options: AnswerOptions) -> None:
     if options.cancellation_token:
         options.cancellation_token.raise_if_cancelled()
+
+
+def _publish_progress(options: AnswerOptions, event: AnswerStreamEvent) -> None:
+    if options.progress_callback is not None:
+        options.progress_callback(event)
 
 
 def _text_chunks(text: str, size: int) -> List[str]:

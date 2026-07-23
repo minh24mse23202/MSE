@@ -19,7 +19,7 @@ def test_wixqa_rows_join_article_contexts():
         }
     ]
     records = wixqa_rows_to_qac_records(qa_rows, {row["id"]: row for row in kb_rows}, "wixqa_expertwritten")
-    assert records[0].complexity_label == "moderate"
+    assert records[0].complexity_label == "complex"
     assert "First article steps." in records[0].context
     assert records[0].metadata["article_ids"] == ["a1", "a2"]
 

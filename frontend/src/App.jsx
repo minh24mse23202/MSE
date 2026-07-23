@@ -81,6 +81,7 @@ import {
   listKnowledgeDocuments,
   listKnowledgeBases,
   listKnowledgeIndexVersions,
+  listAgentTools,
   listModelDeployments,
   listModelConnections,
   listModelProviders,
@@ -123,7 +124,8 @@ const routes = [
   { value: "Adaptive", label: "Adaptive" },
   { value: "L1 Direct", label: "L1 Direct Generation" },
   { value: "L2 Simple RAG", label: "L2 Simple RAG" },
-  { value: "L3 Complex RAG", label: "L3 Complex RAG" }
+  { value: "L3 Complex RAG", label: "L3 Complex RAG" },
+  { value: "L4 Advanced RAG", label: "L4 Advanced RAG" }
 ];
 const responseStructures = [
   "Concise answer with bullets and cited workflow context",
@@ -162,6 +164,12 @@ const defaultChatConfigurationDraft = {
   conversationAwarenessEnabled: true,
   conversationHistoryExchanges: defaultConversationLimits.defaultCompletedExchanges,
   conversationHistoryCharacters: defaultConversationLimits.defaultCharacters,
+  classifierConfidenceThreshold: 0.6,
+  classifierMarginThreshold: 0.15,
+  agentMaxIterations: 5,
+  agentMaxToolCalls: 8,
+  agentTimeoutSeconds: 90,
+  agentPublicWebEnabled: false,
   generatorDeploymentId: defaultGeneratorDeploymentId,
   fallbackDeploymentIds: [],
   rerankerDeploymentId: "",
@@ -1196,7 +1204,7 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
     const mode = answerModeFromRoute(config.route);
     const requiresKnowledgeBase = mode !== "direct";
     if (requiresKnowledgeBase && !selectedKnowledgeBaseId) {
-      setFeedbackStatus("Select a knowledge base before using Adaptive, L2 Simple RAG, or L3 Complex RAG.");
+      setFeedbackStatus("Select a knowledge base before using Adaptive, L2 Simple RAG, L3 Complex RAG, or L4 Advanced RAG.");
       return;
     }
     if (!isValidChatConfigurationDraft(config)) {
@@ -2465,6 +2473,27 @@ function RagConfiguration({
   const configurationUpdatedAt = selectedChatConfiguration?.updated_at || config.configurationUpdatedAt || "";
   const conversationContextEnabled = Boolean(config.conversationAwarenessEnabled);
   const [collapsedSections, setCollapsedSections] = useState({ knowledge: true });
+  const [agentTools, setAgentTools] = useState([]);
+  const [agentToolsStatus, setAgentToolsStatus] = useState("");
+  useEffect(() => {
+    let active = true;
+    listAgentTools(Boolean(config.agentPublicWebEnabled))
+      .then((tools) => {
+        if (active) {
+          setAgentTools(tools);
+          setAgentToolsStatus("");
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setAgentTools([]);
+          setAgentToolsStatus(error.message);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [config.agentPublicWebEnabled]);
   function toggleCustomizerSection(sectionId) {
     setCollapsedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
   }
@@ -2644,7 +2673,7 @@ function RagConfiguration({
             value={config.classifierDeploymentId || ""}
             options={[
               { value: "", label: "Built-in trained classifier" },
-              ...classifierDeployments.map((deployment) => deploymentOption(deployment))
+              ...classifierDeployments.map((deployment) => classifierDeploymentOption(deployment))
             ]}
             onChange={(classifierDeploymentId) => {
               const deployment = modelDeployments.find((item) => item.id === classifierDeploymentId);
@@ -2659,11 +2688,43 @@ function RagConfiguration({
             label="Planner model"
             value={config.plannerDeploymentId || ""}
             options={[
-              { value: "", label: "Deterministic L3 decomposition" },
+              { value: "", label: "No planner (L4 falls back to L3)" },
               ...plannerDeployments.map((deployment) => deploymentOption(deployment))
             ]}
             onChange={(plannerDeploymentId) => setConfig({ ...config, plannerDeploymentId })}
           />
+        </div>
+        <div className="config-two-column">
+          <label>
+            Confidence threshold
+            <input
+              type="number"
+              min="0"
+              max="1"
+              step="0.05"
+              value={config.classifierConfidenceThreshold}
+              onChange={(event) => setConfig({
+                ...config,
+                classifierConfidenceThreshold: clampNumber(event.target.value, 0.6, 0, 1)
+              })}
+            />
+            <small>Adaptive routing escalates one level below this confidence.</small>
+          </label>
+          <label>
+            Top-two margin threshold
+            <input
+              type="number"
+              min="0"
+              max="1"
+              step="0.05"
+              value={config.classifierMarginThreshold}
+              onChange={(event) => setConfig({
+                ...config,
+                classifierMarginThreshold: clampNumber(event.target.value, 0.15, 0, 1)
+              })}
+            />
+            <small>Adaptive routing escalates when the two leading classes are too close.</small>
+          </label>
         </div>
         <label>
           Query embedding
@@ -2729,6 +2790,66 @@ function RagConfiguration({
           />
           Citation validator
         </label>
+        {(config.route === "Adaptive" || config.route === "L4 Advanced RAG") && (
+          <div className="agent-runtime-settings">
+            <h4>L4 agent limits</h4>
+            <div className="config-three-column">
+              <label>
+                Iterations
+                <input
+                  type="number"
+                  min="1"
+                  max="8"
+                  value={config.agentMaxIterations}
+                  onChange={(event) => setConfig({ ...config, agentMaxIterations: clampNumber(event.target.value, 5, 1, 8) })}
+                />
+              </label>
+              <label>
+                Tool calls
+                <input
+                  type="number"
+                  min="1"
+                  max="12"
+                  value={config.agentMaxToolCalls}
+                  onChange={(event) => setConfig({ ...config, agentMaxToolCalls: clampNumber(event.target.value, 8, 1, 12) })}
+                />
+              </label>
+              <label>
+                Timeout (seconds)
+                <input
+                  type="number"
+                  min="30"
+                  max="180"
+                  value={config.agentTimeoutSeconds}
+                  onChange={(event) => setConfig({ ...config, agentTimeoutSeconds: clampNumber(event.target.value, 90, 30, 180) })}
+                />
+              </label>
+            </div>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={Boolean(config.agentPublicWebEnabled)}
+                onChange={(event) => setConfig({ ...config, agentPublicWebEnabled: event.target.checked })}
+              />
+              Allow request-scoped public website fetching
+            </label>
+            <div className="agent-tool-availability" aria-label="L4 agent tool availability">
+              {agentTools.map((tool) => (
+                <span
+                  key={tool.name}
+                  className={tool.available ? "is-available" : "is-unavailable"}
+                  title={tool.available ? tool.description : tool.unavailable_reason}
+                >
+                  {tool.name.replaceAll("_", " ")} · {tool.available ? "available" : "unavailable"}
+                </span>
+              ))}
+            </div>
+            {agentToolsStatus && <p className="config-status-note">Tool registry unavailable: {agentToolsStatus}</p>}
+            {!config.plannerDeploymentId && config.route === "L4 Advanced RAG" && (
+              <p className="config-status-note warning">Select an enabled planner model. Without one, L4 safely falls back to L3.</p>
+            )}
+          </div>
+        )}
       </CollapsibleCustomizerSection>
       <CollapsibleCustomizerSection
         title="Generator target & prompts"
@@ -3197,7 +3318,9 @@ function TraceSummary({ metadata, report }) {
   return (
     <section className="trace-summary-card">
       <div><dt>Route</dt><dd>{metadata.route_label || metadata.route_level || "-"}</dd></div>
-      <div><dt>Complexity</dt><dd>{metadata.complexity_label || "-"}</dd></div>
+      <div><dt>Predicted complexity</dt><dd>{metadata.predicted_complexity_label || metadata.complexity_label || "-"}</dd></div>
+      <div><dt>Routed complexity</dt><dd>{metadata.routed_complexity_label || metadata.complexity_label || "-"}</dd></div>
+      <div><dt>Confidence / margin</dt><dd>{formatClassifierScore(metadata.classifier_confidence)} / {formatClassifierScore(metadata.classifier_margin)}</dd></div>
       <div>
         <dt>Classifier</dt>
         <dd>{classifier.name || classifier.model || classifier.runtime || "-"}</dd>
@@ -3223,6 +3346,9 @@ function TraceSummary({ metadata, report }) {
       <div><dt>Top K</dt><dd>{metadata.top_k ?? "-"}</dd></div>
       <div><dt>Multi-step</dt><dd>{metadata.multi_step ? "Yes" : "No"}</dd></div>
       <div><dt>Subqueries</dt><dd>{metadata.decomposed_queries?.length || 0}</dd></div>
+      <div><dt>Agent iterations</dt><dd>{metadata.agent_iterations || 0}</dd></div>
+      <div><dt>Agent tool calls</dt><dd>{metadata.agent_tool_calls || 0}</dd></div>
+      <div><dt>Agent stop</dt><dd>{metadata.agent_stopping_reason || "-"}</dd></div>
       <div>
         <dt>Planner</dt>
         <dd>{planner.name || planner.model || planner.runtime || "Deterministic"}</dd>
@@ -5029,7 +5155,7 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
               {selectedRun.metadata?.ragxplain?.error && <p>{selectedRun.metadata.ragxplain.error}</p>}
             </div>
             <div className="metrics-grid evaluation-metrics-grid">
-              <article className="metric-card"><small>Adaptive routes</small><strong>{formatDistribution(selectedRun.route_distribution)}</strong><span>L1/L2/L3 distribution</span></article>
+              <article className="metric-card"><small>Adaptive routes</small><strong>{formatDistribution(selectedRun.route_distribution)}</strong><span>L1/L2/L3/L4 distribution</span></article>
               <article className="metric-card"><small>Static baseline</small><strong>{formatPercentMetric(selectedRun.baseline_metrics?.answer_overlap)}</strong><span>Answer overlap</span></article>
               <article className="metric-card"><small>Runtime proxy</small><strong>{formatNumber(selectedRun.metrics?.runtime_proxy_units)}</strong><span>chars / 1k</span></article>
               <article className="metric-card"><small>Retrieved contexts</small><strong>{formatNumber(selectedRun.metrics?.average_retrieved_contexts)}</strong><span>average per case</span></article>
@@ -5548,13 +5674,14 @@ function formatNumber(value, digits = 1) {
 function formatDistribution(distribution = {}) {
   const entries = Object.entries(distribution || {});
   if (entries.length === 0) return "-";
-  return entries.map(([key, value]) => `${key.replace("l1_", "L1 ").replace("l2_", "L2 ").replace("l3_", "L3 ")}: ${value}`).join(" / ");
+  return entries.map(([key, value]) => `${key.replace("l1_", "L1 ").replace("l2_", "L2 ").replace("l3_", "L3 ").replace("l4_", "L4 ")}: ${value}`).join(" / ");
 }
 
 function answerModeFromRoute(route) {
   if (route === "L1 Direct") return "direct";
   if (route === "L2 Simple RAG") return "simple_rag";
   if (route === "L3 Complex RAG") return "complex_rag";
+  if (route === "L4 Advanced RAG") return "advanced_rag";
   return "adaptive";
 }
 
@@ -5574,6 +5701,7 @@ function routeLabelFromMode(mode) {
   if (mode === "direct") return "L1 Direct";
   if (mode === "simple_rag") return "L2 Simple RAG";
   if (mode === "complex_rag") return "L3 Complex RAG";
+  if (mode === "advanced_rag") return "L4 Advanced RAG";
   return "Adaptive";
 }
 
@@ -5693,6 +5821,8 @@ function applyChatConfigurationSnapshotToDraft(current, snapshot = {}, configura
     route,
     classifier: metadata.classifier || current.classifier,
     classifierDeploymentId: metadata.classifier_deployment_id || "",
+    classifierConfidenceThreshold: clampNumber(metadata.classifier_confidence_threshold, 0.6, 0, 1),
+    classifierMarginThreshold: clampNumber(metadata.classifier_margin_threshold, 0.15, 0, 1),
     retrievalMode,
     topK: clampNumber(metadata.top_k, current.topK || 6, 1, 50),
     reranker: typeof metadata.reranker_enabled === "boolean" ? metadata.reranker_enabled : current.reranker,
@@ -5700,6 +5830,10 @@ function applyChatConfigurationSnapshotToDraft(current, snapshot = {}, configura
     fallbackDeploymentIds: Array.isArray(snapshot.fallback_deployment_ids) ? snapshot.fallback_deployment_ids : [],
     rerankerDeploymentId: snapshot.reranker_deployment_id || "",
     plannerDeploymentId: snapshot.planner_deployment_id || "",
+    agentMaxIterations: clampNumber(metadata.agent_max_iterations, 5, 1, 8),
+    agentMaxToolCalls: clampNumber(metadata.agent_max_tool_calls, 8, 1, 12),
+    agentTimeoutSeconds: clampNumber(metadata.agent_timeout_seconds, 90, 30, 180),
+    agentPublicWebEnabled: Boolean(metadata.agent_public_web_enabled),
     generationParameters: snapshot.generation_parameters || defaultChatConfigurationDraft.generationParameters,
     citationsEnabled: typeof snapshot.citations_enabled === "boolean" ? snapshot.citations_enabled : defaultChatConfigurationDraft.citationsEnabled,
     citations: typeof snapshot.citations_enabled === "boolean" ? snapshot.citations_enabled : current.citations,
@@ -5780,7 +5914,13 @@ function chatConfigurationPayloadFromDraft(config, conversationLimits = defaultC
       route_mode: answerModeFromRoute(config.route || defaultRuntimeRoute()),
       classifier: config.classifier || "Built-in trained classifier",
       classifier_deployment_id: config.classifierDeploymentId || "",
+      classifier_confidence_threshold: clampNumber(config.classifierConfidenceThreshold, 0.6, 0, 1),
+      classifier_margin_threshold: clampNumber(config.classifierMarginThreshold, 0.15, 0, 1),
       planner_deployment_id: config.plannerDeploymentId || "",
+      agent_max_iterations: clampNumber(config.agentMaxIterations, 5, 1, 8),
+      agent_max_tool_calls: clampNumber(config.agentMaxToolCalls, 8, 1, 12),
+      agent_timeout_seconds: clampNumber(config.agentTimeoutSeconds, 90, 30, 180),
+      agent_public_web_enabled: Boolean(config.agentPublicWebEnabled),
       retrieval_mode: retrievalModeValue(config.retrievalMode),
       retrieval_mode_label: config.retrievalMode || "Hybrid",
       top_k: clampNumber(config.topK, 6, 1, 50),
@@ -5901,6 +6041,11 @@ function uniqueDeploymentName(baseName, deployments = []) {
   return `${normalizedBaseName} ${Date.now()}`;
 }
 
+function formatClassifierScore(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(3) : "-";
+}
+
 function uniqueConnectionName(baseName, connections = []) {
   const normalized = String(baseName || "Model connection").trim() || "Model connection";
   const existingNames = new Set(connections.map((connection) => String(connection.name || "").trim().toLowerCase()));
@@ -5951,6 +6096,22 @@ function emptyEndpointDraft(defaults = {}) {
     modelId: defaults.model || "",
     url: defaults.api_base || "",
     apiKey: ""
+  };
+}
+
+function classifierDeploymentOption(deployment = {}) {
+  const option = deploymentOption(deployment);
+  const labels = deployment.metadata?.complexity_labels || deployment.metadata_json?.complexity_labels || [];
+  const isKnownFourClass = Array.isArray(labels) && labels.includes("advanced");
+  const isLegacyClassifier = (
+    (Array.isArray(labels) && labels.length === 3)
+    || ["query_classifier_distilbert", "query_classifier_t5"].includes(deployment.model)
+  );
+  const classLabel = isLegacyClassifier ? "legacy 3-class" : (isKnownFourClass ? "4-class" : "4-class contract");
+  return {
+    ...option,
+    label: `${option.label} (${classLabel})`,
+    title: `${option.title}. ${isLegacyClassifier ? "Cannot predict advanced." : "Supports simple, moderate, complex, and advanced."}`
   };
 }
 

@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal
 
-ComplexityLabel = Literal["simple", "moderate", "complex"]
+ComplexityLabel = Literal["simple", "moderate", "complex", "advanced"]
 RetrievalMode = Literal["bm25", "dense", "hybrid"]
 
-COMPLEXITY_LABELS: tuple[ComplexityLabel, ...] = ("simple", "moderate", "complex")
+COMPLEXITY_LABELS: tuple[ComplexityLabel, ...] = ("simple", "moderate", "complex", "advanced")
 
 
 @dataclass(frozen=True)
@@ -48,4 +48,3 @@ class AnswerResult:
     answer: str
     contexts: List[RetrievedContext]
     metadata: Dict[str, Any]
-

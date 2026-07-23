@@ -1,0 +1,82 @@
+{
+  "class_counts": {
+    "advanced": 600,
+    "complex": 600,
+    "moderate": 600,
+    "simple": 600
+  },
+  "class_percentages": {
+    "advanced": 0.25,
+    "complex": 0.25,
+    "moderate": 0.25,
+    "simple": 0.25
+  },
+  "combined_output": "data\\processed\\four_class_qac.jsonl",
+  "conflicting_question_group_count": 0,
+  "conflicting_question_groups": [],
+  "duplicate_question_group_count": 0,
+  "duplicate_question_groups": [],
+  "duplicate_record_id_count": 0,
+  "duplicate_record_ids": [],
+  "errors": [],
+  "inputs": [
+    {
+      "path": "data\\processed\\wixqa_expertwritten_qac.jsonl",
+      "records": 200,
+      "sha256": "de03c4a95e0580e5106f9531deec397e93acaaa19767adb3ff166df817563ba6",
+      "source": "wixqa_expertwritten"
+    },
+    {
+      "path": "data\\processed\\wixqa_simulated_qac.jsonl",
+      "records": 200,
+      "sha256": "80bb5b61b6e8638773e31503d922f2bc753db4a55fa8fc27642c0d3e3c6c9427",
+      "source": "wixqa_simulated"
+    },
+    {
+      "path": "data\\processed\\wixqa_synthetic_qac.jsonl",
+      "records": 6221,
+      "sha256": "456f35fd1344b6b147f7775d4e971504f9b6327c250ab549b28032e9682b2d17",
+      "source": "wixqa_synthetic"
+    },
+    {
+      "path": "data\\processed\\wixqa_template_four_class_qac.jsonl",
+      "records": 2400,
+      "sha256": "d352b5539f41e6e425c9938c2348fb44f24169d6a34b3159121928cfa204d5f4",
+      "source": "template_four_class"
+    }
+  ],
+  "minimum_validation_per_label": 50,
+  "missing_labels": [],
+  "preparation_manifest": "docs/evaluation/four_class_preparation_manifest.json",
+  "ready_for_training": true,
+  "recommended_validation_size_met": true,
+  "records": 2400,
+  "schema_version": 1,
+  "source_count": 4360,
+  "source_leakage": [],
+  "source_leakage_count": 0,
+  "split": {
+    "group_count": 1956,
+    "seed": 42,
+    "strategy": "source-grouped-stratified",
+    "train_class_counts": {
+      "advanced": 477,
+      "complex": 481,
+      "moderate": 481,
+      "simple": 480
+    },
+    "train_records": 1919,
+    "validation_class_counts": {
+      "advanced": 123,
+      "complex": 119,
+      "moderate": 119,
+      "simple": 120
+    },
+    "validation_ratio": 0.2,
+    "validation_records": 481,
+    "warnings": []
+  },
+  "underrepresented_validation_labels": [],
+  "valid_for_training": true,
+  "warnings": []
+}

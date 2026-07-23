@@ -53,6 +53,7 @@ def build_sample_pipeline(config: Optional[AppConfig] = None) -> RAGPipeline:
             simple_top_k=config.simple_top_k,
             moderate_top_k=config.moderate_top_k,
             complex_top_k=config.complex_top_k,
+            advanced_top_k=config.advanced_top_k,
         ),
     )
     retriever = InMemoryHybridRetriever(
@@ -110,6 +111,8 @@ def build_model_gateway(
         classifier_model_paths={
             "query_classifier_distilbert": config.classifier_model_path,
             "query_classifier_t5": config.t5_classifier_model_path,
+            "query_classifier_distilbert_v2": config.classifier_v2_model_path,
+            "query_classifier_t5_v2": config.t5_classifier_v2_model_path,
         },
     )
 

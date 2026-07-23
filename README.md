@@ -120,6 +120,8 @@ AI Models is the provider-neutral runtime layer for generation, embeddings, rera
 - `model-local-lexical-reranker`
 - `model-local-distilbert`
 - `model-local-t5-classifier`
+- `model-local-distilbert-v2` (four-class; artifact required)
+- `model-local-t5-classifier-v2` (four-class; artifact required)
 
 The React **AI Models** wizard separates reusable provider connections from model deployments:
 
@@ -151,7 +153,7 @@ Download and convert WixQA:
 
 ```powershell
 $env:PYTHONPATH='src'
-python scripts/download_wixqa.py --subset wixqa_expertwritten
+python scripts/download_wixqa.py --subset all
 ```
 
 Run the evaluation:
@@ -172,10 +174,33 @@ Train the Phase 2 lightweight query complexity classifier:
 
 ```powershell
 $env:PYTHONPATH='src'
-python scripts/generate_synthetic_qac.py --limit 90
-python scripts/train_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
+python scripts/generate_synthetic_qac.py --limit 120
+python scripts/train_query_classifier.py --extra-dataset data/processed/wixqa_template_four_class_qac.jsonl
 python scripts/evaluate_sample.py --limit 10
 ```
+
+Prepare and audit the versioned four-class training dataset before starting GPU training:
+
+```powershell
+$env:PYTHONPATH='src'
+python scripts/download_wixqa.py --subset all
+python scripts/generate_synthetic_qac.py --limit 2400
+python scripts/prepare_four_class_dataset.py
+```
+
+The prepared dataset contains 600 records per class. It retains all unique ExpertWritten and Simulated records, samples 200 official WixQA Synthetic records deterministically, and uses the separately named Aragbiz template dataset only to fill class deficits. The preparation audit exits unsuccessfully unless all four labels are present, IDs and normalized questions are consistent, source-group leakage is absent, and each validation class has at least 50 examples.
+
+Train versioned four-class DistilBERT and T5-small artifacts without replacing the legacy three-class deployments:
+
+```powershell
+python scripts/train_hf_query_classifier.py --dataset data/processed/four_class_qac.jsonl
+python scripts/train_t5_query_classifier.py --dataset data/processed/four_class_qac.jsonl
+```
+
+The resulting artifacts are written to `data/artifacts/query_classifier_distilbert_v2` and `data/artifacts/query_classifier_t5_v2`. Adaptive routing escalates one level when classifier confidence is below `0.60` or the top-two probability margin is below `0.15`; both thresholds are saved per RAG Customizer configuration. Explicit L1-L4 routes bypass confidence escalation.
+Each training script retains at most one intermediate Hugging Face checkpoint to control disk usage.
+
+L4 Advanced RAG requires a selected planner deployment. It executes a bounded provider-neutral tool loop over the selected Knowledge Base and document filter, can optionally fetch explicitly selected public URLs through the SSRF-safe loader, and falls back to deterministic L3 when planning cannot proceed. Tool availability is exposed through `GET /rag/agent-tools`.
 
 For a pure WixQA-only classifier run:
 
@@ -189,7 +214,7 @@ Train the Hugging Face DistilBERT classifier in Colab or a GPU environment:
 ```powershell
 python -m pip install -e ".[dev,api,app,ml]"
 $env:PYTHONPATH='src'
-python scripts/train_hf_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
+python scripts/train_hf_query_classifier.py --dataset data/processed/four_class_qac.jsonl
 ```
 
 Train and compare a T5-small classifier:
@@ -197,8 +222,11 @@ Train and compare a T5-small classifier:
 ```powershell
 python -m pip install -e ".[dev,api,app,ml]"
 $env:PYTHONPATH='src'
-python scripts/train_t5_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
-python scripts/compare_query_classifiers.py --limit 50
+python scripts/train_t5_query_classifier.py --dataset data/processed/four_class_qac.jsonl
+python scripts/compare_query_classifiers.py `
+  --dataset data/processed/four_class_qac.jsonl `
+  --distilbert-path data/artifacts/query_classifier_distilbert_v2 `
+  --t5-path data/artifacts/query_classifier_t5_v2
 ```
 
 When `data/artifacts/query_classifier_distilbert/` exists, the app uses it first. If it is absent, the app falls back to `data/artifacts/query_classifier_nb.json`, then to the heuristic classifier.

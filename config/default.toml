@@ -14,8 +14,11 @@ revision = "main"
 simple_top_k = 2
 moderate_top_k = 4
 complex_top_k = 6
+advanced_top_k = 8
 model_path = "data/artifacts/query_classifier_distilbert"
 t5_model_path = "data/artifacts/query_classifier_t5"
+distilbert_v2_model_path = "data/artifacts/query_classifier_distilbert_v2"
+t5_v2_model_path = "data/artifacts/query_classifier_t5_v2"
 fallback_model_path = "data/artifacts/query_classifier_nb.json"
 use_trained_model = true
 

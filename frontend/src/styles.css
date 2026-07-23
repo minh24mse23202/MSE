@@ -1727,6 +1727,58 @@ textarea {
   font-size: 12px;
 }
 
+.config-status-note.warning {
+  color: #8a4b08;
+}
+
+.config-three-column {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.agent-runtime-settings {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 14px;
+}
+
+.agent-runtime-settings h4 {
+  margin: 0;
+  color: #334155;
+  font-size: 13px;
+}
+
+.agent-tool-availability {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agent-tool-availability span {
+  max-width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: #475569;
+  font-size: 10px;
+  line-height: 1.2;
+  text-transform: capitalize;
+}
+
+.agent-tool-availability .is-available {
+  border-color: #86cbb3;
+  background: #eefaf5;
+  color: #176b51;
+}
+
+.agent-tool-availability .is-unavailable {
+  background: #f8fafc;
+  color: #94a3b8;
+}
+
 .config-warning-note {
   margin: 0;
   border: 1px solid #f5c76a;

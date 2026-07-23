@@ -107,6 +107,27 @@ def test_answer_endpoint_rejects_complex_without_knowledge_base():
     assert "L3 Complex RAG" in response.json()["detail"]
 
 
+def test_answer_endpoint_accepts_advanced_mode_and_requires_knowledge_base():
+    client = TestClient(app)
+    response = client.post(
+        "/answer",
+        json={"question": "Research the full exception workflow.", "mode": "advanced_rag"},
+    )
+    assert response.status_code == 400
+    assert "L4 Advanced RAG" in response.json()["detail"]
+
+
+def test_agent_tools_endpoint_reports_available_and_placeholder_tools():
+    client = TestClient(app)
+    response = client.get("/rag/agent-tools?public_web_enabled=false")
+
+    assert response.status_code == 200
+    tools = {item["name"]: item for item in response.json()}
+    assert tools["search_knowledge_base"]["available"] is True
+    assert tools["fetch_public_url"]["available"] is False
+    assert tools["search_google_drive"]["available"] is False
+
+
 def test_chat_conversation_crud_and_library_sections():
     client = TestClient(app)
     created = client.post("/chat/conversations", json={"title": "Invoice approval workflow"}).json()

@@ -14,7 +14,7 @@ def test_naive_bayes_classifier_trains_saves_and_loads(tmp_path):
 
     loaded = NaiveBayesQueryClassifier.load(artifact_path)
     prediction = loaded.predict("How should finance resolve an invoice mismatch?")
-    assert prediction in {"simple", "moderate", "complex"}
+    assert prediction in {"simple", "moderate", "complex", "advanced"}
 
 
 def test_classifier_evaluation_metrics_schema():
@@ -23,4 +23,7 @@ def test_classifier_evaluation_metrics_schema():
     metrics = evaluate_classifier(records, classifier)
     assert metrics["total"] == len(records)
     assert "macro_f1" in metrics
-    assert set(metrics["per_label_recall"]) == {"simple", "moderate", "complex"}
+    assert set(metrics["per_label_recall"]) == {"simple", "moderate", "complex", "advanced"}
+    assert "advanced_f1" in metrics
+    assert "expected_calibration_error" in metrics
+    assert "under_routing_rate" in metrics

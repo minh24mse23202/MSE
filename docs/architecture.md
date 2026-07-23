@@ -4,7 +4,8 @@
 flowchart TB
     UI["React: Main, Knowledge Bases, AI Models, Evaluation, Analytics"]
     API["FastAPI: REST, auth-ready endpoints, SSE"]
-    RAG["Adaptive RAG Orchestrator: L1 / L2 / L3"]
+    RAG["Adaptive RAG Orchestrator: L1 / L2 / L3 / L4"]
+    AGENT["L4 Agent Tool Registry and Bounded Planner Loop"]
     POLICY["Policy, Budget, Data-Egress, Citation Checks"]
     GATEWAY["Model Gateway"]
     LOCAL["Local Adapters: extractive, FLAN-T5, hash, MiniLM, reranker"]
@@ -19,6 +20,9 @@ flowchart TB
 
     UI --> API
     API --> RAG --> POLICY --> GATEWAY
+    RAG --> AGENT
+    AGENT --> STORAGE
+    AGENT --> GATEWAY
     GATEWAY --> LOCAL
     GATEWAY --> LITELLM
     LITELLM --> OR
@@ -34,7 +38,7 @@ flowchart TB
 ## Layers
 
 - Application layer: React RAG Studio, Knowledge Bases, AI Models, Evaluation, Analytics, and API access.
-- Adaptive RAG layer: policy check, classification, L1/L2/L3 routing, retrieval, optional reranking, prompt assembly, generation, citation validation, persistence, and telemetry.
+- Adaptive RAG layer: policy check, calibrated four-class classification, L1/L2/L3/L4 routing, retrieval, optional reranking, bounded agent tools, prompt assembly, generation, citation validation, persistence, and telemetry.
 - Knowledge processing layer: local upload and website connectors, loader registry, metadata extraction, deduplication, real chunking strategies, embedding, and active index management.
 - AI Models layer: reusable provider connections plus admin-registered deployments for generation, embedding, rerank, judge, planner, and classifier capabilities.
 - Model Gateway layer: local adapters plus embedded LiteLLM for paid/hosted providers, normalized errors, budget checks, data-egress policy, usage events, and optional fallbacks.
@@ -45,10 +49,23 @@ flowchart TB
 Core interfaces:
 
 - `QueryClassifier.predict(query) -> complexity_label`
+- `QueryClassifier.predict_scored(query) -> label, probabilities, confidence, margin`
 - `Retriever.search(query, top_k, mode) -> contexts`
 - `AdaptiveRouter.route(query) -> rag_strategy`
 - `RAGPipeline.answer(query) -> answer, contexts, metadata`
 - `Evaluator.evaluate(dataset) -> metrics`
+- `AgentToolRegistry.list_tools() -> availability and authorization metadata`
+
+Adaptive routes:
+
+| Complexity | Route | Runtime |
+|---|---|---|
+| `simple` | L1 Direct | Generation without retrieval |
+| `moderate` | L2 Simple RAG | One retrieval pass and generation |
+| `complex` | L3 Complex RAG | Decomposition, multi-query retrieval, aggregation, generation |
+| `advanced` | L4 Advanced RAG | Bounded planner/tool loop with L3 fallback |
+
+L4 is an Aragbiz research extension. The referenced Adaptive-RAG method defines three strategies; Aragbiz preserves its least-complex-successful-route principle while adding a fourth agentic tier. L4 planners receive only currently available tools. Google Drive, OneDrive, and database descriptors remain unavailable and are excluded from planner prompts.
 
 Knowledge ingestion interfaces:
 

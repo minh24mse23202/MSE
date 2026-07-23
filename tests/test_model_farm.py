@@ -74,7 +74,10 @@ def test_local_deployments_and_connection_are_seeded(tmp_path):
         "model-local-extractive",
         "model-local-hash-384",
         "model-local-lexical-reranker",
+        "model-local-distilbert-v2",
+        "model-local-t5-classifier-v2",
     }
+    assert service.get_deployment("model-local-distilbert-v2").enabled is False
     connection = service.get_connection("connection-local-builtin")
     assert connection.provider == "local_builtin"
     assert connection.enabled is True
@@ -284,6 +287,8 @@ def test_remote_classifier_accepts_only_normalized_complexity_labels(tmp_path):
     result = asyncio.run(gateway.classify("Compare approval paths.", deployment.id))
 
     assert result.label == "complex"
+    assert set(result.probabilities) == {"simple", "moderate", "complex", "advanced"}
+    assert result.confidence == 1.0
     assert result.metadata["gateway_model"].startswith("openrouter/")
 
 

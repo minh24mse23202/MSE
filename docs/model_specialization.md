@@ -1,17 +1,19 @@
 # Phase 2: Model Specialization
 
-Use Python 3.11 for Phase 2 local training commands. The first specialized model is a lightweight supervised query complexity classifier. It trains on QAC records and predicts one of:
+Use Python 3.11 for Phase 2 local training commands. The specialized model is a lightweight supervised query complexity classifier. It predicts one of:
 
 - `simple`
 - `moderate`
 - `complex`
+- `advanced`
 
-Train it with:
+Prepare the source-aware dataset with all official WixQA QA configurations:
 
 ```powershell
 $env:PYTHONPATH='src'
-python scripts/generate_synthetic_qac.py --limit 90
-python scripts/train_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
+python scripts/download_wixqa.py --subset all
+python scripts/generate_synthetic_qac.py --limit 2400
+python scripts/prepare_four_class_dataset.py
 ```
 
 Train the DistilBERT classifier in Colab or another GPU environment:
@@ -19,7 +21,7 @@ Train the DistilBERT classifier in Colab or another GPU environment:
 ```powershell
 python -m pip install -e ".[dev,api,app,ml]"
 $env:PYTHONPATH='src'
-python scripts/train_hf_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
+python scripts/train_hf_query_classifier.py --dataset data/processed/four_class_qac.jsonl
 ```
 
 Train the T5-small seq2seq classifier:
@@ -27,7 +29,7 @@ Train the T5-small seq2seq classifier:
 ```powershell
 python -m pip install -e ".[dev,api,app,ml]"
 $env:PYTHONPATH='src'
-python scripts/train_t5_query_classifier.py --extra-dataset data/processed/wixqa_synthetic_bootstrap_qac.jsonl
+python scripts/train_t5_query_classifier.py --dataset data/processed/four_class_qac.jsonl
 ```
 
 Compare available classifiers:
@@ -40,8 +42,8 @@ python scripts/compare_query_classifiers.py --limit 50
 Outputs:
 
 - `data/artifacts/query_classifier_nb.json`
-- `data/artifacts/query_classifier_distilbert/`
-- `data/artifacts/query_classifier_t5_small/`
+- `data/artifacts/query_classifier_distilbert_v2/`
+- `data/artifacts/query_classifier_t5_v2/`
 - `docs/evaluation/query_classifier_metrics.json`
 - `docs/evaluation/hf_query_classifier_metrics.json`
 - `docs/evaluation/t5_query_classifier_metrics.json`
@@ -53,6 +55,6 @@ The app uses classifier artifacts in this order:
 2. Naive Bayes JSON at `data/artifacts/query_classifier_nb.json`
 3. deterministic heuristic classifier
 
-The synthetic bootstrap generator creates template-based QAC examples from KB documents to balance the initial `simple`, `moderate`, and `complex` classes. This is a temporary Phase 2 bridge before Colab-based T5/DistilBERT fine-tuning.
+`wixqa_template_four_class_qac.jsonl` is an Aragbiz-generated balancing supplement and is distinct from the official `wixqa_synthetic` subset. The final preparation manifest records exactly how much each source contributes.
 
 For the Colab path, keep the same runtime interface: the trained model wrapper must expose `predict(query) -> complexity_label`.

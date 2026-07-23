@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions
+from aragbiz.classifier import ClassificationPrediction
 from aragbiz.cancellation import AnswerCancelled, CancellationToken
 from aragbiz.generation import ExtractiveGenerator
 from aragbiz.knowledge import HashEmbeddingModel, KnowledgeService, OverlapChunker
@@ -32,6 +33,22 @@ class CapturingClassifier(StubClassifier):
     def predict(self, query):
         self.queries.append(query)
         return super().predict(query)
+
+
+class ScoredClassifier(StubClassifier):
+    def __init__(self, label, probabilities):
+        super().__init__(label)
+        self.probabilities = probabilities
+
+    def predict_scored(self, query):
+        values = sorted(self.probabilities.values(), reverse=True)
+        return ClassificationPrediction(
+            label=self.label,
+            probabilities=self.probabilities,
+            confidence=values[0],
+            margin=values[0] - values[1],
+            supported_labels=["simple", "moderate", "complex", "advanced"],
+        )
 
 
 def build_service(tmp_path, label="moderate"):
@@ -183,6 +200,88 @@ def test_adaptive_complex_routes_to_l3_with_multi_step_retrieval(tmp_path):
     assert any(step["step"] == "Query decomposition" for step in result.metadata["trace_steps"])
     assert any(step["step"] == "Multi-step retrieval" for step in result.metadata["trace_steps"])
     assert any(step["step"] == "Context aggregation" for step in result.metadata["trace_steps"])
+
+
+def test_low_classifier_confidence_escalates_adaptive_route(tmp_path):
+    service, kb = build_service(tmp_path, label="simple")
+    service.router.classifier = ScoredClassifier(
+        "simple",
+        {"simple": 0.42, "moderate": 0.38, "complex": 0.12, "advanced": 0.08},
+    )
+
+    result = service.answer(
+        "What is Wix Payments?",
+        AnswerOptions(mode="adaptive", knowledge_base_id=kb.id, retrieval_mode="bm25", top_k=1),
+    )
+
+    assert result.metadata["predicted_complexity_label"] == "simple"
+    assert result.metadata["routed_complexity_label"] == "moderate"
+    assert result.metadata["route_level"] == "l2_simple_rag"
+    assert result.metadata["classifier_escalated"] is True
+
+
+def test_explicit_l4_runs_bounded_agent_tool_loop(tmp_path):
+    service, kb = build_service(tmp_path, label="advanced")
+    service.model_gateway = RuntimeControlGateway(
+        label="advanced",
+        planner_text='{"action":"search_knowledge_base","arguments":{"query":"invoice approval"},"reason":"Gather evidence"}',
+    )
+
+    result = service.answer(
+        "Research the dependent workflow and exception approvals.",
+        AnswerOptions(
+            mode="advanced_rag",
+            knowledge_base_id=kb.id,
+            retrieval_mode="bm25",
+            top_k=2,
+            chat_configuration={
+                "planner_deployment_id": "planner-test",
+                "metadata": {"agent_max_iterations": 2, "agent_max_tool_calls": 2},
+            },
+        ),
+    )
+
+    assert result.metadata["route_level"] == "l4_advanced_rag"
+    assert result.metadata["agent_tool_calls"] == 2
+    assert result.metadata["agent_stopping_reason"] == "iteration_limit"
+    assert result.metadata["agent"]["completion_status"] == "bounded_completion"
+    assert result.contexts
+
+
+def test_l4_stream_emits_agent_progress_before_generation(tmp_path):
+    service, kb = build_service(tmp_path, label="advanced")
+    service.model_gateway = RuntimeControlGateway(
+        planner_text='{"action":"search_knowledge_base","arguments":{"query":"invoice approval"},"reason":"Gather evidence"}',
+    )
+
+    async def collect():
+        return [
+            event
+            async for event in service.answer_stream(
+                "Research the exception workflow.",
+                AnswerOptions(
+                    mode="advanced_rag",
+                    knowledge_base_id=kb.id,
+                    retrieval_mode="bm25",
+                    top_k=1,
+                    chat_configuration={
+                        "planner_deployment_id": "planner-test",
+                        "metadata": {"agent_max_iterations": 1, "agent_max_tool_calls": 1},
+                    },
+                ),
+            )
+        ]
+
+    events = asyncio.run(collect())
+    progress_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.type == "trace" and event.data["step"].startswith("L4 agent iteration")
+    )
+    first_delta_index = next(index for index, event in enumerate(events) if event.type == "delta")
+
+    assert progress_index < first_delta_index
+    assert any(event.type == "sources" and event.data["contexts"] for event in events[:first_delta_index])
 
 
 def test_l2_dense_uses_repository_embedding_search(tmp_path):

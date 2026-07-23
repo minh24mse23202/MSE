@@ -162,6 +162,10 @@ class ModelClassificationResult:
     input_tokens: int = 0
     output_tokens: int = 0
     estimated_cost_usd: float = 0.0
+    probabilities: Dict[str, float] = field(default_factory=dict)
+    confidence: float = 1.0
+    margin: float = 1.0
+    supported_labels: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -1581,6 +1585,8 @@ class ModelGateway:
         self.classifier_model_paths = {
             "query_classifier_distilbert": "data/artifacts/query_classifier_distilbert",
             "query_classifier_t5": "data/artifacts/query_classifier_t5",
+            "query_classifier_distilbert_v2": "data/artifacts/query_classifier_distilbert_v2",
+            "query_classifier_t5_v2": "data/artifacts/query_classifier_t5_v2",
             **dict(classifier_model_paths or {}),
         }
         self._classifier_cache: Dict[tuple[str, str], Any] = {}
@@ -1797,13 +1803,20 @@ class ModelGateway:
             resolved = self._resolve_model(deployment, require_connection_enabled=require_enabled)
             if resolved.connection.provider == "local_builtin":
                 classifier = self._local_classifier(deployment)
-                label = await asyncio.to_thread(classifier.predict, query)
+                from aragbiz.classifier import predict_scored
+
+                prediction = await asyncio.to_thread(predict_scored, classifier, query)
+                label = prediction.label
+                probabilities = prediction.probabilities
+                confidence = prediction.confidence
+                margin = prediction.margin
+                supported_labels = prediction.supported_labels
                 input_tokens = _rough_token_count(query)
                 output_tokens = 1
                 cost = 0.0
                 runtime = (
                     "transformers-text2text-classification"
-                    if deployment.model == "query_classifier_t5"
+                    if deployment.model in {"query_classifier_t5", "query_classifier_t5_v2"}
                     else "huggingface-sequence-classification"
                 )
                 metadata = {
@@ -1820,15 +1833,22 @@ class ModelGateway:
                             "role": "system",
                             "content": (
                                 "Classify the business-workflow query complexity. "
-                                "Return exactly one label: simple, moderate, or complex."
+                                "Return only JSON with keys label, confidence, and probabilities. "
+                                "The label must be simple, moderate, complex, or advanced. "
+                                "Probabilities must contain all four labels and sum approximately to 1."
                             ),
                         },
                         {"role": "user", "content": query},
                     ],
-                    {"temperature": 0, "max_tokens": 12},
+                    {"temperature": 0, "max_tokens": 160},
                     require_connection_enabled=require_enabled,
                 )
-                label = _classification_label(generated.text)
+                classification = _classification_payload(generated.text)
+                label = classification["label"]
+                probabilities = classification["probabilities"]
+                confidence = classification["confidence"]
+                margin = classification["margin"]
+                supported_labels = list(probabilities)
                 input_tokens = generated.input_tokens
                 output_tokens = generated.output_tokens
                 cost = generated.estimated_cost_usd
@@ -1859,6 +1879,10 @@ class ModelGateway:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 estimated_cost_usd=cost,
+                probabilities=probabilities,
+                confidence=confidence,
+                margin=margin,
+                supported_labels=supported_labels,
                 metadata={**metadata, "latency_ms": round(latency, 3), "usage_event_id": usage_event_id},
             )
         except Exception as exc:
@@ -2063,7 +2087,7 @@ class ModelGateway:
             )
         from aragbiz.classifier import HuggingFaceQueryClassifier, T5QueryClassifier
 
-        classifier = T5QueryClassifier(path) if deployment.model == "query_classifier_t5" else HuggingFaceQueryClassifier(path)
+        classifier = T5QueryClassifier(path) if deployment.model in {"query_classifier_t5", "query_classifier_t5_v2"} else HuggingFaceQueryClassifier(path)
         self._classifier_cache[cache_key] = classifier
         return classifier
 
@@ -2543,6 +2567,36 @@ def builtin_model_deployments() -> List[ModelDeployment]:
         ModelDeployment("model-local-lexical-reranker", "Local Lexical Reranker", "Local", "lexical-overlap", ["rerank"], **common),
         ModelDeployment("model-local-distilbert", "Local DistilBERT Classifier", "Local", "query_classifier_distilbert", ["classifier"], **common),
         ModelDeployment("model-local-t5-classifier", "Local T5-small Classifier", "Local", "query_classifier_t5", ["classifier"], **common),
+        ModelDeployment(
+            "model-local-distilbert-v2",
+            "Local DistilBERT Classifier (4-class)",
+            "Local",
+            "query_classifier_distilbert_v2",
+            ["classifier"],
+            enabled=False,
+            health_status="untested",
+            metadata={
+                "builtin": True,
+                "complexity_labels": ["simple", "moderate", "complex", "advanced"],
+                "artifact_version": 2,
+            },
+            **{key: value for key, value in common.items() if key not in {"metadata", "enabled", "health_status"}},
+        ),
+        ModelDeployment(
+            "model-local-t5-classifier-v2",
+            "Local T5-small Classifier (4-class)",
+            "Local",
+            "query_classifier_t5_v2",
+            ["classifier"],
+            enabled=False,
+            health_status="untested",
+            metadata={
+                "builtin": True,
+                "complexity_labels": ["simple", "moderate", "complex", "advanced"],
+                "artifact_version": 2,
+            },
+            **{key: value for key, value in common.items() if key not in {"metadata", "enabled", "health_status"}},
+        ),
     ]
 
 
@@ -3193,6 +3247,10 @@ def _rough_token_count(text: str) -> int:
 
 
 def _classification_label(value: Any) -> str:
+    return str(_classification_payload(value)["label"])
+
+
+def _classification_payload(value: Any) -> Dict[str, Any]:
     text = str(value or "").strip()
     if text.startswith("```") and text.endswith("```"):
         text = text[3:-3].strip()
@@ -3202,14 +3260,33 @@ def _classification_label(value: Any) -> str:
         payload = json.loads(text)
     except (TypeError, ValueError, json.JSONDecodeError):
         payload = text
-    if isinstance(payload, dict):
-        payload = payload.get("label")
-    label = str(payload or "").strip().lower().strip("\"'")
-    if label not in {"simple", "moderate", "complex"}:
+    raw_payload = payload if isinstance(payload, dict) else {"label": payload}
+    label = str(raw_payload.get("label") or "").strip().lower().strip("\"'")
+    labels = ("simple", "moderate", "complex", "advanced")
+    if label not in labels:
         raise ModelFarmError(
-            "Classifier returned an invalid label. Expected exactly one of: simple, moderate, complex."
+            "Classifier returned an invalid label. Expected one of: simple, moderate, complex, advanced."
         )
-    return label
+    raw_probabilities = raw_payload.get("probabilities")
+    if isinstance(raw_probabilities, dict):
+        probabilities = {candidate: max(float(raw_probabilities.get(candidate, 0.0)), 0.0) for candidate in labels}
+        total = sum(probabilities.values())
+        probabilities = {candidate: value / total for candidate, value in probabilities.items()} if total else {}
+    else:
+        probabilities = {}
+    if not probabilities:
+        supplied_confidence = max(0.0, min(float(raw_payload.get("confidence", 1.0)), 1.0))
+        remainder = (1.0 - supplied_confidence) / (len(labels) - 1)
+        probabilities = {candidate: supplied_confidence if candidate == label else remainder for candidate in labels}
+    ordered = sorted(probabilities.values(), reverse=True)
+    confidence = probabilities[label]
+    margin = max(confidence - (ordered[1] if len(ordered) > 1 else 0.0), 0.0)
+    return {
+        "label": label,
+        "probabilities": probabilities,
+        "confidence": confidence,
+        "margin": margin,
+    }
 
 
 def _tokens(text: str) -> List[str]:

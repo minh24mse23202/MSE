@@ -15,8 +15,11 @@ class AppConfig:
     simple_top_k: int = 2
     moderate_top_k: int = 4
     complex_top_k: int = 6
+    advanced_top_k: int = 8
     classifier_model_path: str = "data/artifacts/query_classifier_distilbert"
     t5_classifier_model_path: str = "data/artifacts/query_classifier_t5"
+    classifier_v2_model_path: str = "data/artifacts/query_classifier_distilbert_v2"
+    t5_classifier_v2_model_path: str = "data/artifacts/query_classifier_t5_v2"
     classifier_fallback_model_path: str = "data/artifacts/query_classifier_nb.json"
     use_trained_classifier: bool = True
     default_mode: str = "hybrid"
@@ -95,6 +98,7 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
         simple_top_k=int(raw.get("classifier", {}).get("simple_top_k", AppConfig.simple_top_k)),
         moderate_top_k=int(raw.get("classifier", {}).get("moderate_top_k", AppConfig.moderate_top_k)),
         complex_top_k=int(raw.get("classifier", {}).get("complex_top_k", AppConfig.complex_top_k)),
+        advanced_top_k=int(raw.get("classifier", {}).get("advanced_top_k", AppConfig.advanced_top_k)),
         classifier_model_path=raw.get("classifier", {}).get("model_path", AppConfig.classifier_model_path),
         t5_classifier_model_path=os.getenv(
             "ARAGBIZ_T5_CLASSIFIER_MODEL_PATH",
@@ -146,6 +150,14 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
         blob_store=os.getenv(
             "ARAGBIZ_BLOB_STORE",
             raw.get("jobs", {}).get("blob_store", AppConfig.blob_store),
+        ),
+        classifier_v2_model_path=os.getenv(
+            "ARAGBIZ_DISTILBERT_V2_CLASSIFIER_MODEL_PATH",
+            raw.get("classifier", {}).get("distilbert_v2_model_path", AppConfig.classifier_v2_model_path),
+        ),
+        t5_classifier_v2_model_path=os.getenv(
+            "ARAGBIZ_T5_V2_CLASSIFIER_MODEL_PATH",
+            raw.get("classifier", {}).get("t5_v2_model_path", AppConfig.t5_classifier_v2_model_path),
         ),
         trace_store=os.getenv(
             "ARAGBIZ_TRACE_STORE",

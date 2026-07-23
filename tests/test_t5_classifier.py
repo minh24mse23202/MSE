@@ -17,3 +17,17 @@ def test_t5_classifier_artifact_detection(tmp_path):
 
 def test_t5_input_format_is_stable():
     assert format_t5_input("How do I approve a PO?") == "classify query complexity: How do I approve a PO?"
+
+
+def test_t5_manifest_distinguishes_legacy_and_four_class_artifacts(tmp_path):
+    legacy_dir = tmp_path / "legacy"
+    legacy_dir.mkdir()
+    assert T5QueryClassifier(legacy_dir).supported_labels == ["simple", "moderate", "complex"]
+
+    v2_dir = tmp_path / "v2"
+    v2_dir.mkdir()
+    (v2_dir / "classifier_manifest.json").write_text(
+        json.dumps({"complexity_labels": ["simple", "moderate", "complex", "advanced"]}),
+        encoding="utf-8",
+    )
+    assert T5QueryClassifier(v2_dir).supported_labels[-1] == "advanced"

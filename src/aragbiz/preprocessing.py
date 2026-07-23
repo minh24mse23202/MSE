@@ -61,13 +61,11 @@ def write_qac_jsonl(records: Iterable[QACRecord], path: Union[str, Path]) -> Non
 
 
 def wixqa_complexity_label(article_ids: Sequence[str], question: str) -> str:
-    if len(article_ids) >= 3:
+    if len(article_ids) >= 4:
+        return "advanced"
+    if len(article_ids) >= 2:
         return "complex"
-    if len(article_ids) == 2:
-        return "moderate"
-    if len(question.split()) >= 22:
-        return "moderate"
-    return "simple"
+    return "moderate"
 
 
 def wixqa_rows_to_qac_records(rows: Iterable[dict], kb_lookup: Dict[str, dict], source_subset: str) -> List[QACRecord]:

@@ -1,0 +1,73 @@
+{
+  "dropped_duplicate_counts": {},
+  "input_counts": {
+    "template_four_class": 2400,
+    "wixqa_expertwritten": 200,
+    "wixqa_simulated": 200,
+    "wixqa_synthetic": 6221
+  },
+  "inputs": [
+    {
+      "path": "data\\processed\\wixqa_expertwritten_qac.jsonl",
+      "records": 200,
+      "sha256": "de03c4a95e0580e5106f9531deec397e93acaaa19767adb3ff166df817563ba6",
+      "source": "wixqa_expertwritten"
+    },
+    {
+      "path": "data\\processed\\wixqa_simulated_qac.jsonl",
+      "records": 200,
+      "sha256": "80bb5b61b6e8638773e31503d922f2bc753db4a55fa8fc27642c0d3e3c6c9427",
+      "source": "wixqa_simulated"
+    },
+    {
+      "path": "data\\processed\\wixqa_synthetic_qac.jsonl",
+      "records": 6221,
+      "sha256": "456f35fd1344b6b147f7775d4e971504f9b6327c250ab549b28032e9682b2d17",
+      "source": "wixqa_synthetic"
+    },
+    {
+      "path": "data\\processed\\wixqa_template_four_class_qac.jsonl",
+      "records": 2400,
+      "sha256": "d352b5539f41e6e425c9938c2348fb44f24169d6a34b3159121928cfa204d5f4",
+      "source": "template_four_class"
+    }
+  ],
+  "official_synthetic_limit": 200,
+  "output": "data\\processed\\four_class_qac.jsonl",
+  "output_sha256": "3eee803119451358fd4c1931750b52ceddab96625421fbb825b89e8e2908aa48",
+  "records": 2400,
+  "schema_version": 1,
+  "seed": 42,
+  "selected_class_counts": {
+    "advanced": 600,
+    "complex": 600,
+    "moderate": 600,
+    "simple": 600
+  },
+  "selected_source_class_counts": {
+    "template_four_class": {
+      "advanced": 600,
+      "complex": 521,
+      "moderate": 79,
+      "simple": 600
+    },
+    "wixqa_expertwritten": {
+      "complex": 52,
+      "moderate": 148
+    },
+    "wixqa_simulated": {
+      "complex": 27,
+      "moderate": 173
+    },
+    "wixqa_synthetic": {
+      "moderate": 200
+    }
+  },
+  "selected_source_counts": {
+    "template_four_class": 1800,
+    "wixqa_expertwritten": 200,
+    "wixqa_simulated": 200,
+    "wixqa_synthetic": 200
+  },
+  "target_per_label": 600
+}
