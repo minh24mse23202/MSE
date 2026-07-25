@@ -16,6 +16,11 @@ from aragbiz.chat import ChatService, JsonChatRepository, PostgresChatRepository
 from aragbiz.config import AppConfig, load_config
 from aragbiz.data import load_documents_jsonl, load_qac_jsonl, records_to_documents
 from aragbiz.evaluation import EvaluationService, JsonEvaluationRepository, PostgresEvaluationRepository
+from aragbiz.evaluation_experiments import (
+    EvaluationExperimentService,
+    JsonEvaluationExperimentRepository,
+    PostgresEvaluationExperimentRepository,
+)
 from aragbiz.generation import ExtractiveGenerator
 from aragbiz.knowledge import KnowledgeService, OverlapChunker, build_embedder
 from aragbiz.knowledge_store import JsonKnowledgeRepository, PostgresKnowledgeRepository
@@ -240,12 +245,29 @@ def build_evaluation_service(
         repository=repository,
         answer_service=answer_service,
         dataset_path=existing_dataset_path(config),
+        model_gateway=model_gateway,
         ragxplain_runner=RagxplainRunner(
             root=config.ragxplain_root,
             results_root=config.ragxplain_results_root,
             judge=config.ragxplain_judge,
             timeout_seconds=config.ragxplain_timeout_seconds,
         ),
+    )
+
+
+def build_evaluation_experiment_service(
+    config: Optional[AppConfig] = None,
+    *,
+    evaluation_service: Optional[EvaluationService] = None,
+) -> EvaluationExperimentService:
+    config = config or load_config()
+    if config.knowledge_backend.lower() == "json":
+        repository = JsonEvaluationExperimentRepository(config.evaluation_json_store)
+    else:
+        repository = PostgresEvaluationExperimentRepository(config.knowledge_database_url)
+    return EvaluationExperimentService(
+        repository,
+        evaluation_service or build_evaluation_service(config),
     )
 
 

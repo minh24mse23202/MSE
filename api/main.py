@@ -25,11 +25,14 @@ from aragbiz.chat import (
 )
 from aragbiz.conversation import build_conversation_history
 from aragbiz.evaluation import EvaluationCaseRecord, EvaluationRunConfig, EvaluationRunRecord
+from aragbiz.evaluation_experiments import EvaluationExperimentRecord
+from aragbiz.evaluation_metrics import DEFAULT_QUALITY_WEIGHTS
 from aragbiz.factory import (
     build_auth_service,
     build_blob_store,
     build_chat_service,
     build_evaluation_service,
+    build_evaluation_experiment_service,
     build_job_service,
     build_knowledge_service,
     build_model_farm_service,
@@ -73,6 +76,10 @@ evaluation_service = build_evaluation_service(
     pipeline=pipeline,
     model_farm_service=model_farm_service,
     model_gateway=model_gateway,
+)
+evaluation_experiment_service = build_evaluation_experiment_service(
+    config,
+    evaluation_service=evaluation_service,
 )
 answer_cancellations = CancellationCoordinator()
 agent_tool_registry = AgentToolRegistry()
@@ -262,7 +269,7 @@ class ChatMessageVersionResponse(BaseModel):
 
 
 class EvaluationRunRequest(BaseModel):
-    name: str = "Adaptive vs Static L2 evaluation"
+    name: str = "RAG configuration evaluation"
     knowledge_base_id: str = ""
     chat_configuration_id: Optional[str] = None
     chat_configuration: Optional[ChatConfigurationRequest] = None
@@ -270,8 +277,6 @@ class EvaluationRunRequest(BaseModel):
     retrieval_mode: RetrievalMode = "hybrid"
     top_k: int = Field(4, ge=1, le=50)
     limit: int = Field(20, ge=0, le=100)
-    compare_baseline: bool = True
-    run_ragxplain: bool = False
 
 
 class EvaluationRunResponse(BaseModel):
@@ -285,11 +290,8 @@ class EvaluationRunResponse(BaseModel):
     retrieval_mode: str
     top_k: int
     limit: int
-    compare_baseline: bool
     metrics: Dict[str, Any]
-    baseline_metrics: Dict[str, Any]
     route_distribution: Dict[str, int]
-    baseline_route_distribution: Dict[str, int]
     metadata: Dict[str, Any]
     error: Optional[str]
     created_at: str
@@ -303,12 +305,9 @@ class EvaluationCaseResponse(BaseModel):
     question: str
     expected_answer: str
     complexity_label: str
-    adaptive_answer: str
-    static_answer: str
-    adaptive_contexts: List[Dict[str, Any]]
-    static_contexts: List[Dict[str, Any]]
-    adaptive_metadata: Dict[str, Any]
-    static_metadata: Dict[str, Any]
+    answer: str
+    contexts: List[Dict[str, Any]]
+    answer_metadata: Dict[str, Any]
     metrics: Dict[str, Any]
     created_at: str
 
@@ -492,7 +491,52 @@ class ModelDeploymentResponse(BaseModel):
     last_error: str
     metadata: Dict[str, Any]
     created_at: str
+
+
+class EvaluationExperimentRequest(BaseModel):
+    name: str = "WixQA configuration benchmark"
+    knowledge_base_id: str
+    configuration_ids: List[str] = Field(min_length=1)
+    datasets: Dict[str, Optional[int]]
+    judge_deployment_id: str
+    quality_weights: Dict[str, float] = Field(default_factory=lambda: dict(DEFAULT_QUALITY_WEIGHTS))
+    max_cost_per_case: Optional[float] = Field(default=None, ge=0)
+    max_average_latency_ms: Optional[float] = Field(default=None, ge=0)
+    seed: int = 42
+
+
+class EvaluationExperimentResponse(BaseModel):
+    id: str
+    name: str
+    status: str
+    knowledge_base_id: str
+    knowledge_base_name: str
+    configuration_ids: List[str]
+    datasets: Dict[str, Optional[int]]
+    judge_deployment_id: str
+    quality_weights: Dict[str, float]
+    max_cost_per_case: Optional[float]
+    max_average_latency_ms: Optional[float]
+    seed: int
+    run_ids: List[str]
+    leaderboard: List[Dict[str, Any]]
+    progress: Dict[str, Any]
+    metadata: Dict[str, Any]
+    error: str
+    created_by: str
+    created_at: str
     updated_at: str
+    finished_at: str
+
+
+class EvaluationExperimentCreatedResponse(BaseModel):
+    experiment: EvaluationExperimentResponse
+    job: Dict[str, Any]
+
+
+class RagxplainDiagnosisRequest(BaseModel):
+    limit: int = Field(100, ge=1, le=6221)
+    seed: int = 42
 
 
 class ModelConnectionCreateRequest(BaseModel):
@@ -1993,6 +2037,156 @@ def list_chat_message_versions(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/evaluation/datasets", response_model=List[Dict[str, Any]])
+def list_evaluation_datasets(authorization: str = Header(default="")) -> List[Dict[str, Any]]:
+    _require_user(authorization)
+    return evaluation_experiment_service.datasets()
+
+
+@app.get("/evaluation/experiments", response_model=List[EvaluationExperimentResponse])
+def list_evaluation_experiments(
+    authorization: str = Header(default=""),
+) -> List[EvaluationExperimentResponse]:
+    _require_user(authorization)
+    return [_evaluation_experiment_response(record) for record in evaluation_experiment_service.list()]
+
+
+@app.post(
+    "/evaluation/experiments",
+    response_model=EvaluationExperimentCreatedResponse,
+    status_code=202,
+)
+def create_evaluation_experiment(
+    request: EvaluationExperimentRequest,
+    authorization: str = Header(default=""),
+) -> EvaluationExperimentCreatedResponse:
+    user = _require_admin(authorization)
+    try:
+        knowledge_base = knowledge_service.get_knowledge_base(request.knowledge_base_id)
+        model_farm_service.resolve(request.judge_deployment_id, "judge")
+        snapshots = [
+            _chat_configuration_snapshot(chat_service.get_configuration(configuration_id))
+            for configuration_id in request.configuration_ids
+        ]
+        experiment = evaluation_experiment_service.create(
+            name=request.name,
+            knowledge_base=knowledge_base,
+            configuration_snapshots=snapshots,
+            datasets=request.datasets,
+            judge_deployment_id=request.judge_deployment_id,
+            quality_weights=request.quality_weights,
+            max_cost_per_case=request.max_cost_per_case,
+            max_average_latency_ms=request.max_average_latency_ms,
+            seed=request.seed,
+            created_by=user.id,
+        )
+        payload = {"experiment_id": experiment.id}
+        job = job_service.enqueue(
+            "evaluation_experiment",
+            payload,
+            idempotency_key=job_idempotency_key("evaluation_experiment", payload),
+            max_attempts=1,
+        )
+        return EvaluationExperimentCreatedResponse(
+            experiment=_evaluation_experiment_response(experiment),
+            job=jsonable_encoder(_job_response(job)),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ModelFarmError, KnowledgeProcessingError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/evaluation/experiments/{experiment_id}", response_model=EvaluationExperimentResponse)
+def get_evaluation_experiment(
+    experiment_id: str,
+    authorization: str = Header(default=""),
+) -> EvaluationExperimentResponse:
+    _require_user(authorization)
+    try:
+        return _evaluation_experiment_response(evaluation_experiment_service.get(experiment_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/evaluation/experiments/{experiment_id}/runs", response_model=List[EvaluationRunResponse])
+def list_evaluation_experiment_runs(
+    experiment_id: str,
+    authorization: str = Header(default=""),
+) -> List[EvaluationRunResponse]:
+    _require_user(authorization)
+    try:
+        return [_evaluation_run_response(run) for run in evaluation_experiment_service.runs(experiment_id)]
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/evaluation/experiments/{experiment_id}/leaderboard", response_model=List[Dict[str, Any]])
+def get_evaluation_experiment_leaderboard(
+    experiment_id: str,
+    authorization: str = Header(default=""),
+) -> List[Dict[str, Any]]:
+    _require_user(authorization)
+    try:
+        return evaluation_experiment_service.get(experiment_id).leaderboard
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/evaluation/experiments/{experiment_id}/cancel", response_model=EvaluationExperimentResponse)
+def cancel_evaluation_experiment(
+    experiment_id: str,
+    authorization: str = Header(default=""),
+) -> EvaluationExperimentResponse:
+    _require_admin(authorization)
+    try:
+        experiment = evaluation_experiment_service.get(experiment_id)
+        for job in job_service.list(limit=1000):
+            if job.job_type == "evaluation_experiment" and job.payload.get("experiment_id") == experiment_id:
+                job_service.cancel(job.id)
+        return _evaluation_experiment_response(
+            evaluation_experiment_service.mark_cancelled(experiment.id)
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/evaluation/experiments/{experiment_id}/resume", response_model=EvaluationExperimentCreatedResponse, status_code=202)
+def resume_evaluation_experiment(
+    experiment_id: str,
+    authorization: str = Header(default=""),
+) -> EvaluationExperimentCreatedResponse:
+    _require_admin(authorization)
+    try:
+        experiment = evaluation_experiment_service.get(experiment_id)
+        payload = {"experiment_id": experiment.id}
+        job = job_service.enqueue(
+            "evaluation_experiment",
+            payload,
+            idempotency_key=f"evaluation-resume:{experiment.id}:{uuid.uuid4().hex}",
+            max_attempts=1,
+        )
+        return EvaluationExperimentCreatedResponse(
+            experiment=_evaluation_experiment_response(experiment),
+            job=jsonable_encoder(_job_response(job)),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/evaluation/experiments/{experiment_id}")
+def delete_evaluation_experiment(
+    experiment_id: str,
+    authorization: str = Header(default=""),
+) -> Dict[str, str]:
+    _require_admin(authorization)
+    try:
+        evaluation_experiment_service.delete(experiment_id)
+        return {"status": "deleted"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/evaluation/runs", response_model=List[EvaluationRunResponse])
 def list_evaluation_runs() -> List[EvaluationRunResponse]:
     return [_evaluation_run_response(record) for record in evaluation_service.list_runs()]
@@ -2014,8 +2208,6 @@ def create_evaluation_run(request: EvaluationRunRequest) -> EvaluationRunRespons
                 retrieval_mode=request.retrieval_mode,
                 top_k=request.top_k,
                 limit=request.limit,
-                compare_baseline=request.compare_baseline,
-                run_ragxplain=request.run_ragxplain,
             )
         )
         return _evaluation_run_response(run)
@@ -2049,10 +2241,45 @@ def get_ragxplain_overall_insights(run_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ModelFarmError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except ModelFarmError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RagxplainError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/evaluation/runs/{run_id}/ragxplain", response_model=Dict[str, Any], status_code=202)
+def start_ragxplain_diagnosis(
+    run_id: str,
+    request: RagxplainDiagnosisRequest,
+    authorization: str = Header(default=""),
+) -> Dict[str, Any]:
+    _require_admin(authorization)
+    try:
+        run = evaluation_service.get_run(run_id)
+        if not run.metadata.get("judge_deployment_id"):
+            raise ValueError("The selected run has no registered judge deployment.")
+        payload = {"run_id": run_id, "limit": request.limit, "seed": request.seed}
+        queued_run = evaluation_service.queue_ragxplain(
+            run_id,
+            limit=request.limit,
+            seed=request.seed,
+        )
+        job = job_service.enqueue(
+            "evaluation_ragxplain",
+            payload,
+            idempotency_key=(
+                f"evaluation-ragxplain:{run_id}:"
+                f"{run.metadata.get('judge_deployment_id')}:{uuid.uuid4().hex}"
+            ),
+            max_attempts=1,
+        )
+        return {
+            "run_id": run_id,
+            "job": jsonable_encoder(_job_response(job)),
+            "ragxplain": queued_run.metadata.get("ragxplain", {}),
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RagxplainError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/evaluation/ragxplain/viewer", response_class=FileResponse)
@@ -2377,11 +2604,8 @@ def _evaluation_run_response(record: EvaluationRunRecord) -> EvaluationRunRespon
         retrieval_mode=record.retrieval_mode,
         top_k=record.top_k,
         limit=record.limit,
-        compare_baseline=record.compare_baseline,
         metrics=record.metrics,
-        baseline_metrics=record.baseline_metrics,
         route_distribution=record.route_distribution,
-        baseline_route_distribution=record.baseline_route_distribution,
         metadata=record.metadata,
         error=record.error,
         created_at=record.created_at,
@@ -2390,6 +2614,9 @@ def _evaluation_run_response(record: EvaluationRunRecord) -> EvaluationRunRespon
 
 
 def _evaluation_case_response(record: EvaluationCaseRecord) -> EvaluationCaseResponse:
+    metrics = dict(record.metrics)
+    if "result" not in metrics and isinstance(metrics.get("adaptive"), dict):
+        metrics["result"] = metrics["adaptive"]
     return EvaluationCaseResponse(
         id=record.id,
         run_id=record.run_id,
@@ -2397,14 +2624,39 @@ def _evaluation_case_response(record: EvaluationCaseRecord) -> EvaluationCaseRes
         question=record.question,
         expected_answer=record.expected_answer,
         complexity_label=record.complexity_label,
-        adaptive_answer=record.adaptive_answer,
-        static_answer=record.static_answer,
-        adaptive_contexts=record.adaptive_contexts,
-        static_contexts=record.static_contexts,
-        adaptive_metadata=record.adaptive_metadata,
-        static_metadata=record.static_metadata,
-        metrics=record.metrics,
+        answer=record.adaptive_answer,
+        contexts=record.adaptive_contexts,
+        answer_metadata=record.adaptive_metadata,
+        metrics=metrics,
         created_at=record.created_at,
+    )
+
+
+def _evaluation_experiment_response(
+    record: EvaluationExperimentRecord,
+) -> EvaluationExperimentResponse:
+    return EvaluationExperimentResponse(
+        id=record.id,
+        name=record.name,
+        status=record.status,
+        knowledge_base_id=record.knowledge_base_id,
+        knowledge_base_name=record.knowledge_base_name,
+        configuration_ids=record.configuration_ids,
+        datasets=record.datasets,
+        judge_deployment_id=record.judge_deployment_id,
+        quality_weights=record.quality_weights,
+        max_cost_per_case=record.max_cost_per_case,
+        max_average_latency_ms=record.max_average_latency_ms,
+        seed=record.seed,
+        run_ids=record.run_ids,
+        leaderboard=record.leaderboard,
+        progress=record.progress,
+        metadata=record.metadata,
+        error=record.error,
+        created_by=record.created_by,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        finished_at=record.finished_at,
     )
 
 

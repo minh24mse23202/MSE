@@ -1,0 +1,58 @@
+{
+  "chat_configuration": {
+    "citations_enabled": true,
+    "description": "Default configuration for concise business workflow answers.",
+    "fallback_deployment_ids": [],
+    "generation_parameters": {},
+    "generator_deployment_id": "model-local-extractive",
+    "generator_model": "extractive",
+    "generator_provider": "Local",
+    "humor_level": 0,
+    "id": "cfg-default-balanced-workflow",
+    "metadata": {
+      "actual_generator": "deployment",
+      "citations_enabled": true,
+      "classifier": "DistilBERT",
+      "classifier_deployment_id": "",
+      "configuration_id": "MuOn4R4SsWy8",
+      "conversation_starters": [
+        "What are the main steps in this workflow?",
+        "Summarize the selected knowledge base."
+      ],
+      "fallback_deployment_ids": [],
+      "generation_parameters": {},
+      "generator_deployment_id": "model-local-extractive",
+      "planner_deployment_id": "",
+      "reranker_deployment_id": "",
+      "reranker_enabled": false,
+      "retrieval_mode": "hybrid",
+      "retrieval_mode_label": "Hybrid",
+      "route_mode": "simple_rag",
+      "route_strategy": "L2 Simple RAG",
+      "runtime": "model-farm",
+      "top_k": 2,
+      "welcome_message": "Welcome to Adaptive RAG Studio. Workflow assistant 2 will assist you."
+    },
+    "name": "Workflow assistant 01",
+    "planner_deployment_id": "",
+    "predefined_prompt": "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.",
+    "reranker_deployment_id": "",
+    "response_structure": "Concise answer with bullets and cited workflow context",
+    "system_prompt": "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
+    "tone": "Professional"
+  },
+  "chat_configuration_id": "cfg-default-balanced-workflow",
+  "compare_baseline": true,
+  "dataset_name": "WixQA expert-written",
+  "knowledge_base_id": "kb-c0ed6736009d4d8c86b7961d992fccf4",
+  "knowledge_base_name": "Business Workflow Knowledge Base",
+  "name": "Adaptive vs Static L2 - 7/24/2026, 11:50:50 PM",
+  "retrieval_mode": "hybrid",
+  "route_distribution": {
+    "l1_direct": 2,
+    "l2_simple_rag": 2,
+    "l3_complex_rag": 1
+  },
+  "run_id": "eval-b5627144cd67425ca669631752894287",
+  "top_k": 1
+}

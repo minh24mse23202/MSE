@@ -17,14 +17,35 @@ python scripts/evaluate_sample.py
 ```
 
 
-## Phase 4 live evaluation
+## WixQA configuration benchmark
 
-The Phase 4 implementation adds persisted evaluation runs for the current L1/L2/L3/L4 Adaptive RAG pipeline.
+The Evaluation screen creates a durable experiment matrix from selected saved RAG Customizer configurations and selected WixQA subsets. Every configuration receives the same deterministic case sample for each subset.
 
-- Adaptive run: `mode=adaptive`, so classifier labels route queries to L1 Direct, L2 Simple RAG, L3 Complex RAG, or L4 Advanced RAG.
-- Static baseline: `mode=simple_rag`, using the same knowledge base, retrieval mode, top-k, and chat configuration.
-- Results are stored in PostgreSQL when available, otherwise in `data/knowledge/evaluation_store.json`.
-- The React Evaluation screen can create runs, compare metrics, inspect case-level traces, and embed run-level RAGXplain insights.
+Each matrix cell executes exactly one saved configuration using its configured
+route (`adaptive`, L1, L2, L3, or L4). There is no implicit static-L2 baseline
+call. To compare Adaptive with L2, save one configuration for each route and
+include both in the same experiment; the leaderboard compares their independent
+results.
+
+The primary WixQA metrics are token F1, BLEU, ROUGE-1, ROUGE-2, LLM-judged Context Recall, and LLM-judged Factuality. The default ranking assigns 30% each to Context Recall and Factuality and distributes the remaining 40% across lexical metrics. Dataset scores are macro-averaged so Synthetic does not dominate ExpertWritten and Simulated.
+
+Before running an experiment:
+
+1. Apply `alembic upgrade head`.
+2. Start the API and `python -m aragbiz.worker`.
+3. Create an enabled Model Farm deployment with the `judge` capability.
+4. Enable external processing on the WixQA Knowledge Base when the judge is remote.
+5. Save at least one RAG Customizer configuration.
+
+Experiment APIs:
+
+- `GET /evaluation/datasets`
+- `POST /evaluation/experiments`
+- `GET /evaluation/experiments/{id}`
+- `GET /evaluation/experiments/{id}/runs`
+- `GET /evaluation/experiments/{id}/leaderboard`
+- `POST /evaluation/experiments/{id}/cancel`
+- `POST /evaluation/experiments/{id}/resume`
 
 ## RAGXplain judge and viewer
 
@@ -34,24 +55,24 @@ RAGXplain remains a sibling project. Install it into the active Python 3.11 envi
 python -m pip install -e "..\ragxplain"
 ```
 
-The default configuration uses `examples.mock_judge_impl:judge` so the integration can be smoke-tested without credentials. Configure a real judge implementation before collecting capstone results:
+After a configuration-dataset run completes, select it and start a bounded RAGXplain diagnosis. The default stratified limit is 100 cases. RAGXplain uses the experiment's registered Model Farm judge instead of a separate Python judge module. A completed diagnosis stores native artifacts under `docs/evaluation/results/<run_id>/ragxplain/`. **Open RAGXplain insights** embeds the sibling viewer and loads `overall_insights.json` automatically.
 
-```powershell
-$env:ARAGBIZ_RAGXPLAIN_ROOT="..\ragxplain"
-$env:ARAGBIZ_RAGXPLAIN_JUDGE="your_judge_module:judge"
-```
-
-Enable **Run RAGXplain LLM Judge** on the Evaluation screen. A completed run stores native artifacts under `docs/evaluation/results/<run_id>/ragxplain/`. **Open RAGXplain insights** embeds the sibling viewer and loads `overall_insights.json` automatically; manual drag-and-drop remains available as a fallback.
+Artifacts created by the legacy inline integration may identify the judge as
+`examples.mock_judge_impl:judge`. The Evaluation screen marks these artifacts as
+legacy and requires **Run diagnosis** again before opening them as current
+insights. Restart both the API and worker after upgrading so the rerun uses the
+selected Model Farm judge.
 
 The integration exposes:
 
 - `GET /evaluation/runs/{run_id}/ragxplain/overall-insights`
+- `POST /evaluation/runs/{run_id}/ragxplain`
 - `GET /evaluation/ragxplain/viewer`
 
 CLI snapshot example:
 
 ```powershell
-python scripts/evaluate_adaptive.py --knowledge-base-id <kb-id> --limit 20 --retrieval-mode hybrid --top-k 4 --run-ragxplain
+python scripts/evaluate_adaptive.py --knowledge-base-id <kb-id> --chat-configuration-id <config-id> --limit 20 --retrieval-mode hybrid --top-k 4
 ```
 
 Snapshots are saved under `docs/evaluation/results/`.

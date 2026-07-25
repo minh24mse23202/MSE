@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 from aragbiz.config import load_config
 from aragbiz.factory import (
     build_blob_store,
+    build_evaluation_experiment_service,
+    build_evaluation_service,
     build_job_service,
     build_knowledge_service,
     build_model_farm_service,
@@ -21,13 +23,23 @@ from aragbiz.factory import (
 )
 from aragbiz.jobs import BackgroundJob, JobService
 from aragbiz.knowledge import IngestionSummary, KnowledgeService
+from aragbiz.evaluation_experiments import EvaluationExperimentService
 
 
 class KnowledgeJobWorker:
-    def __init__(self, jobs: JobService, knowledge: KnowledgeService, blob_store: Any, *, worker_id: str = ""):
+    def __init__(
+        self,
+        jobs: JobService,
+        knowledge: KnowledgeService,
+        blob_store: Any,
+        *,
+        evaluation: EvaluationExperimentService | None = None,
+        worker_id: str = "",
+    ):
         self.jobs = jobs
         self.knowledge = knowledge
         self.blob_store = blob_store
+        self.evaluation = evaluation
         self.worker_id = worker_id or f"{socket.gethostname()}-{os.getpid()}"
 
     def run_once(self) -> bool:
@@ -65,6 +77,33 @@ class KnowledgeJobWorker:
         if job.job_type == "knowledge_reindex":
             self.jobs.progress(job.id, {"step": "reindex", "percent": 10})
             return asdict(self.knowledge.reindex(knowledge_base_id))
+        if job.job_type == "evaluation_experiment":
+            if self.evaluation is None:
+                raise ValueError("Evaluation worker service is not configured.")
+            experiment_id = str(payload.get("experiment_id") or "")
+            result = self.evaluation.execute(
+                experiment_id,
+                progress_callback=lambda progress: self.jobs.progress(job.id, progress),
+                cancellation_requested=lambda: self.jobs.get(job.id).status == "cancel_requested",
+            )
+            return {
+                "experiment_id": result.id,
+                "status": result.status,
+                "run_ids": result.run_ids,
+                "leaderboard": result.leaderboard,
+            }
+        if job.job_type == "evaluation_ragxplain":
+            if self.evaluation is None:
+                raise ValueError("Evaluation worker service is not configured.")
+            run = self.evaluation.evaluation_service.run_ragxplain(
+                str(payload.get("run_id") or ""),
+                limit=int(payload.get("limit") or 100),
+                seed=int(payload.get("seed") or 42),
+            )
+            return {
+                "run_id": run.id,
+                "ragxplain": run.metadata.get("ragxplain", {}),
+            }
         raise ValueError(f"Unsupported background job type: {job.job_type}")
 
 
@@ -93,10 +132,19 @@ def main() -> None:
     farm = build_model_farm_service(config)
     gateway = build_model_gateway(config, model_farm_service=farm)
     jobs = build_job_service(config)
+    evaluation_service = build_evaluation_service(
+        config,
+        model_farm_service=farm,
+        model_gateway=gateway,
+    )
     worker = KnowledgeJobWorker(
         jobs,
         build_knowledge_service(config, model_farm_service=farm, model_gateway=gateway),
         build_blob_store(config),
+        evaluation=build_evaluation_experiment_service(
+            config,
+            evaluation_service=evaluation_service,
+        ),
     )
     if not args.quiet:
         _log(

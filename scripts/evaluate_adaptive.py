@@ -11,14 +11,12 @@ from aragbiz.factory import build_evaluation_service, build_knowledge_service, b
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run and persist an Adaptive RAG evaluation snapshot.")
+    parser = argparse.ArgumentParser(description="Run and persist one RAG configuration evaluation snapshot.")
     parser.add_argument("--knowledge-base-id", required=True, help="Knowledge base ID to evaluate against.")
     parser.add_argument("--chat-configuration-id", default=None, help="Optional saved chat configuration ID.")
     parser.add_argument("--retrieval-mode", choices=["bm25", "dense", "hybrid"], default="hybrid")
     parser.add_argument("--top-k", type=int, default=4)
     parser.add_argument("--limit", type=int, default=20)
-    parser.add_argument("--no-baseline", action="store_true", help="Disable static L2 baseline comparison.")
-    parser.add_argument("--run-ragxplain", action="store_true", help="Run the configured RAGXplain judge and generate insights.")
     parser.add_argument("--output-dir", default="docs/evaluation/results", help="Directory for JSON result snapshots.")
     args = parser.parse_args()
 
@@ -46,8 +44,6 @@ def main() -> None:
             retrieval_mode=args.retrieval_mode,
             top_k=args.top_k,
             limit=args.limit,
-            compare_baseline=not args.no_baseline,
-            run_ragxplain=args.run_ragxplain,
         )
     )
     cases = evaluation_service.list_cases(run.id)
@@ -101,11 +97,8 @@ def _run_payload(record):
         "retrieval_mode": record.retrieval_mode,
         "top_k": record.top_k,
         "limit": record.limit,
-        "compare_baseline": record.compare_baseline,
         "metrics": record.metrics,
-        "baseline_metrics": record.baseline_metrics,
         "route_distribution": record.route_distribution,
-        "baseline_route_distribution": record.baseline_route_distribution,
         "metadata": record.metadata,
         "error": record.error,
         "created_at": record.created_at,
@@ -121,12 +114,9 @@ def _case_payload(record):
         "question": record.question,
         "expected_answer": record.expected_answer,
         "complexity_label": record.complexity_label,
-        "adaptive_answer": record.adaptive_answer,
-        "static_answer": record.static_answer,
-        "adaptive_contexts": record.adaptive_contexts,
-        "static_contexts": record.static_contexts,
-        "adaptive_metadata": record.adaptive_metadata,
-        "static_metadata": record.static_metadata,
+        "answer": record.adaptive_answer,
+        "contexts": record.adaptive_contexts,
+        "answer_metadata": record.adaptive_metadata,
         "metrics": record.metrics,
         "created_at": record.created_at,
     }

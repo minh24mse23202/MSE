@@ -1422,6 +1422,8 @@ def _document_from_json_row(filename: str, row: Any, index: int) -> KnowledgeDoc
         text = str(row.get("text") or row.get("content") or row.get("contents") or row.get("context") or json.dumps(row, ensure_ascii=True))
         title = str(row.get("title") or row.get("id") or f"{Path(filename).stem}-{index}")
         metadata = {key: value for key, value in row.items() if key not in {"text", "content", "contents", "context"}}
+        if row.get("id") is not None:
+            metadata["source_record_id"] = str(row["id"])
     else:
         text = str(row)
         title = f"{Path(filename).stem}-{index}"

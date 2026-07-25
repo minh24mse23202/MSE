@@ -5025,3 +5025,242 @@ textarea:focus {
     height: 720px;
   }
 }
+
+.evaluation-workbench {
+  min-width: 0;
+}
+
+.evaluation-view-tabs {
+  align-self: flex-start;
+}
+
+.evaluation-setup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.evaluation-setup-panel {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+}
+
+.evaluation-setup-panel h2,
+.evaluation-leaderboard-panel h2,
+.evaluation-diagnostics-panel h2,
+.evaluation-experiment-list h2 {
+  margin: 0;
+}
+
+.panel-heading-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel-heading-row p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.evaluation-check-list {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.evaluation-check-list .check-row,
+.evaluation-dataset-row {
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-background-body);
+}
+
+.evaluation-check-list span,
+.evaluation-dataset-row span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.evaluation-check-list small,
+.evaluation-dataset-row small {
+  color: var(--muted);
+}
+
+.evaluation-dataset-list {
+  display: grid;
+  gap: 10px;
+}
+
+.evaluation-dataset-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px;
+  align-items: end;
+  gap: 12px;
+}
+
+.evaluation-weight-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.evaluation-compatibility {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid #aad8c0;
+  border-radius: 8px;
+  background: #edf9f2;
+  color: #245f40;
+}
+
+.evaluation-compatibility.is-warning {
+  border-color: #e9c98e;
+  background: #fff8e8;
+  color: #775415;
+}
+
+.evaluation-ragxplain-status {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.evaluation-ragxplain-status.is-completed {
+  border-color: #aad8c0;
+  color: #245f40;
+  background: #edf9f2;
+}
+
+.evaluation-ragxplain-status.is-failed {
+  border-color: #e1aaa5;
+  color: #8d3d37;
+  background: #fff1f0;
+}
+
+.evaluation-results-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.evaluation-experiment-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  max-height: calc(100vh - 230px);
+  overflow: auto;
+}
+
+.evaluation-experiment-item,
+.evaluation-cell {
+  display: grid;
+  width: 100%;
+  gap: 4px;
+  padding: 11px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-neutral-0);
+  color: var(--color-text-primary);
+  text-align: left;
+}
+
+.evaluation-experiment-item:hover,
+.evaluation-experiment-item.selected,
+.evaluation-cell:hover,
+.evaluation-cell.selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-selected);
+}
+
+.evaluation-experiment-item span,
+.evaluation-cell span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.evaluation-leaderboard-panel,
+.evaluation-diagnostics-panel {
+  min-width: 0;
+}
+
+.evaluation-progress-track {
+  height: 8px;
+  margin-top: 14px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dce6eb;
+}
+
+.evaluation-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #739bb0, #c37d7a);
+  transition: width 200ms ease;
+}
+
+.evaluation-winner {
+  background: #edf9f2;
+}
+
+.evaluation-leaderboard-panel td small {
+  display: block;
+  max-width: 520px;
+  margin-top: 4px;
+  color: var(--muted);
+  white-space: normal;
+}
+
+.evaluation-cell-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.compact-number-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.compact-number-field input {
+  width: 86px;
+}
+
+@media (max-width: 980px) {
+  .evaluation-setup-grid,
+  .evaluation-results-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .evaluation-weight-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .evaluation-experiment-list {
+    max-height: 280px;
+  }
+}
+
+@media (max-width: 640px) {
+  .evaluation-weight-grid,
+  .evaluation-dataset-row {
+    grid-template-columns: 1fr;
+  }
+}

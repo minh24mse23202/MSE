@@ -514,6 +514,85 @@ export async function listEvaluationRuns() {
   return response.json();
 }
 
+export async function listEvaluationDatasets() {
+  const response = await fetch(`${API_BASE_URL}/evaluation/datasets`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Evaluation datasets request failed");
+  return response.json();
+}
+
+export async function listEvaluationExperiments() {
+  const response = await fetch(`${API_BASE_URL}/evaluation/experiments`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Evaluation experiments request failed");
+  return response.json();
+}
+
+export async function createEvaluationExperiment(payload) {
+  const response = await fetch(`${API_BASE_URL}/evaluation/experiments`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload)
+  });
+  await assertOk(response, "Create evaluation experiment failed");
+  return response.json();
+}
+
+export async function getEvaluationExperiment(experimentId) {
+  const response = await fetch(`${API_BASE_URL}/evaluation/experiments/${experimentId}`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Evaluation experiment request failed");
+  return response.json();
+}
+
+export async function listEvaluationExperimentRuns(experimentId) {
+  const response = await fetch(`${API_BASE_URL}/evaluation/experiments/${experimentId}/runs`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Evaluation experiment runs request failed");
+  return response.json();
+}
+
+export async function cancelEvaluationExperiment(experimentId) {
+  const response = await fetch(`${API_BASE_URL}/evaluation/experiments/${experimentId}/cancel`, {
+    method: "POST",
+    headers: authHeaders()
+  });
+  await assertOk(response, "Cancel evaluation experiment failed");
+  return response.json();
+}
+
+export async function resumeEvaluationExperiment(experimentId) {
+  const response = await fetch(`${API_BASE_URL}/evaluation/experiments/${experimentId}/resume`, {
+    method: "POST",
+    headers: authHeaders()
+  });
+  await assertOk(response, "Resume evaluation experiment failed");
+  return response.json();
+}
+
+export async function deleteEvaluationExperiment(experimentId) {
+  const response = await fetch(`${API_BASE_URL}/evaluation/experiments/${experimentId}`, {
+    method: "DELETE",
+    headers: authHeaders()
+  });
+  await assertOk(response, "Delete evaluation experiment failed");
+  return response.json();
+}
+
+export async function startRagxplainDiagnosis(runId, payload) {
+  const response = await fetch(`${API_BASE_URL}/evaluation/runs/${runId}/ragxplain`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload)
+  });
+  await assertOk(response, "Start RAGXplain diagnosis failed");
+  return response.json();
+}
+
 export async function createEvaluationRun(payload) {
   const response = await fetch(`${API_BASE_URL}/evaluation/runs`, {
     method: "POST",

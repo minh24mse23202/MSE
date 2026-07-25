@@ -1,6 +1,8 @@
+import asyncio
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,8 +17,9 @@ from aragbiz.evaluation import (
 from aragbiz.generation import ExtractiveGenerator
 from aragbiz.knowledge import HashEmbeddingModel, KnowledgeService, OverlapChunker
 from aragbiz.knowledge_store import JsonKnowledgeRepository
+from aragbiz.model_farm import ModelGenerationResult
 from aragbiz.routing import AdaptiveRouter
-from aragbiz.ragxplain import RagxplainError, RagxplainRunner
+from aragbiz.ragxplain import RagxplainError, RagxplainRunner, _ModelGatewayJudge
 from aragbiz.schemas import AnswerResult, Document, QACRecord, RetrievedContext
 
 
@@ -115,7 +118,7 @@ def test_json_evaluation_repository_crud(tmp_path):
     assert evaluation.list_runs() == []
 
 
-def test_evaluation_service_runs_adaptive_and_static_baseline(tmp_path):
+def test_evaluation_service_executes_the_saved_configuration_route_once(tmp_path):
     service, kb = build_answer_service(tmp_path, label="complex")
     dataset_path = tmp_path / "dataset.jsonl"
     dataset_path.write_text(
@@ -127,17 +130,27 @@ def test_evaluation_service_runs_adaptive_and_static_baseline(tmp_path):
     )
     evaluation = EvaluationService(JsonEvaluationRepository(str(tmp_path / "eval.json")), service, str(dataset_path))
 
-    run = evaluation.run(EvaluationRunConfig(knowledge_base_id=kb.id, retrieval_mode="bm25", top_k=2, limit=2, compare_baseline=True))
+    run = evaluation.run(
+        EvaluationRunConfig(
+            knowledge_base_id=kb.id,
+            retrieval_mode="bm25",
+            top_k=2,
+            limit=2,
+            chat_configuration={"metadata": {"route_mode": "simple_rag"}},
+        )
+    )
     cases = evaluation.list_cases(run.id)
 
     assert run.status == "completed"
     assert run.metrics["average_retrieved_contexts"] >= 1
-    assert run.baseline_metrics["average_retrieved_contexts"] >= 1
-    assert run.route_distribution["l3_complex_rag"] == 2
-    assert run.baseline_route_distribution["l2_simple_rag"] == 2
+    assert run.baseline_metrics == {}
+    assert run.route_distribution["l2_simple_rag"] == 2
+    assert run.baseline_route_distribution == {}
+    assert run.metadata["evaluation_mode"] == "simple_rag"
     assert len(cases) == 2
     assert cases[0].adaptive_metadata["trace_steps"]
-    assert cases[0].static_metadata["route_level"] == "l2_simple_rag"
+    assert cases[0].static_metadata == {}
+    assert cases[0].metrics["result"]["wixqa"]
 
 
 def test_evaluation_runs_each_case_without_conversation_context(tmp_path):
@@ -155,6 +168,7 @@ def test_evaluation_runs_each_case_without_conversation_context(tmp_path):
             "conversation_awareness_enabled": True,
             "conversation_history_exchanges": 6,
             "conversation_history_characters": 10000,
+            "agent_public_web_enabled": True,
         }
     }
     evaluation = EvaluationService(JsonEvaluationRepository(str(tmp_path / "eval.json")), service, str(dataset_path))
@@ -165,26 +179,77 @@ def test_evaluation_runs_each_case_without_conversation_context(tmp_path):
             retrieval_mode="bm25",
             top_k=2,
             limit=2,
-            compare_baseline=True,
             chat_configuration=saved_configuration,
         )
     )
     cases = evaluation.list_cases(run.id)
 
     assert saved_configuration["metadata"]["conversation_awareness_enabled"] is True
+    assert saved_configuration["metadata"]["agent_public_web_enabled"] is True
     assert run.metadata["conversation_context"]["enabled"] is False
+    assert run.metadata["chat_configuration"]["metadata"]["agent_public_web_enabled"] is False
     for case in cases:
-        for metadata in (case.adaptive_metadata, case.static_metadata):
-            assert metadata["conversation_awareness_enabled"] is False
-            assert metadata["history_exchange_count"] == 0
-            assert metadata["history_character_count"] == 0
-            assert metadata["query_rewritten"] is False
-            assert metadata["standalone_query"] == metadata["original_query"]
-            conversation_step = next(
-                step for step in metadata["trace_steps"] if step["step"] == "Conversation context"
+        metadata = case.adaptive_metadata
+        assert metadata["conversation_awareness_enabled"] is False
+        assert metadata["history_exchange_count"] == 0
+        assert metadata["history_character_count"] == 0
+        assert metadata["query_rewritten"] is False
+        assert metadata["standalone_query"] == metadata["original_query"]
+        conversation_step = next(
+            step for step in metadata["trace_steps"] if step["step"] == "Conversation context"
+        )
+        assert conversation_step["status"] == "skipped"
+        assert conversation_step["metadata"]["enabled"] is False
+
+
+def test_wixqa_judge_metrics_use_model_gateway_with_metric_purposes(tmp_path):
+    service, kb = build_answer_service(tmp_path, label="moderate")
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '{"id":"q1","question":"How are invoice mismatches handled?","answer":"Escalate to finance operations.",'
+        '"context":"Invoice mismatch","complexity_label":"moderate","metadata":{}}\n',
+        encoding="utf-8",
+    )
+
+    class JudgeGateway:
+        def __init__(self):
+            self.calls = []
+
+        def generate_sync(self, _messages, deployment_id, **kwargs):
+            self.calls.append((deployment_id, kwargs["context"].purpose))
+            return ModelGenerationResult(
+                text='{"score": 0.8, "explanation": "Supported"}',
+                deployment_id=deployment_id,
+                provider="test",
+                model="judge",
+                status="completed",
+                metadata={"usage_event_id": f"usage-{len(self.calls)}"},
             )
-            assert conversation_step["status"] == "skipped"
-            assert conversation_step["metadata"]["enabled"] is False
+
+    gateway = JudgeGateway()
+    evaluation = EvaluationService(
+        JsonEvaluationRepository(str(tmp_path / "eval.json")),
+        service,
+        str(dataset_path),
+        model_gateway=gateway,  # type: ignore[arg-type]
+    )
+    run = evaluation.run(
+        EvaluationRunConfig(
+            knowledge_base_id=kb.id,
+            retrieval_mode="bm25",
+            top_k=2,
+            limit=1,
+            judge_deployment_id="judge-1",
+        )
+    )
+    wixqa = evaluation.list_cases(run.id)[0].metrics["adaptive"]["wixqa"]
+
+    assert wixqa["context_recall"] == pytest.approx(0.8)
+    assert wixqa["factuality"] == pytest.approx(0.8)
+    assert gateway.calls == [
+        ("judge-1", "evaluation_wixqa_context_recall"),
+        ("judge-1", "evaluation_wixqa_factuality"),
+    ]
 
 
 def _ragxplain_case():
@@ -288,25 +353,131 @@ def test_ragxplain_failure_does_not_discard_evaluation_cases(tmp_path):
     )
     root = _create_ragxplain_root(tmp_path)
 
-    def failed_process(command, **kwargs):
-        return subprocess.CompletedProcess(command, 2, stdout="", stderr="Judge unavailable")
-
     runner = RagxplainRunner(
         str(root),
         str(tmp_path / "results"),
-        "examples.real_judge:judge",
-        process_runner=failed_process,
+        "legacy-judge-unused",
     )
+    runner.run_with_model_gateway = lambda *_args, **_kwargs: (_ for _ in ()).throw(  # type: ignore[method-assign]
+        RagxplainError("Judge unavailable")
+    )
+
+    class JudgeGateway:
+        def generate_sync(self, _messages, deployment_id, **_kwargs):
+            return ModelGenerationResult(
+                text='{"score": 0.8, "explanation": "Supported"}',
+                deployment_id=deployment_id,
+                provider="test",
+                model="judge",
+                status="completed",
+            )
+
     evaluation = EvaluationService(
         JsonEvaluationRepository(str(tmp_path / "eval.json")),
         service,
         str(dataset_path),
         ragxplain_runner=runner,
+        model_gateway=JudgeGateway(),  # type: ignore[arg-type]
     )
 
-    run = evaluation.run(EvaluationRunConfig(knowledge_base_id=kb.id, limit=1, run_ragxplain=True))
+    run = evaluation.run(
+        EvaluationRunConfig(
+            knowledge_base_id=kb.id,
+            limit=1,
+            judge_deployment_id="judge-1",
+        )
+    )
+    run = evaluation.run_ragxplain(run.id, limit=1)
 
     assert run.status == "completed"
     assert run.metadata["ragxplain"]["status"] == "failed"
     assert "Judge unavailable" in run.metadata["ragxplain"]["error"]
     assert len(evaluation.list_cases(run.id)) == 1
+
+
+def test_model_gateway_judge_normalizes_fenced_schema_json():
+    class Gateway:
+        def __init__(self):
+            self.calls = []
+
+        async def generate(self, messages, deployment_id, **kwargs):
+            self.calls.append((messages, deployment_id, kwargs))
+            return ModelGenerationResult(
+                text='```json\n{"analysis":{"executive_summary":"Healthy"}}\n```',
+                deployment_id=deployment_id,
+                provider="openai",
+                model="gpt-test",
+                status="completed",
+            )
+
+    gateway = Gateway()
+    judge = _ModelGatewayJudge(gateway, "judge-1", "eval-1", "kb-1", True)
+    request = SimpleNamespace(
+        system_prompt="Return JSON.",
+        user_prompt="Analyze this run.",
+        metadata={
+            "prompt_key": "overall_insight",
+            "response_schema": {
+                "name": "ragxplain_overall_insight",
+                "schema": {
+                    "type": "object",
+                    "properties": {"analysis": {"type": "object"}},
+                    "required": ["analysis"],
+                },
+            },
+        },
+    )
+
+    result = asyncio.run(judge.run(request))
+
+    assert json.loads(result)["analysis"]["executive_summary"] == "Healthy"
+    assert len(gateway.calls) == 1
+    parameters = gateway.calls[0][2]["parameters"]
+    assert parameters["max_tokens"] == 6000
+    assert parameters["response_format"]["type"] == "json_schema"
+
+
+def test_model_gateway_judge_retries_incomplete_schema_json():
+    class Gateway:
+        def __init__(self):
+            self.calls = []
+
+        async def generate(self, messages, deployment_id, **kwargs):
+            self.calls.append((messages, deployment_id, kwargs))
+            text = (
+                '{"analysis":{"executive_summary":"Truncated"'
+                if len(self.calls) == 1
+                else '{"analysis":{"executive_summary":"Recovered"}}'
+            )
+            return ModelGenerationResult(
+                text=text,
+                deployment_id=deployment_id,
+                provider="openai",
+                model="gpt-test",
+                status="completed",
+            )
+
+    gateway = Gateway()
+    judge = _ModelGatewayJudge(gateway, "judge-1", "eval-1", "kb-1", True)
+    request = SimpleNamespace(
+        system_prompt="Return JSON.",
+        user_prompt="Analyze this run.",
+        metadata={
+            "prompt_key": "overall_insight",
+            "response_schema": {
+                "name": "ragxplain_overall_insight",
+                "schema": {
+                    "type": "object",
+                    "properties": {"analysis": {"type": "object"}},
+                    "required": ["analysis"],
+                },
+            },
+        },
+    )
+
+    result = asyncio.run(judge.run(request))
+
+    assert json.loads(result)["analysis"]["executive_summary"] == "Recovered"
+    assert len(gateway.calls) == 2
+    assert gateway.calls[1][2]["parameters"]["max_tokens"] == 7000
+    assert gateway.calls[1][2]["context"].purpose == "ragxplain_overall_insight_json_retry"

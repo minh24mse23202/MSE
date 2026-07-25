@@ -52,13 +52,14 @@ import {
   askQuestionStream,
   cancelAnswerRequest,
   createChatConfiguration,
-  createEvaluationRun,
+  createEvaluationExperiment,
+  cancelEvaluationExperiment,
   createKnowledgeBase,
   createModelConnection,
   createModelDeploymentFromTemplate,
   deleteChatConfiguration,
   deleteChatConversation,
-  deleteEvaluationRun,
+  deleteEvaluationExperiment,
   deleteKnowledgeBase,
   deleteKnowledgeDocument,
   deleteModelDeployment,
@@ -69,6 +70,8 @@ import {
   getCurrentUser,
   getKnowledgeProcessingTrace,
   getRagxplainViewerUrl,
+  getEvaluationExperiment,
+  getEvaluationRun,
   downloadTrace,
   ingestWebsiteSource,
   listChatConfigurations,
@@ -76,7 +79,9 @@ import {
   listChatMessageVersions,
   listChatMessages,
   listEvaluationCases,
-  listEvaluationRuns,
+  listEvaluationDatasets,
+  listEvaluationExperiments,
+  listEvaluationExperimentRuns,
   listKnowledgeChunks,
   listKnowledgeDocuments,
   listKnowledgeBases,
@@ -91,8 +96,10 @@ import {
   login as loginUser,
   regenerateAnswerStream,
   retryAnswerStream,
+  resumeEvaluationExperiment,
   reindexKnowledgeBase,
   submitFeedback,
+  startRagxplainDiagnosis,
   testModelDeployment,
   testModelDeploymentDraft,
   testModelConnection,
@@ -4889,62 +4896,108 @@ function AIModelsScreen({ confirmAction }) {
 }
 
 function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOpenDetail, confirmAction }) {
+  const defaultWeights = {
+    context_recall: 30,
+    factuality: 30,
+    token_f1: 10,
+    bleu: 5,
+    rouge_1: 15,
+    rouge_2: 10
+  };
   const [knowledgeBases, setKnowledgeBases] = useState([]);
-  const [chatConfigurations, setChatConfigurations] = useState([]);
-  const [judgeDeployments, setJudgeDeployments] = useState([]);
+  const [configurations, setConfigurations] = useState([]);
+  const [judges, setJudges] = useState([]);
+  const [datasets, setDatasets] = useState([]);
+  const [experiments, setExperiments] = useState([]);
   const [runs, setRuns] = useState([]);
   const [cases, setCases] = useState([]);
+  const [selectedExperimentId, setSelectedExperimentId] = useState("");
   const [selectedRunId, setSelectedRunId] = useState("");
-  const [form, setForm] = useState({
-    knowledgeBaseId: selectedKnowledgeBaseId || "",
-    chatConfigurationId: "",
-    judgeDeploymentId: "",
-    retrievalMode: "hybrid",
-    topK: 4,
-    limit: 20,
-    compareBaseline: true,
-    runRagxplain: false
-  });
+  const [view, setView] = useState("setup");
   const [status, setStatus] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRunning, setIsRunning] = useState(false);
+  const [isBusy, setIsBusy] = useState(false);
+  const [diagnosticLimit, setDiagnosticLimit] = useState(100);
+  const [form, setForm] = useState({
+    name: "WixQA configuration benchmark",
+    knowledgeBaseId: selectedKnowledgeBaseId || "",
+    configurationIds: [],
+    judgeDeploymentId: "",
+    datasetLimits: {},
+    weights: defaultWeights,
+    maxCostPerCase: "",
+    maxAverageLatencyMs: "",
+    seed: 42
+  });
+
+  const selectedExperiment = experiments.find((item) => item.id === selectedExperimentId);
+  const selectedRun = runs.find((item) => item.id === selectedRunId);
+  const selectedRagxplain = selectedRun?.metadata?.ragxplain || {};
+  const ragxplainJudgeMatches = Boolean(
+    selectedRagxplain.status === "completed"
+    && selectedRagxplain.judge
+    && selectedRagxplain.judge === selectedRun?.metadata?.judge_deployment_id
+  );
+  const selectedKnowledgeBase = knowledgeBases.find((item) => item.id === form.knowledgeBaseId);
+  const activeExperiment = selectedExperiment && ["queued", "running"].includes(selectedExperiment.status);
 
   useEffect(() => {
     let cancelled = false;
-    async function loadEvaluationData() {
-      setIsLoading(true);
+    async function load() {
       try {
-        const [nextKnowledgeBases, nextConfigurations, nextRuns, nextJudges] = await Promise.all([
+        const [nextKbs, nextConfigs, nextJudges, nextDatasets, nextExperiments] = await Promise.all([
           listKnowledgeBases(),
           listChatConfigurations(),
-          listEvaluationRuns(),
-          listModelDeployments({ capability: "judge", enabled: true }).catch(() => [])
+          listModelDeployments({ capability: "judge", enabled: true }).catch(() => []),
+          listEvaluationDatasets(),
+          listEvaluationExperiments()
         ]);
         if (cancelled) return;
-        setKnowledgeBases(nextKnowledgeBases);
-        setChatConfigurations(nextConfigurations);
-        setRuns(nextRuns);
-        setJudgeDeployments(nextJudges);
+        setKnowledgeBases(nextKbs);
+        setConfigurations(nextConfigs);
+        setJudges(nextJudges);
+        setDatasets(nextDatasets);
+        setExperiments(nextExperiments);
+        setSelectedExperimentId((current) => current || nextExperiments[0]?.id || "");
         setForm((current) => ({
           ...current,
-          knowledgeBaseId: current.knowledgeBaseId || selectedKnowledgeBaseId || nextKnowledgeBases[0]?.id || "",
-          chatConfigurationId: current.chatConfigurationId || nextConfigurations[0]?.id || "",
-          judgeDeploymentId: current.judgeDeploymentId || nextJudges[0]?.id || ""
+          knowledgeBaseId: current.knowledgeBaseId || selectedKnowledgeBaseId || nextKbs[0]?.id || "",
+          configurationIds: current.configurationIds.length ? current.configurationIds : nextConfigs.slice(0, 1).map((item) => item.id),
+          judgeDeploymentId: current.judgeDeploymentId || nextJudges[0]?.id || "",
+          datasetLimits: Object.keys(current.datasetLimits).length
+            ? current.datasetLimits
+            : Object.fromEntries(nextDatasets.map((item) => [item.id, Math.min(item.record_count, item.id === "synthetic" ? 100 : 20)]))
         }));
-        setSelectedRunId((current) => current || nextRuns[0]?.id || "");
       } catch (error) {
         if (!cancelled) setStatus(`Evaluation data load failed: ${error.message}`);
-      } finally {
-        if (!cancelled) setIsLoading(false);
       }
     }
-    loadEvaluationData();
+    load();
     return () => { cancelled = true; };
   }, [selectedKnowledgeBaseId]);
 
   useEffect(() => {
     let cancelled = false;
-    async function loadCases() {
+    async function loadExperimentRuns() {
+      if (!selectedExperimentId) {
+        setRuns([]);
+        return;
+      }
+      try {
+        const nextRuns = await listEvaluationExperimentRuns(selectedExperimentId);
+        if (cancelled) return;
+        setRuns(nextRuns);
+        setSelectedRunId((current) => nextRuns.some((run) => run.id === current) ? current : nextRuns[0]?.id || "");
+      } catch (error) {
+        if (!cancelled) setStatus(`Experiment runs load failed: ${error.message}`);
+      }
+    }
+    loadExperimentRuns();
+    return () => { cancelled = true; };
+  }, [selectedExperimentId, selectedExperiment?.updated_at]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadRunCases() {
       if (!selectedRunId) {
         setCases([]);
         return;
@@ -4953,245 +5006,347 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
         const nextCases = await listEvaluationCases(selectedRunId);
         if (!cancelled) setCases(nextCases);
       } catch (error) {
-        if (!cancelled) setStatus(`Evaluation case load failed: ${error.message}`);
+        if (!cancelled) setStatus(`Evaluation cases load failed: ${error.message}`);
       }
     }
-    loadCases();
+    loadRunCases();
     return () => { cancelled = true; };
   }, [selectedRunId]);
 
-  const selectedKnowledgeBase = knowledgeBases.find((item) => item.id === form.knowledgeBaseId);
-  const selectedRun = runs.find((run) => run.id === selectedRunId);
+  useEffect(() => {
+    if (!activeExperiment) return undefined;
+    const timer = window.setInterval(async () => {
+      try {
+        const updated = await getEvaluationExperiment(selectedExperiment.id);
+        setExperiments((current) => current.map((item) => item.id === updated.id ? updated : item));
+      } catch (error) {
+        setStatus(`Experiment refresh failed: ${error.message}`);
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [activeExperiment, selectedExperiment?.id]);
 
-  async function refreshRuns(nextSelectedRunId = selectedRunId) {
-    const nextRuns = await listEvaluationRuns();
-    setRuns(nextRuns);
-    setSelectedRunId(nextSelectedRunId || nextRuns[0]?.id || "");
+  function toggleConfiguration(configurationId) {
+    setForm((current) => ({
+      ...current,
+      configurationIds: current.configurationIds.includes(configurationId)
+        ? current.configurationIds.filter((id) => id !== configurationId)
+        : [...current.configurationIds, configurationId]
+    }));
   }
 
-  async function startEvaluation() {
-    if (!form.knowledgeBaseId) {
-      setStatus("Select a knowledge base before running evaluation.");
+  function setDatasetEnabled(dataset, enabled) {
+    setForm((current) => {
+      const datasetLimits = { ...current.datasetLimits };
+      if (enabled) datasetLimits[dataset.id] = Math.min(dataset.record_count, dataset.id === "synthetic" ? 100 : 20);
+      else delete datasetLimits[dataset.id];
+      return { ...current, datasetLimits };
+    });
+  }
+
+  async function startExperiment() {
+    if (!form.knowledgeBaseId || !form.configurationIds.length || !form.judgeDeploymentId || !Object.keys(form.datasetLimits).length) {
+      setStatus("Select a Knowledge Base, at least one configuration and dataset, and a judge model.");
       return;
     }
-    setIsRunning(true);
-    setStatus("Running evaluation...");
+    const weightTotal = Object.values(form.weights).reduce((sum, value) => sum + Number(value || 0), 0);
+    if (Math.abs(weightTotal - 100) > 0.01) {
+      setStatus("Quality metric weights must total 100%.");
+      return;
+    }
+    setIsBusy(true);
     try {
-      const run = await createEvaluationRun({
-        name: `Adaptive vs Static L2 - ${new Date().toLocaleString()}`,
+      const created = await createEvaluationExperiment({
+        name: form.name,
         knowledge_base_id: form.knowledgeBaseId,
-        chat_configuration_id: form.chatConfigurationId || null,
-        judge_deployment_id: form.judgeDeploymentId || "",
-        retrieval_mode: form.retrievalMode,
-        top_k: Number(form.topK),
-        limit: Number(form.limit),
-        compare_baseline: form.compareBaseline,
-        run_ragxplain: form.runRagxplain
+        configuration_ids: form.configurationIds,
+        datasets: Object.fromEntries(Object.entries(form.datasetLimits).map(([key, value]) => [key, Number(value) || null])),
+        judge_deployment_id: form.judgeDeploymentId,
+        quality_weights: Object.fromEntries(Object.entries(form.weights).map(([key, value]) => [key, Number(value) / 100])),
+        max_cost_per_case: form.maxCostPerCase === "" ? null : Number(form.maxCostPerCase),
+        max_average_latency_ms: form.maxAverageLatencyMs === "" ? null : Number(form.maxAverageLatencyMs),
+        seed: Number(form.seed)
       });
+      setExperiments((current) => [created.experiment, ...current]);
+      setSelectedExperimentId(created.experiment.id);
+      setView("leaderboard");
       onSelectKnowledgeBase(form.knowledgeBaseId);
-      await refreshRuns(run.id);
-      const ragxplainStatus = run.metadata?.ragxplain?.status;
-      if (ragxplainStatus === "failed") {
-        setStatus(`Evaluation completed, but RAGXplain failed: ${run.metadata.ragxplain.error}`);
-      } else {
-        const suffix = ragxplainStatus === "completed" ? " RAGXplain insights are ready." : "";
-        setStatus(`Evaluation completed: ${run.metadata?.record_count || run.limit} case(s).${suffix}`);
-      }
+      setStatus("Experiment queued. Keep the Aragbiz worker running to process it.");
     } catch (error) {
-      setStatus(`Evaluation failed: ${error.message}`);
+      setStatus(`Experiment creation failed: ${error.message}`);
     } finally {
-      setIsRunning(false);
+      setIsBusy(false);
     }
   }
 
-  async function removeSelectedRun() {
-    if (!selectedRun) return;
+  async function cancelSelected() {
+    if (!selectedExperiment) return;
+    try {
+      const updated = await cancelEvaluationExperiment(selectedExperiment.id);
+      setExperiments((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setStatus("Cancellation requested.");
+    } catch (error) {
+      setStatus(`Cancellation failed: ${error.message}`);
+    }
+  }
+
+  async function resumeSelected() {
+    if (!selectedExperiment) return;
+    try {
+      await resumeEvaluationExperiment(selectedExperiment.id);
+      setStatus("Experiment resume job queued.");
+    } catch (error) {
+      setStatus(`Resume failed: ${error.message}`);
+    }
+  }
+
+  async function removeSelectedExperiment() {
+    if (!selectedExperiment) return;
     const confirmed = await confirmAction({
-      title: "Delete evaluation run?",
-      message: `Delete evaluation run "${selectedRun.name}"?`,
-      detail: "Stored case results, trace metadata, and RAGXplain artifacts for this run will be removed.",
-      confirmLabel: "Delete run"
+      title: "Delete evaluation experiment?",
+      message: `Delete "${selectedExperiment.name}" and all child runs?`,
+      detail: "Case results and RAGXplain artifacts for this experiment will be removed.",
+      confirmLabel: "Delete experiment"
     });
     if (!confirmed) return;
     try {
-      await deleteEvaluationRun(selectedRun.id);
-      setCases([]);
-      await refreshRuns("");
-      setStatus("Evaluation run deleted.");
+      await deleteEvaluationExperiment(selectedExperiment.id);
+      const next = experiments.filter((item) => item.id !== selectedExperiment.id);
+      setExperiments(next);
+      setSelectedExperimentId(next[0]?.id || "");
+      setStatus("Evaluation experiment deleted.");
     } catch (error) {
-      setStatus(`Delete evaluation run failed: ${error.message}`);
+      setStatus(`Delete failed: ${error.message}`);
     }
   }
 
+  async function runRagxplain() {
+    if (!selectedRun) return;
+    try {
+      const queued = await startRagxplainDiagnosis(selectedRun.id, { limit: Number(diagnosticLimit), seed: 42 });
+      setRuns((current) => current.map((run) => run.id === selectedRun.id
+        ? { ...run, metadata: { ...run.metadata, ragxplain: queued.ragxplain } }
+        : run));
+      setStatus("RAGXplain diagnosis queued. The worker will create the insights artifacts.");
+    } catch (error) {
+      setStatus(`RAGXplain diagnosis failed: ${error.message}`);
+    }
+  }
+
+  async function refreshSelectedRun() {
+    if (!selectedRunId) return;
+    try {
+      const updated = await getEvaluationRun(selectedRunId);
+      setRuns((current) => current.map((run) => run.id === updated.id ? updated : run));
+      setStatus(`Run refreshed. RAGXplain status: ${updated.metadata?.ragxplain?.status || "not requested"}.`);
+    } catch (error) {
+      setStatus(`Run refresh failed: ${error.message}`);
+    }
+  }
+
+  const compatibility = selectedExperiment?.metadata?.knowledge_base_compatibility;
   return (
-    <section className="evaluation-grid">
-      <section className="panel evaluation-control-panel">
-        <PanelHeader eyebrow="Dataset" title="Benchmark setup" />
-        <Metric label="Dataset" value="WixQA / processed QAC" />
-        <Metric label="Default limit" value="20 cases" />
-        <Metric label="Max sync run" value="100 cases" />
-        <Metric label="Labels" value="simple / moderate / complex" />
-        <div className="config-section runtime-section evaluation-form">
-          <SelectField
-            label="Knowledge base"
-            value={form.knowledgeBaseId}
-            options={[{ value: "", label: "Select Knowledge Base" }, ...knowledgeBases.map((item) => ({ value: item.id, label: item.name }))]}
-            onChange={(knowledgeBaseId) => {
-              setForm({ ...form, knowledgeBaseId });
-              onSelectKnowledgeBase(knowledgeBaseId);
-            }}
-          />
-          <SelectField
-            label="Chat configuration"
-            value={form.chatConfigurationId}
-            options={[{ value: "", label: "Default configuration" }, ...chatConfigurations.map((item) => ({ value: item.id, label: item.name }))]}
-            onChange={(chatConfigurationId) => setForm({ ...form, chatConfigurationId })}
-          />
-          <SelectField
-            label="Judge deployment"
-            value={form.judgeDeploymentId}
-            options={[
-              { value: "", label: "No registered judge selected" },
-              ...judgeDeployments.map((deployment) => deploymentOption(deployment))
-            ]}
-            onChange={(judgeDeploymentId) => setForm({ ...form, judgeDeploymentId })}
-          />
-          <div className="config-two-column">
+    <section className="page-stack evaluation-workbench">
+      <PanelHeader eyebrow="WixQA Benchmark" title="Evaluation experiments" />
+      <div className="tabs evaluation-view-tabs">
+        <button className={view === "setup" ? "active" : ""} onClick={() => setView("setup")}>Setup</button>
+        <button className={view === "leaderboard" ? "active" : ""} onClick={() => setView("leaderboard")}>Progress & leaderboard</button>
+        <button className={view === "diagnostics" ? "active" : ""} onClick={() => setView("diagnostics")}>Diagnostics</button>
+      </div>
+      {status && <div className="inline-status">{status}</div>}
+
+      {view === "setup" && (
+        <div className="evaluation-setup-grid">
+          <section className="panel evaluation-setup-panel">
+            <h2>Experiment</h2>
+            <label>Experiment name<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
             <SelectField
-              label="Retrieval mode"
-              value={form.retrievalMode}
-              options={[{ value: "hybrid", label: "Hybrid" }, { value: "bm25", label: "BM25" }, { value: "dense", label: "Dense" }]}
-              onChange={(retrievalMode) => setForm({ ...form, retrievalMode })}
+              label="WixQA Knowledge Base"
+              value={form.knowledgeBaseId}
+              options={[{ value: "", label: "Select Knowledge Base" }, ...knowledgeBases.map((item) => ({ value: item.id, label: item.name }))]}
+              onChange={(knowledgeBaseId) => setForm({ ...form, knowledgeBaseId })}
             />
-            <label>
-              Top K
-              <input type="number" min="1" max="50" value={form.topK} onChange={(event) => setForm({ ...form, topK: Number(event.target.value) })} />
-            </label>
-          </div>
-          <div className="config-two-column">
-            <label>
-              Dataset limit
-              <input type="number" min="0" max="100" value={form.limit} onChange={(event) => setForm({ ...form, limit: Number(event.target.value) })} />
-            </label>
-            <label className="check-row evaluation-check-row">
-              <input
-                type="checkbox"
-                checked={form.compareBaseline}
-                onChange={(event) => setForm({ ...form, compareBaseline: event.target.checked })}
-              />
-              Compare static L2
-            </label>
-          </div>
-          <label className="check-row evaluation-check-row ragxplain-toggle">
-            <input
-              type="checkbox"
-              checked={form.runRagxplain}
-              onChange={(event) => setForm({ ...form, runRagxplain: event.target.checked })}
-            />
-            <span><strong>Run RAGXplain LLM Judge</strong><small>Generate executive insights and prioritized actions.</small></span>
-          </label>
-          {selectedKnowledgeBase && (
-            <dl className="source-facts evaluation-kb-summary">
-              <div><dt>Status</dt><dd>{selectedKnowledgeBase.status}</dd></div>
-              <div><dt>Documents</dt><dd>{selectedKnowledgeBase.document_count}</dd></div>
-              <div><dt>Chunks</dt><dd>{selectedKnowledgeBase.chunk_count}</dd></div>
-              <div><dt>Embedding</dt><dd>{selectedKnowledgeBase.embedding_model || "-"}</dd></div>
-            </dl>
-          )}
-          <button className="primary-action" type="button" onClick={startEvaluation} disabled={isRunning || isLoading}>
-            <IconLabel icon={isRunning ? RefreshCw : ClipboardList}>{isRunning ? "Running..." : "Run evaluation"}</IconLabel>
-          </button>
-          {status && <p className="muted-text compact-muted">{status}</p>}
-        </div>
-      </section>
-      <section className="panel evaluation-results-panel">
-        <PanelHeader eyebrow="Evaluation" title="Runs & results" />
-        {runs.length === 0 ? (
-          <div className="empty-state"><strong>No evaluation runs yet</strong><p>Run a bounded benchmark to compare Adaptive RAG with static L2 Simple RAG.</p></div>
-        ) : (
-          <div className="run-list evaluation-run-list">
-            {runs.map((run) => (
-              <article key={run.id} className={`run-card ${run.id === selectedRunId ? "selected" : ""}`}>
-                <button type="button" className="run-card-select" onClick={() => setSelectedRunId(run.id)}>
-                  <div>
-                    <strong>{run.name}</strong>
-                    <small>{run.dataset_name} - {run.status} - {run.metadata?.record_count ?? run.limit} cases</small>
-                    <span className={`evaluation-ragxplain-status is-${run.metadata?.ragxplain?.status || "not_requested"}`}>
-                      RAGXplain: {(run.metadata?.ragxplain?.status || "not_requested").replace("_", " ")}
-                    </span>
-                  </div>
-                  <dl>
-                    <Metric label="Routing" value={formatPercentMetric(run.metrics?.routing_accuracy)} />
-                    <Metric label="Context" value={formatPercentMetric(run.metrics?.context_relevance)} />
-                    <Metric label="Faithfulness" value={formatPercentMetric(run.metrics?.faithfulness_proxy)} />
-                    <Metric label="Latency" value={`${formatNumber(run.metrics?.average_latency_ms)} ms`} />
-                  </dl>
-                </button>
-              </article>
-            ))}
-          </div>
-        )}
-        {selectedRun && (
-          <div className="evaluation-run-detail">
-            <div className="action-row">
-              <button
-                className="secondary-action"
-                type="button"
-                onClick={() => onOpenDetail(selectedRun, null, "ragxplain")}
-                disabled={selectedRun.metadata?.ragxplain?.status !== "completed"}
-                title={selectedRun.metadata?.ragxplain?.error || "Open run-level RAGXplain insights"}
-              >
-                <IconLabel icon={GitBranch}>Open RAGXplain insights</IconLabel>
-              </button>
-              <button className="secondary-action danger-action" type="button" onClick={removeSelectedRun}>
-                <IconLabel icon={Trash2}>Delete run</IconLabel>
-              </button>
-            </div>
-            <div className={`evaluation-ragxplain-summary is-${selectedRun.metadata?.ragxplain?.status || "not_requested"}`}>
-              <div>
-                <strong>RAGXplain {(selectedRun.metadata?.ragxplain?.status || "not_requested").replace("_", " ")}</strong>
-                <span>{selectedRun.metadata?.ragxplain?.judge || "No judge was requested for this run."}</span>
+            {selectedKnowledgeBase && (
+              <div className={`evaluation-compatibility ${selectedKnowledgeBase.document_count === 6221 ? "is-compatible" : "is-warning"}`}>
+                <strong>{selectedKnowledgeBase.document_count === 6221 ? "WixQA corpus size matched" : "Knowledge Base compatibility warning"}</strong>
+                <span>{selectedKnowledgeBase.document_count} documents, {selectedKnowledgeBase.chunk_count} chunks, {selectedKnowledgeBase.embedding_model}</span>
               </div>
-              {selectedRun.metadata?.ragxplain?.error && <p>{selectedRun.metadata.ragxplain.error}</p>}
+            )}
+            <SelectField
+              label="Shared LLM judge"
+              value={form.judgeDeploymentId}
+              options={[{ value: "", label: "Select enabled judge model" }, ...judges.map((item) => deploymentOption(item))]}
+              onChange={(judgeDeploymentId) => setForm({ ...form, judgeDeploymentId })}
+            />
+            <label>Sampling seed<input type="number" value={form.seed} onChange={(event) => setForm({ ...form, seed: Number(event.target.value) })} /></label>
+          </section>
+          <section className="panel evaluation-setup-panel">
+            <div className="panel-heading-row"><h2>RAG Customizer configurations</h2><button className="text-action" type="button" onClick={() => setForm({ ...form, configurationIds: configurations.map((item) => item.id) })}>Select all</button></div>
+            <div className="evaluation-check-list">
+              {configurations.map((configuration) => (
+                <label className="check-row" key={configuration.id}>
+                  <input type="checkbox" checked={form.configurationIds.includes(configuration.id)} onChange={() => toggleConfiguration(configuration.id)} />
+                  <span>
+                    <strong>{configuration.metadata?.configuration_id || configuration.id} | {configuration.name}</strong>
+                    <small>{configuration.metadata?.route_strategy || configuration.metadata?.route_mode || "Adaptive"} | {configuration.generator_provider} / {configuration.generator_model}</small>
+                  </span>
+                </label>
+              ))}
+              {!configurations.length && <p className="muted-text">Create saved RAG Customizer configurations before benchmarking.</p>}
             </div>
+          </section>
+          <section className="panel evaluation-setup-panel">
+            <h2>WixQA datasets</h2>
+            <div className="evaluation-dataset-list">
+              {datasets.map((dataset) => {
+                const enabled = Object.prototype.hasOwnProperty.call(form.datasetLimits, dataset.id);
+                return (
+                  <div className="evaluation-dataset-row" key={dataset.id}>
+                    <label className="check-row">
+                      <input type="checkbox" checked={enabled} onChange={(event) => setDatasetEnabled(dataset, event.target.checked)} />
+                      <span><strong>{dataset.name}</strong><small>{dataset.record_count.toLocaleString()} records</small></span>
+                    </label>
+                    <label>Limit<input disabled={!enabled} type="number" min="1" max={dataset.record_count} value={form.datasetLimits[dataset.id] ?? ""} onChange={(event) => setForm({ ...form, datasetLimits: { ...form.datasetLimits, [dataset.id]: Number(event.target.value) } })} /></label>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+          <section className="panel evaluation-setup-panel">
+            <h2>Quality score & constraints</h2>
+            <div className="evaluation-weight-grid">
+              {Object.entries(form.weights).map(([metric, value]) => (
+                <label key={metric}>{metric.replaceAll("_", " ")}<input type="number" min="0" max="100" value={value} onChange={(event) => setForm({ ...form, weights: { ...form.weights, [metric]: Number(event.target.value) } })} /></label>
+              ))}
+            </div>
+            <p className="muted-text">Weight total: {Object.values(form.weights).reduce((sum, value) => sum + Number(value || 0), 0)}%</p>
+            <div className="config-two-column">
+              <label>Max cost / case (USD)<input type="number" min="0" step="0.001" placeholder="No limit" value={form.maxCostPerCase} onChange={(event) => setForm({ ...form, maxCostPerCase: event.target.value })} /></label>
+              <label>Max average latency (ms)<input type="number" min="0" placeholder="No limit" value={form.maxAverageLatencyMs} onChange={(event) => setForm({ ...form, maxAverageLatencyMs: event.target.value })} /></label>
+            </div>
+            <button className="primary-action" type="button" onClick={startExperiment} disabled={isBusy}>
+              <IconLabel icon={ClipboardList}>{isBusy ? "Creating..." : "Start benchmark"}</IconLabel>
+            </button>
+          </section>
+        </div>
+      )}
+
+      {view === "leaderboard" && (
+        <div className="evaluation-results-layout">
+          <aside className="panel evaluation-experiment-list">
+            <div className="panel-heading-row"><h2>Experiments</h2><button className="icon-button" aria-label="Refresh experiments" onClick={async () => setExperiments(await listEvaluationExperiments())}><RefreshCw size={16} /></button></div>
+            {experiments.map((experiment) => (
+              <button key={experiment.id} className={`evaluation-experiment-item ${experiment.id === selectedExperimentId ? "selected" : ""}`} onClick={() => setSelectedExperimentId(experiment.id)}>
+                <strong>{experiment.name}</strong>
+                <span>{experiment.status} - {experiment.progress?.percent || 0}%</span>
+              </button>
+            ))}
+          </aside>
+          <section className="panel evaluation-leaderboard-panel">
+            {!selectedExperiment ? (
+              <div className="empty-state"><strong>No experiment selected</strong><p>Create a WixQA benchmark experiment first.</p></div>
+            ) : (
+              <>
+                <div className="panel-heading-row">
+                  <div><h2>{selectedExperiment.name}</h2><p>{selectedExperiment.knowledge_base_name}</p></div>
+                  <div className="action-row">
+                    {activeExperiment && <button className="secondary-action" onClick={cancelSelected}>Cancel</button>}
+                    {["partial", "failed", "cancelled"].includes(selectedExperiment.status) && <button className="secondary-action" onClick={resumeSelected}>Resume</button>}
+                    <button className="secondary-action danger-action" onClick={removeSelectedExperiment}><Trash2 size={16} /> Delete</button>
+                  </div>
+                </div>
+                <div className="evaluation-progress-track"><span style={{ width: `${selectedExperiment.progress?.percent || 0}%` }} /></div>
+                <p className="muted-text">{selectedExperiment.progress?.completed_cells || 0} / {selectedExperiment.progress?.total_cells || 0} configuration-dataset cells</p>
+                {compatibility?.status === "warning" && <div className="evaluation-compatibility is-warning"><strong>Compatibility warning</strong><span>{compatibility.message}</span></div>}
+                <div className="table-panel">
+                  <table>
+                    <thead><tr><th>Rank</th><th>Configuration</th><th>Quality</th><th>Cost / case</th><th>Latency</th><th>Eligibility</th></tr></thead>
+                    <tbody>
+                      {(selectedExperiment.leaderboard || []).map((entry) => (
+                        <tr key={entry.configuration_id} className={entry.winner ? "evaluation-winner" : ""}>
+                          <td>{entry.winner ? "Best" : entry.rank || "-"}</td>
+                          <td><strong>{entry.configuration_name}</strong><small>{entry.configuration_route} | {Object.entries(entry.dataset_scores || {}).map(([name, score]) => `${name}: ${formatPercentMetric(score)}`).join(" | ")}</small></td>
+                          <td>{formatPercentMetric(entry.quality_score)}</td>
+                          <td>${formatNumber(entry.average_cost_per_case_usd, 4)}</td>
+                          <td>{formatNumber(entry.average_latency_ms)} ms</td>
+                          <td>{entry.eligible ? "Eligible" : `Excluded: ${(entry.constraint_violations || []).join(", ")}`}</td>
+                        </tr>
+                      ))}
+                      {!selectedExperiment.leaderboard?.length && <tr><td colSpan="6">The leaderboard will appear when the worker completes this experiment.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="evaluation-cell-grid">
+                  {runs.map((run) => (
+                    <button key={run.id} className={`evaluation-cell ${run.id === selectedRunId ? "selected" : ""}`} onClick={() => { setSelectedRunId(run.id); setView("diagnostics"); }}>
+                      <strong>{run.name}</strong>
+                      <span>{formatPercentMetric(run.metrics?.wixqa?.context_recall)} recall - {formatPercentMetric(run.metrics?.wixqa?.factuality)} factuality</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </section>
+        </div>
+      )}
+
+      {view === "diagnostics" && (
+        <section className="panel evaluation-diagnostics-panel">
+          <div className="panel-heading-row">
+            <div>
+              <h2>{selectedRun?.name || "Select a configuration-dataset result"}</h2>
+              <p>{selectedRun ? `${selectedRun.metadata?.record_count || 0} cases` : "Choose a result from Progress & leaderboard."}</p>
+            </div>
+            {selectedRun && (
+              <div className="action-row">
+                <label className="compact-number-field">RAGXplain cases<input type="number" min="1" max={selectedRun.metadata?.record_count || 100} value={diagnosticLimit} onChange={(event) => setDiagnosticLimit(Number(event.target.value))} /></label>
+                <button className="secondary-action" onClick={runRagxplain}><GitBranch size={16} /> Run diagnosis</button>
+                <button className="icon-button" aria-label="Refresh selected evaluation run" title="Refresh RAGXplain status" onClick={refreshSelectedRun}><RefreshCw size={16} /></button>
+                <button className="secondary-action" disabled={!ragxplainJudgeMatches} onClick={() => onOpenDetail(selectedRun, null, "ragxplain")}><ExternalLink size={16} /> Open insights</button>
+              </div>
+            )}
+          </div>
+          {selectedRun?.metadata?.ragxplain && (
+            <div className={`evaluation-ragxplain-status ${!ragxplainJudgeMatches && selectedRagxplain.status === "completed" ? "is-failed" : `is-${selectedRagxplain.status || "not-requested"}`}`}>
+              <strong>RAGXplain: {selectedRagxplain.status || "not requested"}</strong>
+              {!ragxplainJudgeMatches && selectedRagxplain.status === "completed" && (
+                <span>Legacy artifact used {selectedRagxplain.judge || "an unknown judge"}. Run diagnosis again to use {selectedRun.metadata?.judge_deployment_id}.</span>
+              )}
+              {selectedRagxplain.error && <span>{selectedRagxplain.error}</span>}
+            </div>
+          )}
+          {selectedRun && (
             <div className="metrics-grid evaluation-metrics-grid">
-              <article className="metric-card"><small>Adaptive routes</small><strong>{formatDistribution(selectedRun.route_distribution)}</strong><span>L1/L2/L3/L4 distribution</span></article>
-              <article className="metric-card"><small>Static baseline</small><strong>{formatPercentMetric(selectedRun.baseline_metrics?.answer_overlap)}</strong><span>Answer overlap</span></article>
-              <article className="metric-card"><small>Runtime proxy</small><strong>{formatNumber(selectedRun.metrics?.runtime_proxy_units)}</strong><span>chars / 1k</span></article>
-              <article className="metric-card"><small>Retrieved contexts</small><strong>{formatNumber(selectedRun.metrics?.average_retrieved_contexts)}</strong><span>average per case</span></article>
+              <article className="metric-card"><small>Token F1</small><strong>{formatPercentMetric(selectedRun.metrics?.wixqa?.token_f1)}</strong><span>WixQA</span></article>
+              <article className="metric-card"><small>BLEU</small><strong>{formatPercentMetric(selectedRun.metrics?.wixqa?.bleu)}</strong><span>WixQA</span></article>
+              <article className="metric-card"><small>ROUGE-1 / 2</small><strong>{formatPercentMetric(selectedRun.metrics?.wixqa?.rouge_1)} / {formatPercentMetric(selectedRun.metrics?.wixqa?.rouge_2)}</strong><span>WixQA</span></article>
+              <article className="metric-card"><small>Context Recall</small><strong>{formatPercentMetric(selectedRun.metrics?.wixqa?.context_recall)}</strong><span>LLM judge</span></article>
+              <article className="metric-card"><small>Factuality</small><strong>{formatPercentMetric(selectedRun.metrics?.wixqa?.factuality)}</strong><span>LLM judge</span></article>
             </div>
-            <div className="table-panel evaluation-case-table">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Question</th>
-                    <th>Label</th>
-                    <th>Adaptive route</th>
-                    <th>Context</th>
-                    <th>Overlap</th>
-                    <th>Detail</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {cases.map((evaluationCase) => (
+          )}
+          <div className="table-panel evaluation-case-table">
+            <table>
+              <thead><tr><th>Question</th><th>Route</th><th>F1</th><th>Recall</th><th>Factuality</th><th>Detail</th></tr></thead>
+              <tbody>
+                {cases.map((evaluationCase) => {
+                  const wixqa = evaluationCase.metrics?.result?.wixqa || {};
+                  return (
                     <tr key={evaluationCase.id}>
                       <td>{evaluationCase.question}</td>
-                      <td>{evaluationCase.complexity_label}</td>
-                      <td>{evaluationCase.adaptive_metadata?.route_label || evaluationCase.adaptive_metadata?.route_level || "-"}</td>
-                      <td>{formatPercentMetric(evaluationCase.metrics?.adaptive?.context_relevance)}</td>
-                      <td>{formatPercentMetric(evaluationCase.metrics?.adaptive?.answer_overlap)}</td>
-                      <td><button className="secondary-action compact-action" type="button" onClick={() => onOpenDetail(selectedRun, evaluationCase, "case")}><IconLabel icon={GitBranch}>Trace</IconLabel></button></td>
+                      <td>{evaluationCase.answer_metadata?.route_label || evaluationCase.answer_metadata?.route_level || "-"}</td>
+                      <td>{formatPercentMetric(wixqa.token_f1)}</td>
+                      <td>{formatPercentMetric(wixqa.context_recall)}</td>
+                      <td>{formatPercentMetric(wixqa.factuality)}</td>
+                      <td><button className="secondary-action compact-action" onClick={() => onOpenDetail(selectedRun, evaluationCase, "case")}><GitBranch size={15} /> Trace</button></td>
                     </tr>
-                  ))}
-                  {cases.length === 0 && (
-                    <tr><td colSpan="6">{selectedRunId ? "Loading cases..." : "Select a run."}</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                  );
+                })}
+                {!cases.length && <tr><td colSpan="6">Select a completed configuration-dataset result.</td></tr>}
+              </tbody>
+            </table>
           </div>
-        )}
-      </section>
+        </section>
+      )}
     </section>
   );
 }
@@ -5202,11 +5357,11 @@ function EvaluationDetailScreen({ detail, onBack }) {
   if (detail?.view === "ragxplain") {
     return <RagxplainInsightsScreen run={run} onBack={onBack} />;
   }
-  const traceSteps = Array.isArray(evaluationCase?.adaptive_metadata?.trace_steps) ? evaluationCase.adaptive_metadata.trace_steps : [];
+  const traceSteps = Array.isArray(evaluationCase?.answer_metadata?.trace_steps) ? evaluationCase.answer_metadata.trace_steps : [];
   if (!evaluationCase) {
     return (
       <section className="page-stack">
-        <PanelHeader eyebrow="Evaluation Detail" title="RAGXplain" />
+        <PanelHeader eyebrow="Evaluation Detail" title="WixQA case" />
         <div className="empty-state"><strong>No evaluation case selected</strong><p>Open a case from the Evaluation screen to inspect its route, sources and trace.</p></div>
         <button className="secondary-action" type="button" onClick={onBack}><IconLabel icon={ChevronLeft}>Back to Evaluation</IconLabel></button>
       </section>
@@ -5217,31 +5372,31 @@ function EvaluationDetailScreen({ detail, onBack }) {
       <div className="action-row">
         <button className="secondary-action" type="button" onClick={onBack}><IconLabel icon={ChevronLeft}>Back to Evaluation</IconLabel></button>
       </div>
-      <PanelHeader eyebrow="Evaluation Detail" title="RAGXplain" />
+      <PanelHeader eyebrow="Evaluation Detail" title="WixQA case" />
       <section className="panel evaluation-case-summary">
         <p className="eyebrow">{run?.name || "Evaluation run"}</p>
         <h2>{evaluationCase.question}</h2>
         <div className="metrics-grid evaluation-metrics-grid">
           <article className="metric-card"><small>Expected label</small><strong>{evaluationCase.complexity_label}</strong><span>benchmark</span></article>
-          <article className="metric-card"><small>Adaptive route</small><strong>{evaluationCase.adaptive_metadata?.route_label || "-"}</strong><span>{evaluationCase.adaptive_metadata?.complexity_label || "classifier"}</span></article>
-          <article className="metric-card"><small>Context relevance</small><strong>{formatPercentMetric(evaluationCase.metrics?.adaptive?.context_relevance)}</strong><span>proxy</span></article>
-          <article className="metric-card"><small>Answer overlap</small><strong>{formatPercentMetric(evaluationCase.metrics?.adaptive?.answer_overlap)}</strong><span>expected answer</span></article>
+          <article className="metric-card"><small>Executed route</small><strong>{evaluationCase.answer_metadata?.route_label || "-"}</strong><span>{evaluationCase.answer_metadata?.complexity_label || "configured route"}</span></article>
+          <article className="metric-card"><small>Context Recall</small><strong>{formatPercentMetric(evaluationCase.metrics?.result?.wixqa?.context_recall)}</strong><span>WixQA judge</span></article>
+          <article className="metric-card"><small>Factuality</small><strong>{formatPercentMetric(evaluationCase.metrics?.result?.wixqa?.factuality)}</strong><span>WixQA judge</span></article>
         </div>
       </section>
       <section className="evaluation-answer-grid">
         <article className="panel">
-          <h3>Adaptive answer</h3>
-          <p>{evaluationCase.adaptive_answer}</p>
+          <h3>Configuration answer</h3>
+          <p>{evaluationCase.answer}</p>
         </article>
         <article className="panel">
-          <h3>Static L2 answer</h3>
-          <p>{evaluationCase.static_answer || "Baseline disabled for this run."}</p>
+          <h3>Expected answer</h3>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{evaluationCase.expected_answer}</ReactMarkdown>
         </article>
       </section>
       <section className="panel">
-        <PanelHeader eyebrow="Sources" title="Adaptive retrieved contexts" />
+        <PanelHeader eyebrow="Sources" title="Retrieved contexts" />
         <div className="run-list">
-          {evaluationCase.adaptive_contexts.map((context) => (
+          {evaluationCase.contexts.map((context) => (
             <article className="run-card" key={context.id}>
               <div>
                 <strong>{context.metadata?.title || context.id}</strong>
@@ -5250,11 +5405,11 @@ function EvaluationDetailScreen({ detail, onBack }) {
               <p>{context.text}</p>
             </article>
           ))}
-          {evaluationCase.adaptive_contexts.length === 0 && <p className="muted-text">No adaptive contexts returned.</p>}
+          {evaluationCase.contexts.length === 0 && <p className="muted-text">No contexts returned by this configuration.</p>}
         </div>
       </section>
       <section className="panel">
-        <PanelHeader eyebrow="Trace" title="Adaptive pipeline trace" />
+        <PanelHeader eyebrow="Trace" title="Configuration pipeline trace" />
         <div className="trace-board">
           {traceSteps.map((step, index) => (
             <article key={`${step.step}-${index}`}>

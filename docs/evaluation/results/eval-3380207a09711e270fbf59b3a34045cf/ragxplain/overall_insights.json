@@ -1,0 +1,225 @@
+{
+  "analysis": {
+    "executive_summary": "The RAG system exhibits significant challenges in retrieval effectiveness, with key metrics such as context recall and relevancy scoring near zero, indicating the retrieved documents rarely contain the necessary information. Despite a professional tone and structured response format, the generation stage struggles with factuality and faithfulness, leading to answers that are often ungrounded or incomplete. The system's top strength lies in its consistent structural adherence and professional style, but the critical weakness is the retrieval pipeline's failure to provide relevant context, severely limiting overall answer quality.",
+    "executive_summary_gist": "The system suffers from poor retrieval, with context recall and relevancy near zero, causing ungrounded and incomplete answers. While answer structure and tone are strong, the lack of relevant context critically undermines factuality and faithfulness.",
+    "insights": [
+      {
+        "title": "Critical Retrieval Failure: Near-Zero Context Recall and Relevancy",
+        "priority": "critical",
+        "problem_detection": "The retrieval stage fails to return relevant documents containing essential information, as evidenced by context recall and relevancy metrics at or near 0.0.",
+        "problem_detection_gist": "Retrieval returns irrelevant or empty context, with context recall and relevancy near zero.",
+        "root_cause_analysis": "The hybrid retrieval configuration with `top_k=2` and disabled reranker likely limits the breadth and precision of retrieved documents. The knowledge base or retrieval index may be insufficiently representative or poorly aligned with the query distribution. Additionally, the retrieval mode 'hybrid' without reranking may cause noisy or irrelevant results, and the low `top_k` restricts recall potential.",
+        "root_cause_analysis_gist": "Limited retrieval breadth and lack of reranking cause poor recall and relevancy in retrieved documents.",
+        "evidence_trace": "Metrics pattern: Context recall and relevancy metrics are at 0.0, indicating no essential ground truth information is retrieved. Traditional metrics like BLEU and ROUGE are low, supporting poor retrieval impact. Examples include questions where the retrieved context is empty or unrelated, leading to ungrounded answers. For instance, a question about workflow steps received no relevant context, resulting in a generic or incorrect answer.",
+        "evidence_trace_gist": "Context recall and relevancy are zero, with examples showing empty or irrelevant retrieved context causing ungrounded answers.",
+        "recommended_protocol": "### Expand Retrieval Breadth and Improve Relevance\n- Increase `top_k` from 2 to at least 5-10 to allow more candidate documents, improving recall.\n- Enable and tune a reranker module to reorder retrieved documents by semantic relevance, reducing noise.\n- Audit and enrich the knowledge base to ensure comprehensive coverage of expected queries.\n- Consider adjusting the hybrid retrieval balance or testing pure semantic retrieval to improve alignment.\n\n### Monitor and Validate Retrieval Quality\n- Implement retrieval quality logging and sampling to detect irrelevant or empty results.\n- Use query reformulation or query expansion techniques to improve retrieval matches.\n\n> Note: Increasing `top_k` and enabling reranking will increase latency and computational cost but is essential to provide the generator with sufficient context, which is foundational for downstream answer quality.",
+        "recommended_protocol_gist": "- Increase `top_k` to 5-10 for better recall\n- Enable and tune reranker for relevance\n- Audit and enrich knowledge base coverage\n- Monitor retrieval quality with logging and query expansion"
+      },
+      {
+        "title": "Generation Stage Hallucination and Low Faithfulness",
+        "priority": "high",
+        "problem_detection": "The generation model produces answers with low factuality (0.44) and faithfulness (approx. 0.22), indicating frequent hallucinations or unsupported claims beyond retrieved context.",
+        "problem_detection_gist": "Generated answers often hallucinate or include unsupported information beyond retrieved context.",
+        "root_cause_analysis": "Due to poor retrieval, the generator lacks sufficient grounding context, forcing it to rely on prior knowledge or guesswork. The system prompt encourages citing retrieved evidence, but with empty or irrelevant context, the model defaults to hallucination. Additionally, generation parameters are default/empty, possibly missing constraints to enforce strict grounding or uncertainty acknowledgment.",
+        "root_cause_analysis_gist": "Insufficient retrieved context and lack of grounding constraints cause hallucinations in generated answers.",
+        "evidence_trace": "Metrics pattern: Factuality averages 0.44 and faithfulness proxy is about 0.22, both low. Examples show answers that include confident but unsupported statements or omit critical facts. For example, a question about a workflow step received an answer with plausible but unverified details, lacking citations or disclaimers. This aligns with the retrieval failure forcing the generator to hallucinate.",
+        "evidence_trace_gist": "Low factuality and faithfulness metrics correspond to hallucinated answers lacking citations, as seen in workflow step questions.",
+        "recommended_protocol": "### Strengthen Generation Grounding and Uncertainty Handling\n- Implement explicit grounding constraints in the prompt to strictly limit generation to retrieved context.\n- Add uncertainty disclaimers when retrieved context is insufficient or empty.\n- Tune generation parameters to reduce max tokens and encourage concise, evidence-based answers.\n- Consider integrating a post-generation verification step or a fact-checking module.\n\n### Improve Retrieval-Generation Feedback Loop\n- Use retrieval confidence scores to gate generation or trigger fallback responses.\n- Enable citations and highlight missing evidence to users transparently.\n\n> These changes reduce hallucination risk and improve trustworthiness but may reduce answer length or completeness if retrieval remains poor.",
+        "recommended_protocol_gist": "- Enforce strict grounding in prompts\n- Add uncertainty disclaimers for missing context\n- Tune generation for concise, evidence-based answers\n- Integrate post-generation fact-checking"
+      },
+      {
+        "title": "Answer Relevancy and Intent Alignment Needs Improvement",
+        "priority": "high",
+        "problem_detection": "Answer relevancy scores are low, indicating that generated answers often do not directly address the user's specific question or intent.",
+        "problem_detection_gist": "Answers frequently miss the user's intent or provide vague, off-target responses.",
+        "root_cause_analysis": "The combination of poor retrieval and generation hallucination leads to answers that are either generic or unrelated. The system prompt and response structure emphasize concise, bullet-pointed answers but may lack explicit instructions to tailor responses to user intent. Additionally, the adaptive routing strategy may inconsistently select retrieval or generation paths, causing variability in answer focus.",
+        "root_cause_analysis_gist": "Poor retrieval and generic prompt instructions cause answers to miss user intent and relevancy.",
+        "evidence_trace": "Metrics pattern: Answer relevancy is low, with examples showing answers that do not fully address the question or are too vague. For instance, a question about a specific workflow step received a generic summary unrelated to the query. This suggests the generation stage is not sufficiently guided to focus on user intent or adapt to retrieval quality.",
+        "evidence_trace_gist": "Low answer relevancy is evident in examples where answers are generic or off-topic, missing user intent.",
+        "recommended_protocol": "### Enhance Intent Awareness and Response Tailoring\n- Refine system and user prompts to explicitly instruct the model to focus on the question's intent.\n- Incorporate query intent classification outputs to condition generation or retrieval strategies.\n- Adjust adaptive routing thresholds to favor retrieval paths with higher confidence.\n- Implement answer post-processing filters to detect and flag off-topic or vague responses.\n\n> These steps improve user satisfaction by ensuring answers are relevant and focused, complementing retrieval and grounding improvements.",
+        "recommended_protocol_gist": "- Refine prompts to emphasize user intent\n- Use intent classification to guide retrieval/generation\n- Adjust routing to prefer high-confidence retrieval\n- Filter answers for off-topic content"
+      },
+      {
+        "title": "Maintain Strong Structural and Stylistic Consistency",
+        "priority": "medium",
+        "problem_detection": "The system consistently adheres to the specified answer structure and professional tone, as indicated by stable grading notes and stylistic metrics.",
+        "problem_detection_gist": "Answer formatting and style meet requirements consistently.",
+        "root_cause_analysis": "The predefined prompt and configuration enforce a professional tone and concise bullet-point structure, which the generation model follows reliably. This strength provides a solid foundation for user experience despite content quality issues.",
+        "root_cause_analysis_gist": "Well-designed prompts and configuration ensure consistent answer style and structure.",
+        "evidence_trace": "Metrics pattern: Grading note scores are stable and high, showing adherence to formatting and style. Examples demonstrate clear, bullet-pointed answers with citations and professional tone, even when content quality is low. This indicates the generation stage respects structural instructions.",
+        "evidence_trace_gist": "High grading note scores confirm consistent formatting and professional style in answers.",
+        "recommended_protocol": "### Preserve and Leverage Structural Strength\n- Continue using the current predefined prompt emphasizing concise, bullet-pointed answers with citations.\n- Once retrieval and factuality improve, leverage this structure to highlight evidence and uncertainty clearly.\n- Consider minor prompt tuning to incorporate new grounding or intent instructions without losing style consistency.\n\n> Maintaining this strength ensures improved content is delivered in a user-friendly, professional format.",
+        "recommended_protocol_gist": "- Keep current prompt for style and structure\n- Use structure to highlight evidence and uncertainty\n- Tune prompts carefully to add grounding without losing style"
+      }
+    ],
+    "strategic_conclusion": "The primary bottleneck is the retrieval pipeline, which must be expanded and refined to provide relevant, comprehensive context. Without this foundation, generation will continue to hallucinate and produce irrelevant answers despite strong structural formatting. Prioritizing retrieval improvements alongside grounding constraints in generation will yield the most impactful gains in answer quality and user trust.",
+    "configuration_targets": [
+      {
+        "diagnostic_area": "Retrieval quality",
+        "metrics": [
+          "Context Relevancy",
+          "Context Recall"
+        ],
+        "sections": [
+          "Knowledge Base",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "chunking_strategy",
+          "embedding_deployment_id",
+          "retrieval_mode",
+          "top_k",
+          "reranker_deployment_id"
+        ]
+      },
+      {
+        "diagnostic_area": "Faithfulness and grounding",
+        "metrics": [
+          "Context Adherence",
+          "Factuality"
+        ],
+        "sections": [
+          "Generator target & prompts",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "generator_deployment_id",
+          "system_prompt",
+          "predefined_prompt",
+          "citations_enabled"
+        ]
+      },
+      {
+        "diagnostic_area": "Relevance and intent",
+        "metrics": [
+          "Answer Relevancy"
+        ],
+        "sections": [
+          "Adaptive RAG",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "route_mode",
+          "classifier_deployment_id",
+          "planner_deployment_id",
+          "response_structure"
+        ]
+      },
+      {
+        "diagnostic_area": "Structure and style",
+        "metrics": [
+          "Grading Note"
+        ],
+        "sections": [
+          "General",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "response_structure",
+          "tone",
+          "humor_level",
+          "system_prompt",
+          "predefined_prompt"
+        ]
+      }
+    ]
+  },
+  "prompt": {
+    "insights": {},
+    "examples": {},
+    "configs": {
+      "rag_configs": {
+        "run_id": "eval-3380207a09711e270fbf59b3a34045cf",
+        "name": "Adaptive GPT 4.1 mini - WixQA ExpertWritten",
+        "dataset_name": "WixQA ExpertWritten",
+        "knowledge_base_id": "kb-c0ed6736009d4d8c86b7961d992fccf4",
+        "knowledge_base_name": "Business Workflow Knowledge Base",
+        "chat_configuration_id": "cfg-default-balanced-workflow",
+        "chat_configuration": {
+          "id": "cfg-default-balanced-workflow",
+          "name": "Adaptive GPT 4.1 mini",
+          "tone": "Professional",
+          "metadata": {
+            "top_k": 2,
+            "runtime": "model-farm",
+            "classifier": "query_classifier_distilbert",
+            "route_mode": "adaptive",
+            "retrieval_mode": "hybrid",
+            "route_strategy": "Adaptive",
+            "welcome_message": "Welcome to Adaptive RAG Studio. Workflow assistant 2 will assist you.",
+            "actual_generator": "deployment",
+            "configuration_id": "MuOn4R4SsWy8",
+            "reranker_enabled": false,
+            "citations_enabled": true,
+            "agent_max_iterations": 5,
+            "agent_max_tool_calls": 8,
+            "retrieval_mode_label": "Hybrid",
+            "agent_timeout_seconds": 90,
+            "conversation_starters": [
+              "What are the main steps in this workflow?",
+              "Summarize the selected knowledge base."
+            ],
+            "generation_parameters": {},
+            "planner_deployment_id": "",
+            "reranker_deployment_id": "",
+            "fallback_deployment_ids": [],
+            "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+            "agent_public_web_enabled": false,
+            "classifier_deployment_id": "model-local-distilbert",
+            "classifier_margin_threshold": 0,
+            "conversation_awareness_enabled": false,
+            "conversation_history_exchanges": 3,
+            "classifier_confidence_threshold": 0,
+            "conversation_history_characters": 4000
+          },
+          "description": "Default configuration for concise business workflow answers.",
+          "humor_level": 0,
+          "system_prompt": "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
+          "generator_model": "gpt-4.1-mini",
+          "citations_enabled": true,
+          "predefined_prompt": "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.",
+          "generator_provider": "openai",
+          "response_structure": "Concise answer with bullets and cited workflow context",
+          "generation_parameters": {},
+          "planner_deployment_id": "",
+          "reranker_deployment_id": "",
+          "fallback_deployment_ids": [],
+          "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+          "agent_public_web_enabled": false,
+          "conversation_awareness_enabled": false
+        },
+        "retrieval_mode": "hybrid",
+        "top_k": 2,
+        "route_distribution": {
+          "l1_direct": 2,
+          "l2_simple_rag": 3
+        },
+        "wixqa_metrics": {
+          "mrr": 0.0,
+          "bleu": 0.07217365390616219,
+          "rouge_1": 0.3219794635518203,
+          "rouge_2": 0.08439027256375642,
+          "hit_at_k": 0.0,
+          "token_f1": 0.3219794635518203,
+          "ndcg_at_k": 0.0,
+          "factuality": 0.44,
+          "recall_at_k": 0.0,
+          "context_recall": 0.0,
+          "judge_coverage": 1.0,
+          "precision_at_k": 0.0,
+          "retrieval_coverage": 1.0
+        }
+      }
+    },
+    "rag_traditional_metrics": {
+      "routing_match": 0.4,
+      "context_relevance_proxy": 0.0,
+      "faithfulness_proxy": 0.21723649580147883,
+      "answer_overlap": 0.38425220555511885,
+      "token_f1": 0.32197946355181983,
+      "bleu": 0.05317966042806861,
+      "rouge_1": 0.32197946355181983,
+      "rouge_2": 0.084390272563756
+    }
+  }
+}

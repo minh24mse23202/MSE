@@ -13,7 +13,9 @@ from fastapi.testclient import TestClient
 import api.main as api_main
 from aragbiz.answering import AdaptiveRAGAnswerService
 from aragbiz.chat import ChatService, JsonChatRepository
-from aragbiz.evaluation import EvaluationService, JsonEvaluationRepository
+from aragbiz.evaluation import EvaluationRunRecord, EvaluationService, JsonEvaluationRepository
+from aragbiz.evaluation_experiments import EvaluationExperimentRecord
+from aragbiz.jobs import BackgroundJob
 from aragbiz.knowledge import HashEmbeddingModel, KnowledgeService, OverlapChunker, SentenceTransformerEmbeddingModel
 from aragbiz.knowledge_store import JsonKnowledgeRepository
 from aragbiz.model_farm import JsonModelFarmRepository, ModelFarmError, ModelFarmService, ModelGateway, ModelStreamEvent
@@ -1012,7 +1014,6 @@ def test_evaluation_run_endpoints(monkeypatch, tmp_path):
             "retrieval_mode": "bm25",
             "top_k": 2,
             "limit": 1,
-            "compare_baseline": True,
         },
     )
     assert created.status_code == 200
@@ -1020,51 +1021,134 @@ def test_evaluation_run_endpoints(monkeypatch, tmp_path):
     assert run["status"] == "completed"
     assert run["metadata"]["ragxplain"]["status"] == "not_requested"
     assert run["metrics"]["average_retrieved_contexts"] >= 1
-    assert run["baseline_metrics"]["average_retrieved_contexts"] >= 1
+    assert run["metadata"]["comparison_model"] == "configuration_matrix"
 
     listed = client.get("/evaluation/runs").json()
     assert listed[0]["id"] == run["id"]
     cases = client.get(f"/evaluation/runs/{run['id']}/cases").json()
     assert len(cases) == 1
-    assert cases[0]["adaptive_answer"]
-    assert cases[0]["adaptive_contexts"]
-    assert cases[0]["adaptive_metadata"]["trace_steps"]
+    assert cases[0]["answer"]
+    assert cases[0]["contexts"]
+    assert cases[0]["answer_metadata"]["trace_steps"]
     assert client.get(f"/evaluation/runs/{run['id']}/ragxplain/overall-insights").status_code == 409
 
-    ragxplain_created = client.post(
-        "/evaluation/runs",
-        json={
-            "knowledge_base_id": kb["id"],
-            "retrieval_mode": "bm25",
-            "top_k": 2,
-            "limit": 1,
-            "compare_baseline": False,
-            "run_ragxplain": True,
-        },
-    )
-    assert ragxplain_created.status_code == 200
-    ragxplain_run = ragxplain_created.json()
-    assert ragxplain_run["metadata"]["ragxplain"]["status"] == "completed"
-    insights = client.get(f"/evaluation/runs/{ragxplain_run['id']}/ragxplain/overall-insights")
-    assert insights.status_code == 200
-    assert insights.json()["analysis"]["executive_summary"] == "Evaluation summary"
     viewer = client.get("/evaluation/ragxplain/viewer")
     assert viewer.status_code == 200
     assert "RAGXplain viewer" in viewer.text
-    artifact_dir = Path(ragxplain_run["metadata"]["ragxplain"]["output_dir"])
-    assert artifact_dir.exists()
 
     missing = client.get("/evaluation/runs/eval-missing")
     assert missing.status_code == 404
     assert client.get("/evaluation/runs/eval-missing/ragxplain/overall-insights").status_code == 404
 
-    ragxplain_deleted = client.delete(f"/evaluation/runs/{ragxplain_run['id']}")
-    assert ragxplain_deleted.status_code == 200
-    assert not artifact_dir.exists()
-
     deleted = client.delete(f"/evaluation/runs/{run['id']}")
     assert deleted.status_code == 200
     assert client.get(f"/evaluation/runs/{run['id']}").status_code == 404
+
+
+def test_evaluation_experiment_endpoint_queues_matrix_job(monkeypatch, isolated_chat_service):
+    configuration = isolated_chat_service.create_configuration("Benchmark configuration")
+    knowledge_base = type(
+        "KnowledgeBase",
+        (),
+        {
+            "id": "kb-wixqa",
+            "name": "WixQA",
+            "document_count": 6221,
+            "metadata": {"active_index_version_id": "index-1"},
+        },
+    )()
+    monkeypatch.setattr(api_main.knowledge_service, "get_knowledge_base", lambda _id: knowledge_base)
+    monkeypatch.setattr(api_main.model_farm_service, "resolve", lambda *_args, **_kwargs: object())
+    created = EvaluationExperimentRecord(
+        id="experiment-1",
+        name="Matrix",
+        status="queued",
+        knowledge_base_id="kb-wixqa",
+        knowledge_base_name="WixQA",
+        configuration_ids=[configuration.id],
+        datasets={"expertwritten": 2},
+        judge_deployment_id="judge-1",
+        created_by="dev-admin",
+        created_at="2026-07-24T00:00:00+00:00",
+        updated_at="2026-07-24T00:00:00+00:00",
+    )
+    monkeypatch.setattr(api_main.evaluation_experiment_service, "create", lambda **_kwargs: created)
+    monkeypatch.setattr(
+        api_main.job_service,
+        "enqueue",
+        lambda *_args, **_kwargs: BackgroundJob(
+            id="job-1",
+            job_type="evaluation_experiment",
+            status="queued",
+            payload={"experiment_id": "experiment-1"},
+            created_at="2026-07-24T00:00:00+00:00",
+            updated_at="2026-07-24T00:00:00+00:00",
+        ),
+    )
+    response = TestClient(app).post(
+        "/evaluation/experiments",
+        json={
+            "name": "Matrix",
+            "knowledge_base_id": "kb-wixqa",
+            "configuration_ids": [configuration.id],
+            "datasets": {"expertwritten": 2},
+            "judge_deployment_id": "judge-1",
+        },
+    )
+    assert response.status_code == 202
+    assert response.json()["experiment"]["id"] == "experiment-1"
+    assert response.json()["job"]["job_type"] == "evaluation_experiment"
+
+
+def test_ragxplain_diagnosis_accepts_limit_and_seed(monkeypatch):
+    run = EvaluationRunRecord(
+        id="eval-1",
+        name="Configuration result",
+        dataset_name="WixQA ExpertWritten",
+        status="completed",
+        knowledge_base_id="kb-1",
+        metadata={
+            "judge_deployment_id": "judge-1",
+            "ragxplain": {"status": "not_requested"},
+        },
+    )
+    queued = EvaluationRunRecord(
+        **{
+            **run.__dict__,
+            "metadata": {
+                **run.metadata,
+                "ragxplain": {
+                    "status": "queued",
+                    "judge": "judge-1",
+                    "case_count": 25,
+                    "random_state": 7,
+                },
+            },
+        }
+    )
+    monkeypatch.setattr(api_main.evaluation_service, "get_run", lambda _run_id: run)
+    monkeypatch.setattr(api_main.evaluation_service, "queue_ragxplain", lambda *_args, **_kwargs: queued)
+    monkeypatch.setattr(
+        api_main.job_service,
+        "enqueue",
+        lambda *_args, **_kwargs: BackgroundJob(
+            id="job-ragxplain",
+            job_type="evaluation_ragxplain",
+            status="queued",
+            payload={"run_id": "eval-1", "limit": 25, "seed": 7},
+            created_at="2026-07-25T00:00:00+00:00",
+            updated_at="2026-07-25T00:00:00+00:00",
+        ),
+    )
+
+    response = TestClient(app).post(
+        "/evaluation/runs/eval-1/ragxplain",
+        json={"limit": 25, "seed": 7},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["ragxplain"]["status"] == "queued"
+    assert response.json()["ragxplain"]["case_count"] == 25
 
 
 def test_knowledge_base_update_and_delete_endpoints(monkeypatch, tmp_path):

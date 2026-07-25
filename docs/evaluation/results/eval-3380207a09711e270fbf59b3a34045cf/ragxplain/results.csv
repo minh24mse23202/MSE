@@ -1,0 +1,108 @@
+question,candidate_answer,contexts,gt_answer,routing_match,context_relevance_proxy,faithfulness_proxy,answer_overlap,token_f1,bleu,rouge_1,rouge_2
+Im inquiring about the refund policy for canceling my Premium Light account.,"The retrieved workflow context does not contain specific information about the refund policy for canceling a Premium Light account. 
+
+For accurate details on refund policies, please refer to your service provider’s official terms or customer support channels. 
+
+If you need assistance with event-related workflows or account management within the platform, I can help with that based on available documentation. 
+
+No relevant refund policy information was found in the retrieved context [S1][S2].","[1] 000001_860475a2cbc65c226ecf08729d0430584e46f35f23a3e10bb5500c2c4ad0_wix-events-about-the-event-details-and-registration-form-pages.pdf
+Events Details page (if enabled) and complete the booking on the Registration Form Page. [Image unavailable: Image unavailable] You can customize how these pages look to suit your events. Tips: Customizations you make to the Events Details page and the Registration Form page (e.g. changing colors and fonts, hiding page elements) affect these page for all events. If your site only has events without tickets, you have the option of disabling the Event Details Page. Events Details Page Site visitors who click to register for an event are first directed to the Event Detailspage (unless you hid the page). There, guests can receive more complete information about the event. You can customize the page to show or hide various elements, such as a map to the event location and an ""About the Event""
+
+[2] 000001_860475a2cbc65c226ecf08729d0430584e46f35f23a3e10bb5500c2c4ad0_wix-events-about-the-event-details-and-registration-form-pages.pdf
+the Editor. Click the Settings icon . Click the Pages tab. 1. 2. 3. Page 2 of 5 Click the Show this page when visitors register toggle to disable it. Events with tickets For events with tickets, the Event Details Page includes a ticket section, in addition to information about the location, time, and so on. Here, guests can select how many tickets they want to purchase and view a price breakdown. If your business offers membership plans, you can display the plan for guests to purchase. 4. Page 3 of 5 Note: To edit the event name, location, subtitle, ""About the Event"" description, go to the Events tab in your site dashboard and edit the event. Registration Form Page After clicking the RSVP button (for non-ticketed events) or Checkout (for events with tickets), guests are directed to the Reg","Wix offers a 14-day money-back guarantee for new Premium or Studio plans. If you cancel your Premium account within the first 14 days of purchase, you are eligible for a full refund. The refund will be processed automatically to your payment method, and it may take up to 20 business days to appear on your credit card statement. ",1,0,0.35000000000000003,0.27083333333333304,0.238805970149253,0.041315940803886,0.238805970149253,0.060606060606060004
+I want to update the Wix Editor to the new Wix Studio Editor.,"To update from the Wix Editor to the new Wix Studio Editor, follow these steps:
+
+- Check if your current Wix site is compatible with Wix Studio, as some features or customizations may differ.
+- Backup your existing site content and data to prevent any loss during the transition.
+- Access Wix Studio through your Wix account or by visiting the Wix Studio platform directly.
+- Rebuild or migrate your site within Wix Studio, as it may not support direct in-place upgrades from the Wix Editor.
+- Review and adjust your site's design and functionality to leverage Wix Studio's enhanced capabilities.
+
+Note: Wix does not currently offer a direct update or automatic migration path from Wix Editor to Wix Studio; the process involves manual migration.
+
+If you need detailed guidance, consult Wix support or official Wix Studio documentation.",,"If your site was originally created using the Wix Editor, it is not possible to migrate it to the Studio Editor. In order to take advantage of the new features and functionality, please rebuild your site in the Studio Editor. ",0,0,0.0,0.642857142857142,0.318181818181818,0.036218669117784,0.318181818181818,0.103448275862068
+"My website displays correctly on PC and smartphone, but not on a tablet. The words on the page are off the screen.","To address text display issues on tablets while your website looks fine on PC and smartphones, consider the following:
+
+- Check and adjust the responsive design settings specifically for tablet screen sizes in your website editor.
+- Customize page elements such as font size, margins, and layout for tablet viewports to prevent text overflow.
+- Use the site editor’s preview mode to test how pages render on different devices, including tablets.
+- If using Wix Events, ensure that customizations to the Event Details and Registration Form pages are compatible across all device types, as changes affect all events and devices [S1, S2].
+
+Since the workflow context does not provide direct tablet-specific troubleshooting, these are standard best practices for responsive design issues.
+
+If the problem persists, reviewing the CSS media queries or contacting your platform support for tablet-specific display fixes is recommended.","[1] 000001_860475a2cbc65c226ecf08729d0430584e46f35f23a3e10bb5500c2c4ad0_wix-events-about-the-event-details-and-registration-form-pages.pdf
+the Editor. Click the Settings icon . Click the Pages tab. 1. 2. 3. Page 2 of 5 Click the Show this page when visitors register toggle to disable it. Events with tickets For events with tickets, the Event Details Page includes a ticket section, in addition to information about the location, time, and so on. Here, guests can select how many tickets they want to purchase and view a price breakdown. If your business offers membership plans, you can display the plan for guests to purchase. 4. Page 3 of 5 Note: To edit the event name, location, subtitle, ""About the Event"" description, go to the Events tab in your site dashboard and edit the event. Registration Form Page After clicking the RSVP button (for non-ticketed events) or Checkout (for events with tickets), guests are directed to the Reg
+
+[2] 000001_860475a2cbc65c226ecf08729d0430584e46f35f23a3e10bb5500c2c4ad0_wix-events-about-the-event-details-and-registration-form-pages.pdf
+Events Details page (if enabled) and complete the booking on the Registration Form Page. [Image unavailable: Image unavailable] You can customize how these pages look to suit your events. Tips: Customizations you make to the Events Details page and the Registration Form page (e.g. changing colors and fonts, hiding page elements) affect these page for all events. If your site only has events without tickets, you have the option of disabling the Event Details Page. Events Details Page Site visitors who click to register for an event are first directed to the Event Detailspage (unless you hid the page). There, guests can receive more complete information about the event. You can customize the page to show or hide various elements, such as a map to the event location and an ""About the Event""","On iPads and tablets Wix sites are cropped within the [vertical gridlines](https://support.wix.com/en/article/wix-editor-working-with-the-editor-gridlines) of the Editor.
+
+To resolve this issue:
+Make sure to place your content within the vertical gridlines in your Editor. You can also [use columns] (https://support.wix.com/en/article/wix-editor-adding-and-setting-up-columns-on-your-strip) which are responsive to your screen's width to fit your content within most screens.",1,0,0.35643564356435603,0.3125,0.244343891402714,0.019610413356463,0.244343891402714,0.009132420091324001
+"I am trying to change the order of the items within a CMS collection on my Wix site, but the provided steps did not work for me.","To change the order of items within a CMS collection on your Wix site, please ensure the following steps:
+
+- Go to your Wix Editor and open the CMS Collections panel.
+- Select the collection you want to reorder.
+- Use the ""Sort"" option to define the order based on a specific field (e.g., date, name, or a custom number field).
+- If you want a custom order, create a numeric field (e.g., ""Order"") in your collection and assign values to each item reflecting the desired order.
+- Sort the collection by this numeric field in ascending or descending order.
+- Refresh your site to see the updated order.
+
+If these steps did not work, verify that:
+
+- Your dataset on the page is connected and set to use the same sorting criteria.
+- You have published the site after making changes.
+- There are no conflicting filters or sorts applied in the dataset settings.
+
+If issues persist, please provide details about the steps you followed and any error messages for further assistance.",,"To change the order of items within a CMS collection on your Wix site, you should follow these steps:
+
+1. Go to the CMS in your site's dashboard or editor.
+2. Click on the relevant collection.
+3. If you have multiple collection views, select the view you want to sort items in.
+4. Click 'Sort' at the top of your collection.
+5. Click '+ Add a Sort'.
+6. Choose the field you want to sort by from the 'Sort by' drop-down menu.
+7. Select the sorting order (e.g., A-Z, Low-High, Oldest-Newest).
+8. Click 'Add Sort'.
+9. To apply this order to your live site, enable the 'Mirror on Site' toggle at the top of the collection.
+
+If these steps did not work, ensure that the 'Mirror on Site' feature is enabled, as this is necessary for the order in your collection view to be reflected on your live site. Additionally, check if there are any sort conditions added to datasets, as these can override the order set in your mirrored collection view. For more detailed guidance, you can refer to the [Wix support article on mirroring item order](https://support.wix.com/en/article/cms-mirroring-the-order-of-items-in-your-collection-to-your-sites-connected-elements).",0,0,0.0,0.42056074766355106,0.5013192612137201,0.149640867989964,0.5013192612137201,0.196286472148541
+"I'm attempting to redesign the product page of my Wix Store. I need guidance on customizing the layout, image display & button text.","The retrieved workflow context focuses on Wix Events pages and does not provide specific guidance on redesigning Wix Store product pages, including layout, image display, or button text customization.
+
+For your Wix Store product page redesign, consider these general steps (not from retrieved context):
+
+- Use the Wix Editor to drag and drop elements to customize layout.
+- Customize product images by adjusting size, layout, and gallery style.
+- Edit button text by selecting the button element and changing its label in the editor.
+
+Since the retrieved documents do not cover Wix Store product page customization, I recommend consulting Wix’s official Store customization guides or support articles for detailed instructions.
+
+If you need help specifically with Wix Events pages, I can provide detailed guidance based on the retrieved context [S1][S2].","[1] 000001_860475a2cbc65c226ecf08729d0430584e46f35f23a3e10bb5500c2c4ad0_wix-events-about-the-event-details-and-registration-form-pages.pdf
+WIX INTERNAL KNOWLEDGE BASE - WIX HELP ARTICLES Wix Events: About the Event Details and Registration Form Pages Document ID 860475a2cbc65c226ecf08729d0430584e46f35f23a3e10bb5500c2c4ad09168 Article Type article Business Domain wix-events Source URL https://support.wix.com/en/article/wix-events-about-the-event-details-and-registration-form-pages Snapshot Date 2024-12-02 PDF Mode hybrid:html_content Canonical Text SHA256ba46cb3180924aa866e499ec1b57fdc144c02dbded5c248a2d7416ad8f86c2a9 Guests visiting your site view the events you offer on the Events List page. From there they can learn more on the Events Details page (if enabled) and complete the booking on the Registration Form Page. [Image unavailable: Image unavailable] You can customize how these pages look to suit your events. Tips: Custo
+
+[2] 000001_860475a2cbc65c226ecf08729d0430584e46f35f23a3e10bb5500c2c4ad0_wix-events-about-the-event-details-and-registration-form-pages.pdf
+nts tab in your site dashboard and edit the event. Registration Form Page After clicking the RSVP button (for non-ticketed events) or Checkout (for events with tickets), guests are directed to the Registration Form Page. There, guests fill in the names and email addresses. In the case of events with tickets, guest also complete payment. Schedule Page You can optionally create a schedule page to let guests know exactly what is happening at your event. The first 2 sessions are displayed. Guests can click ""See All"" to view the complete schedule. Page 4 of 5 Wix knowledge base of 6,221 Wix help articles that answers were derived from, is available under an MIT license. Snapshot date: 2024-12-02 (English-only). [WIX_DOC_END] Page 5 of 5","To customize your store layout and image display:
+Click the Layout tab to select the best Product Page layout for your shop. Then, customize how images are displayed.
+1. Click the Layout tab and select a layout for the Product Page.
+2. Click the Stretch to full width toggle to enable it. 
+3. Select how you want to display image thumbnails under Show thumbnails.
+4. Click the Image ratio drop-down and select a ratio.
+5. Select an option under How's image resized:
+  - Crop: Crops all images to the same size.
+  - Fit: Maintains the images' aspect ratios.
+6. Click the Zoom on image toggle to enable it (available for some layouts). 
+Note: To preview the zoom, go to your live site.
+
+Tip: Click Reset to original layout to reset your Product Page to its original layout settings. 
+
+Learn more about [displaying images in your store](https://support.wix.com/en/article/wix-stores-setting-how-store-images-are-displayed).
+
+
+To edit your product page button text: 
+* Click the Text tab to edit any of the text options that can appear on the Product Page buttons. 
+
+To add the wishlist feature:
+Go to your Editor.
+Go to your Product Page:
+Click Pages & Menu on the left side of the editor.
+Click Store Pages.
+Click Product Page.",0,0,0.37974683544303806,0.27450980392156804,0.307246376811594,0.019112410872246,0.307246376811594,0.05247813411078701

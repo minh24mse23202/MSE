@@ -233,6 +233,7 @@ def test_file_loaders_normalize_common_document_types():
     assert md[0].text.startswith("# Workflow")
     assert json_docs[0].title == "JSON guide"
     assert [document.title for document in jsonl_docs] == ["one", "two"]
+    assert [document.metadata["source_record_id"] for document in jsonl_docs] == ["one", "two"]
 
 
 def test_custom_ara_file_types_route_to_placeholder_loader():
