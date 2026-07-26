@@ -1,0 +1,452 @@
+{
+  "analysis": {
+    "executive_summary": "The RAG system demonstrates strong performance in `context_relevancy`, `context_adherence`, and `answer_relevancy`, indicating that it generally retrieves relevant information and generates grounded, pertinent answers. However, a critical weakness lies in `context_recall` and `factuality`, where the system frequently fails to retrieve or include all necessary granular details for procedural questions. This directly impacts the specificity and completeness of generated instructions, as reflected in moderate `grading_note` scores.",
+    "executive_summary_gist": "The RAG system excels at retrieving relevant context and generating generally relevant answers. Its primary challenge is `context_recall` and `factuality`, often missing granular details for procedural instructions.",
+    "insights": [
+      {
+        "title": "Enhance Retrieval Comprehensiveness for Procedural Content",
+        "priority": "critical",
+        "problem_detection": "The system exhibits moderate `context_recall` (avg **0.84**) and `factuality` (avg **0.84**), frequently missing crucial, granular details for step-by-step instructions, prerequisites, or specific UI navigation elements. This leads to incomplete and less factual answers.",
+        "problem_detection_gist": "The system often misses granular details for procedural questions, leading to incomplete and less factual answers.",
+        "root_cause_analysis": "The current retrieval configuration (`top_k=2`, `reranker_enabled=False`) is insufficient for complex procedural queries where essential information might be spread across multiple, highly specific chunks. The chunking strategy may also be too coarse, failing to isolate individual actionable steps or UI elements.",
+        "root_cause_analysis_gist": "Insufficient `top_k` and lack of re-ranking, combined with potentially coarse chunking, prevent comprehensive retrieval of granular procedural details.",
+        "evidence_trace": "The `context_recall` metric shows an average of **0.84** with a minimum score of **0.2**, while `factuality` also averages **0.84** with a minimum of **0.4**. This indicates a consistent pattern of missing information. \n- For the question \"How can I review and download my invoices from my Wix account?\", the system scored `context_recall_score` **0.2** and `factuality_score` **0.4**, providing generic steps instead of specific UI paths like 'Billing History' or 'More actions' icon. \n- In \"How can I connect a domain purchased elsewhere to my Wix site...?\", the `context_recall_score` was **0.6** and `factuality_score` **0.6**, as the answer omitted crucial prerequisites like 'Upgrade Your Site' and 'Access Your Domain Registrar'.",
+        "evidence_trace_gist": "Low `context_recall` (avg **0.84**, min **0.2**) and `factuality` (avg **0.84**, min **0.4**) indicate missing details, as seen in the generic invoice retrieval steps.",
+        "recommended_protocol": "### 1. Optimize Retrieval Depth and Precision\nIncrease the `top_k` parameter from `2` to `5` or `7` to retrieve a broader set of candidate chunks. Crucially, enable a `reranker_deployment_id` (currently `False`) to re-score and re-order these retrieved chunks, prioritizing those most semantically relevant and comprehensive for the entire procedural query. This ensures that even if individual steps are in separate chunks, they are all considered.\n> Note: Increasing `top_k` will slightly increase latency and cost, but the reranker will help maintain precision by filtering less relevant content.\n\n### 2. Refine Chunking Strategy for Procedural Content\nImplement a more granular chunking strategy specifically for documents containing step-by-step instructions. Instead of large paragraphs, aim for smaller, focused chunks that capture individual steps, UI elements, or short, self-contained pieces of information. This improves the likelihood of retrieving all necessary components for a complete procedure.\n> Note: This requires re-indexing the knowledge base and careful evaluation to avoid over-fragmentation, which could dilute context.\n\n### 3. Implement Query Expansion for Complex Queries\nFor questions involving multi-step processes or requiring specific UI elements, consider a query expansion technique. Use a small, fast LLM to generate sub-questions or synonyms for key terms (e.g., 'invoice download' -> 'billing history', 'view statement') before the main retrieval call. This helps the retriever hit all relevant parts of the knowledge base, especially for nuanced procedural information.",
+        "recommended_protocol_gist": "- Increase `top_k` and enable a reranker to improve retrieval depth and precision.\n- Refine chunking strategy for procedural content to capture individual steps.\n- Implement query expansion for complex queries to broaden retrieval scope."
+      },
+      {
+        "title": "Mandate Granular, Step-by-Step Instruction Generation",
+        "priority": "high",
+        "problem_detection": "The system's `grading_note` (avg **0.88**) indicates that generated answers, particularly for procedural questions, often lack the necessary specificity. They provide general guidance instead of exact, actionable steps and precise UI element names.",
+        "problem_detection_gist": "Generated answers for procedural questions lack specificity, offering general guidance instead of exact, actionable steps.",
+        "root_cause_analysis": "The current `system_prompt` and `predefined_prompt` for the `gpt-4.1-mini` generator do not sufficiently emphasize the need for highly granular, explicit, step-by-step instructions. This, combined with potential `context_recall` issues, leads the model to generalize or omit critical details.",
+        "root_cause_analysis_gist": "The generator's prompts lack explicit instructions for highly granular, step-by-step output, leading to generalized answers.",
+        "evidence_trace": "The `grading_note` metric averages **0.88** but has a minimum score of **0.4**, highlighting instances of insufficient detail. This directly correlates with `factuality` issues. \n- In the example \"How can I review and download my invoices from my Wix account?\", the `grading_note_score` was **0.4** and `factuality_score` **0.4**. The answer stated \"Navigate to the section where invoices are managed\" instead of the specific \"Go to Billing History,\" demonstrating a lack of granular instruction. \n- Similarly, for \"How can I connect a domain purchased elsewhere...\", the `grading_note_score` was **0.4**, as the answer provided high-level advice without the initial specific steps found in the ground truth.",
+        "evidence_trace_gist": "Moderate `grading_note` (avg **0.88**, min **0.4**) and `factuality` (avg **0.84**, min **0.4**) show answers are too general, as seen in the invoice example's vague navigation.",
+        "recommended_protocol": "### 1. Augment Generation Prompt for Specificity\nUpdate the `system_prompt` and `predefined_prompt` (currently `\"Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.\"`) to explicitly instruct the `gpt-4.1-mini` model to generate *highly detailed, sequential, step-by-step instructions*, including exact UI element names (e.g., \"Click **More actions** icon\"), menu paths, and any necessary prerequisites or warnings. Emphasize the importance of precision.\n> Example prompt addition: `\"For procedural questions, provide exact, numbered step-by-step instructions, including precise UI element names and navigation paths. Do not generalize.\" `\n\n### 2. Implement a 'Specificity Check' in Prompt\nAdd a meta-directive to the prompt that encourages the model to self-evaluate for specificity before finalizing its answer. This could be a final instruction like: `\"Review your answer: Is every step actionable? Are all UI labels exact? Is anything vague? If so, refine.\" ` This encourages a more critical self-assessment of detail.\n\n### 3. Leverage Structured Output for Procedures (Advanced)\nIf the generation framework supports it, consider using a structured output format (e.g., JSON) for procedural answers. This can enforce the inclusion of specific fields like `step_number`, `action`, `ui_element`, and `note` for each step, making it harder for the model to omit critical details. This requires a more complex prompt and parsing logic.",
+        "recommended_protocol_gist": "- Update prompts to demand highly detailed, step-by-step instructions with exact UI elements.\n- Add a prompt directive for the model to self-check for specificity.\n- Explore structured output formats for procedural answers to enforce detail."
+      },
+      {
+        "title": "Strengthen Grounding to Prevent Minor Inferences",
+        "priority": "medium",
+        "problem_detection": "While `context_adherence` is generally high (avg **0.94**), there are instances where the system infers plausible but unstated details or provides overly generic steps not explicitly found in the retrieved context, leading to minor inaccuracies or reduced trustworthiness.",
+        "problem_detection_gist": "The system occasionally infers unstated details or provides generic steps not explicitly in the context, impacting `context_adherence`.",
+        "root_cause_analysis": "The `gpt-4.1-mini` model might be attempting to fill perceived gaps in the retrieved context, especially if `context_recall` is insufficient. The current prompt's instruction for grounding (`\"Answer using retrieved workflow context when available.\"`) may not be absolute enough to strictly forbid any form of inference.",
+        "root_cause_analysis_gist": "The model infers due to perceived context gaps or a prompt that isn't strict enough about grounding, especially when `context_recall` is low.",
+        "evidence_trace": "The `context_adherence` metric averages **0.94** but has a minimum score of **0.6**, indicating specific cases of deviation. \n- For the question \"How can I review and download my invoices from my Wix account?\", the `context_adherence_score` was **0.6**. The candidate answer's generic navigation steps like \"Navigate to the section where invoices are managed\" were likely inferred or too vague to be directly grounded in the (likely incomplete) retrieved context, as the ground truth provided specific UI elements.",
+        "evidence_trace_gist": "Despite high `context_adherence` (avg **0.94**), a minimum score of **0.6** shows inference, as seen in the invoice example's generic, ungrounded navigation.",
+        "recommended_protocol": "### 1. Strengthen Prompt's Grounding Directive\nModify the `system_prompt` (`\"You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.\"`) and `predefined_prompt` to include an unequivocal instruction: `\"You *must* only use information explicitly present in the provided context. Do not infer, assume, or generate information not directly supported by the context. If information is not in the context, state that it is unavailable.\" `\n\n### 2. Implement Confidence Scoring/Uncertainty Expression\nInstruct the model to explicitly state uncertainty or indicate that information is not available when the retrieved context is insufficient to provide a complete and grounded answer. This prevents the model from fabricating details to fill gaps.\n> Note: This might lead to more 'I don't know' responses, but improves trustworthiness and reduces hallucination.\n\n### 3. Prioritize `context_recall` Improvements\nAs a foundational step, prioritize and implement the recommendations for improving `context_recall`. A more comprehensive and accurate retrieved context naturally reduces the need for the model to infer or generate ungrounded information, as all necessary details should be present for faithful generation.",
+        "recommended_protocol_gist": "- Update prompts to strictly forbid inference, requiring explicit context grounding.\n- Instruct the model to express uncertainty if context is insufficient.\n- Prioritize `context_recall` improvements to reduce the need for inference."
+      }
+    ],
+    "strategic_conclusion": "By strategically addressing the retrieval and generation stages, particularly focusing on enhancing `context_recall` and enforcing granular instruction generation, the RAG system can significantly improve its `factuality` and overall utility. These targeted improvements will not only boost core metric scores but also deliver more trustworthy and actionable user experiences, solidifying the system's role as a reliable knowledge assistant.",
+    "configuration_targets": [
+      {
+        "diagnostic_area": "Retrieval quality",
+        "metrics": [
+          "Context Relevancy",
+          "Context Recall"
+        ],
+        "sections": [
+          "Knowledge Base",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "chunking_strategy",
+          "embedding_deployment_id",
+          "retrieval_mode",
+          "top_k",
+          "reranker_deployment_id"
+        ]
+      },
+      {
+        "diagnostic_area": "Faithfulness and grounding",
+        "metrics": [
+          "Context Adherence",
+          "Factuality"
+        ],
+        "sections": [
+          "Generator target & prompts",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "generator_deployment_id",
+          "system_prompt",
+          "predefined_prompt",
+          "citations_enabled"
+        ]
+      },
+      {
+        "diagnostic_area": "Relevance and intent",
+        "metrics": [
+          "Answer Relevancy"
+        ],
+        "sections": [
+          "Adaptive RAG",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "route_mode",
+          "classifier_deployment_id",
+          "planner_deployment_id",
+          "response_structure"
+        ]
+      },
+      {
+        "diagnostic_area": "Structure and style",
+        "metrics": [
+          "Grading Note"
+        ],
+        "sections": [
+          "General",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "response_structure",
+          "tone",
+          "humor_level",
+          "system_prompt",
+          "predefined_prompt"
+        ]
+      }
+    ]
+  },
+  "prompt": {
+    "insights": {
+      "context_relevancy": {
+        "analysis": "The Context Relevancy metric demonstrates strong performance with an average score of 0.98, indicating that the retrieved context is consistently highly relevant to user questions. While one example noted minor issues such as repetition and split context slightly impacting flow, these are isolated instances and do not significantly detract from the overall excellent relevancy. Given this high average score, there is limited potential for major improvements in context relevancy, though minor refinements in context chunking or de-duplication could address the infrequent minor issues.",
+        "metric_name": "Context Relevancy",
+        "metric_description": "How relevant retrieved context is to the question.",
+        "avg_score": 0.9800000000000001,
+        "min_score": 0.8,
+        "max_score": 1.0
+      },
+      "context_adherence": {
+        "analysis": "The Context Adherence metric shows high performance with an average score of 0.94, indicating that the RAG system generally produces answers faithfully derived from the retrieved context. While most responses are fully grounded, a few instances show the model inferring plausible but unstated navigation steps or details. For minimal improvement, consider refining prompt instructions to strictly limit generation to explicitly provided context, or enhance retrieval granularity to ensure all necessary steps are present in the retrieved passages.",
+        "metric_name": "Context Adherence",
+        "metric_description": "How faithfully the answer uses only retrieved context.",
+        "avg_score": 0.9400000000000001,
+        "min_score": 0.6,
+        "max_score": 1.0
+      },
+      "answer_relevancy": {
+        "analysis": "The Answer Relevancy metric demonstrates high performance with an average score of 0.98, indicating that the system consistently provides highly relevant and accurate answers. The responses often include detailed, step-by-step instructions that directly address user queries. While overall performance is strong, a minor area for refinement is to enhance specificity in navigation instructions (e.g., exact menu names or sections) to make answers even more precise and user-friendly, as noted in the example with a score of 0.8.",
+        "metric_name": "Answer Relevancy",
+        "metric_description": "How well the answer addresses the question.",
+        "avg_score": 0.9800000000000001,
+        "min_score": 0.8,
+        "max_score": 1.0
+      },
+      "context_recall": {
+        "analysis": "The RAG system demonstrates moderate Context Recall performance with an average score of 0.84. While it effectively retrieves all necessary information for many queries, lower-scoring instances reveal a pattern of incomplete retrieval, particularly for detailed step-by-step instructions or crucial prerequisites. To improve, focus on enhancing the granularity of retrieval chunks for procedural content and fine-tuning the retriever to better identify and prioritize comprehensive \"how-to\" information, potentially through improved indexing or query expansion strategies.",
+        "metric_name": "Context Recall",
+        "metric_description": "Whether retrieved context contains information needed for ground truth.",
+        "avg_score": 0.8400000000000001,
+        "min_score": 0.2,
+        "max_score": 1.0
+      },
+      "factuality": {
+        "analysis": "The RAG system exhibits moderate factuality with an average score of 0.84. While many responses are highly accurate and complete, lower-scoring examples frequently miss specific, actionable details such as direct links, crucial prerequisites, or precise UI navigation steps (e.g., \"Billing History,\" \"More actions\" icon). To improve, enhance retrieval granularity to ensure documents containing exact UI instructions and prerequisites are consistently fetched, and refine the generation prompt to emphasize the extraction and inclusion of all critical, actionable details and explicit references from the retrieved context.",
+        "metric_name": "Factuality",
+        "metric_description": "Answer correctness vs ground truth reference.",
+        "avg_score": 0.8400000000000001,
+        "min_score": 0.4,
+        "max_score": 1.0
+      },
+      "grading_note": {
+        "analysis": "The RAG system shows strong performance for 'Grading Note' with an average score of 0.88, indicating it generally provides high-quality, relevant responses. However, the system occasionally struggles with questions requiring highly specific, sequential, step-by-step instructions, particularly concerning navigation paths within the Wix platform. In these cases, the generated answers tend to be too general, identifying the method but failing to detail the exact actions or menu selections needed. To improve, refine the generation prompt to explicitly emphasize the need for detailed, step-by-step guides, including specific UI elements or navigation paths, and ensure retrieved content provides this level of granularity.",
+        "metric_name": "Grading Note",
+        "metric_description": "Two-stage grading note generation then scoring.",
+        "avg_score": 0.8800000000000001,
+        "min_score": 0.4,
+        "max_score": 1.0
+      }
+    },
+    "examples": {
+      "example_8": {
+        "question": "How can I make a site page members-only using the Wix Editor?",
+        "candidate_answer": "To make a site page members-only using the Wix Editor, follow these steps:\n\n- Open your Wix Editor and go to **Pages & Menu** on the left side.\n- Hover over the page you want to restrict and click the **More Actions** icon.\n- Select **Settings**, then go to **Permissions**.\n- Choose **Site members** and select **Specific members**.\n- Enable the **Members with plan subscriptions** toggle.\n- Click **Manage Plans** and check the relevant pricing plans you want to grant access to.\n- Click **Apply** to save the changes.\n\n**Important tips:**\n- Do not restrict the main (original) Pricing Plans page, but you can restrict other pages where plans are displayed.\n- You may also hide the main Pricing Plans page if needed.\n\nThis setup requires having the Pricing Plans app and Members Area added to your site beforehand [S1][S2].",
+        "gt_answer": "To make a site page members-only using the Wix Editor, follow these steps:\n\n1. [Go to your editor](https://manage.wix.com/account/site-selector/?actionUrl=https%3A%2F%2Fwww.wix.com%2Feditor%2F%7BmetaSiteId%7D%3FeditorSessionId%3D%7Besi%7D%26).\n2. Click **Pages & Menu** on the left side of the editor.\n3. Hover over the relevant page and click the **More Actions** icon.\n\n   **Tip:** Make sure you don't restrict the main (original) Pricing Plans page. You can, however, restrict other pages where you display plans. You can also hide the main page.\n\n4. Click **Settings**.\n5. Click **Permissions**.\n6. Click **Site members**.\n7. Select **Specific members**.\n8. Click the **Members with plan subscriptions** toggle to enable it.\n9. Click **Manage Plans**.\n10. Select the checkbox next to the relevant pricing plans.\n11. Click **Apply**.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.6875,
+        "answer_overlap": 0.5862068965517241,
+        "token_f1": 0.639405204460966,
+        "bleu": 0.353218614821312,
+        "rouge_1": 0.639405204460966,
+        "rouge_2": 0.419475655430711,
+        "context_relevancy_score": 0.8,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 1.0
+      },
+      "example_0": {
+        "question": "How can I review and download my invoices from my Wix account?",
+        "candidate_answer": "You can review and download your invoices directly from your Wix account by following these steps:\n\n- Sign in to your Wix account.\n- Navigate to the section where invoices are managed (usually under Billing or Account settings).\n- Locate and select the invoices you want to review or download.\n\nThis process allows you to access all your Wix invoices conveniently in one place [S1].",
+        "gt_answer": "To review and download your invoices from your Wix account, follow these steps:\n\n1. [Go to Billing History](https://www.wix.com/account/billing-history?referralAdditionalInfo=account-manager) in your Wix account.\n2. Click the filters or use the search field to search for an invoice.\n3. Click the **More actions** icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/8696077d-830a-4b1e-bd86-9df98f89994a/2019/07/17/566e9fae-efec-424f-8b15-7c719a92f002/b979ab37-c90c-4d24-813d-2c8f4cee602b.png) next to the relevant service.\n4. Click **View Invoice**.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.585365853658536,
+        "answer_overlap": 0.22388059701492502,
+        "token_f1": 0.331125827814569,
+        "bleu": 0.10377365415405601,
+        "rouge_1": 0.331125827814569,
+        "rouge_2": 0.161073825503355,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 0.6,
+        "answer_relevancy_score": 0.8,
+        "context_recall_score": 0.2,
+        "factuality_score": 0.4,
+        "grading_note_score": 0.4
+      },
+      "example_4": {
+        "question": "Can I upload my own fonts to ADI?",
+        "candidate_answer": "- No, you cannot upload your own fonts directly to ADI.\n- To use custom fonts, you need to go to the Editor and follow the specific instructions there.\n\nThis is confirmed by the workflow context stating, \"Currently, you cannot upload your own fonts to ADI. If you want to upload your own fonts, you need to head to the Editor and follow the instructions here\" [S1].",
+        "gt_answer": "Currently, you cannot upload your own fonts to ADI. If you want to upload your own fonts, you need to [head to the Editor](https://support.wix.com/en/article/adi-moving-from-adi-to-the-editor) and follow the instructions [here](https://support.wix.com/en/article/wix-editor-uploading-and-using-your-own-fonts).",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.676470588235294,
+        "answer_overlap": 0.6551724137931031,
+        "token_f1": 0.611570247933884,
+        "bleu": 0.49595517842650705,
+        "rouge_1": 0.611570247933884,
+        "rouge_2": 0.554621848739495,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 0.8,
+        "grading_note_score": 1.0
+      },
+      "example_1": {
+        "question": "How can I embed a Pinterest widget on my Wix site using the Wix Editor?",
+        "candidate_answer": "To embed a Pinterest widget on your Wix site using the Wix Editor, follow these steps:\n\n- Generate the Pinterest widget code from Pinterest for the desired widget type (Board, Pin, Profile, Follow button, or Save button). Make sure to copy both sets of code and combine them by adding the last piece of code to the end of the first before the closing tag.\n- In the Wix Editor, click **Add Elements** on the left side.\n- Select **Embed Code** and then **Embed HTML**.\n- Click **Enter Code** and ensure **Code** is selected under \"What do you want to add?\".\n- Paste the combined Pinterest widget code into the \"Add your code here (HTTPS only)\" field.\n- Click **Apply**.\n- Optionally, add alt text describing the embedded content in the \"What's in the embed? Tell Google\" field.\n- Publish your site to make the widget live.\n\nThis process allows you to embed Pinterest content directly, as the Wix Pinterest Feed app is no longer available [S1][S2].",
+        "gt_answer": "To embed a Pinterest widget on your Wix site using the Wix Editor, follow these steps:\n\n1. Generate the code for the widget you want to add from Pinterest. You can use the following links to generate the code:\n   - [Pinterest Board](https://developers.pinterest.com/tools/widget-builder/?type=board&boardHeight=240&boardWidth=400&imageWidth=80&template=square)\n   - [Pinterest Pin](https://developers.pinterest.com/tools/widget-builder/?type=pin)\n   - [Pinterest Profile](https://developers.pinterest.com/tools/widget-builder/?type=profile&boardHeight=240&boardWidth=400&imageWidth=80&template=square)\n   - [Pinterest Follow button](https://developers.pinterest.com/tools/widget-builder/?type=follow)\n   - [Pinterest Save button](https://developers.pinterest.com/tools/widget-builder/?type=pinit)\n\n   **Note:** You need to copy both sets of code. The last piece of code needs to be added to the end of the first piece of code before the closing tag.\n\n2. Once you have the code ready, go to the Wix Editor and click **Add Elements** on the left side of the Editor.\n3. Click **Embed Code**.\n4. Click **Embed HTML**.\n5. Click **Enter Code**.\n6. Make sure **Code** is selected under **What do you want to add?**.\n7. Paste the code you copied from step 1 into the **Add your code here (HTTPS only)** field.\n8. Click **Apply**.\n9. (Optional) Enter alt text that describes what you're embedding in the **What's in the embed? Tell Google** field.\n10. When ready, publish your site.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7872340425531911,
+        "answer_overlap": 0.6036036036036031,
+        "token_f1": 0.63,
+        "bleu": 0.28306761251949103,
+        "rouge_1": 0.63,
+        "rouge_2": 0.41708542713567803,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 0.8,
+        "grading_note_score": 1.0
+      },
+      "example_2": {
+        "question": "How can I connect a domain purchased elsewhere to my Wix site using the recommended method?",
+        "candidate_answer": "To connect a domain purchased elsewhere to your Wix site using the recommended method:\n\n- Use the **name servers connection method**.\n- By changing your domain's name servers to Wix's, Wix will host your DNS records.\n- Your domain remains registered with your current domain host, so you continue managing billing and contact details there.\n- This method ensures that when users type your domain, it directs to your Wix site.\n- You can switch connection methods anytime by removing and re-adding the domain in your Wix account.\n- Note that domain transfers can take up to 7 days, so connecting via name servers before transferring is advised to avoid downtime.\n\n[S1], [S2]",
+        "gt_answer": "To connect a domain purchased elsewhere to your Wix site using the recommended method, follow these steps:\n\n1. **Upgrade Your Site**: Ensure that you have upgraded your site to a premium plan. You can do this by visiting [Wix Upgrade](https://www.wix.com/upgrade/website).\n\n2. **Access Your Domain Registrar**: Make sure you have access to your current domain registrar. If you're unsure who your domain registrar is, you can find out by visiting [whois.com](https://www.whois.com/whois/) and entering your domain name to see your domain details.\n\n3. **Connect via Name Servers**: It is strongly recommended to connect your domain by changing its name servers. This method allows Wix to host your DNS records while your domain remains registered with its current host. You will continue to pay for domain registration with your current domain host.\n\n4. **Follow the Steps**: Follow the steps to [connect your domain to the Wix name servers](https://support.wix.com/en/article/connecting-a-domain-to-the-wix-name-servers).\n\nBy using the name server connection method, you ensure that Wix hosts your DNS records, which simplifies the management of your domain's DNS settings.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.757142857142857,
+        "answer_overlap": 0.448275862068965,
+        "token_f1": 0.48859934853420106,
+        "bleu": 0.134994027127281,
+        "rouge_1": 0.48859934853420106,
+        "rouge_2": 0.24262295081967203,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 0.6,
+        "factuality_score": 0.6,
+        "grading_note_score": 0.4
+      },
+      "example_7": {
+        "question": "How can I change the main color in my site's color palette using ADI?",
+        "candidate_answer": "To change the main color in your site's color palette using ADI, follow these steps:\n\n- Click **Design** on the top bar inside ADI.\n- Select **Colors**.\n- Click the **Design icon** in the Main Color box at the top.\n- Choose your new main color.\n- ADI will then generate a new list of recommended color palettes based on your selected main color.\n\nThis process allows you to easily update your site's primary color and receive complementary palette suggestions automatically [S1].",
+        "gt_answer": "To change the main color in your palette:\n\n1. Click **Design** on the top bar inside ADI.\n2. Select **Colors**.\n3. Click the Design icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/2017/01/04/9faf2831-3a10-405e-bf82-abdd3c3db13e.jpg) in the **Main Color** box at the top.\n4. Choose one of the suggested colors, or click the Add icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/d6b40156-9694-4cfe-9209-54815ef9d6dc/2022/02/24/0415e843-44e7-49e8-83ae-a3c567bb6483/9bda7b85-add0-4678-9f54-254a3a163b20.png) to choose a custom color.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7058823529411761,
+        "answer_overlap": 0.343283582089552,
+        "token_f1": 0.4,
+        "bleu": 0.237994404150622,
+        "rouge_1": 0.4,
+        "rouge_2": 0.277456647398843,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 0.8,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 0.6,
+        "factuality_score": 1.0,
+        "grading_note_score": 1.0
+      },
+      "example_3": {
+        "question": "How can I mark a room as 'Not Available' in Wix Hotels?",
+        "candidate_answer": "To mark a room as 'Not Available' in Wix Hotels, follow these steps:\n\n- Go to your dashboard and click the Hotels tab.\n- Click the Reservations tab.\n- Select the start date on the calendar for the relevant room.\n- Drag across to the end date and click \"Set as not available.\"\n- Optionally, add a note for your reference.\n- Click Save.\n\nAlternatively, you can click \"Create New\" on the reservation calendar, fill out the required information, and save to mark the room as unavailable.\n\nNote: If you are using the channel manager, marking dates as unavailable will not reduce availability on connected channels. To block availability across channels, use manual reservations instead.\n\nTo unblock a room, hover over the grayed-out area on the reservation calendar and click Unblock [S1].",
+        "gt_answer": "To mark a room as 'Not Available' in Wix Hotels, follow these steps:\n\n1. [Go to your dashboard.](https://support.wix.com/en/article/accessing-your-sites-dashboard)\n2. Click the **Hotels** tab.\n3. Click the **Reservations** tab.\n4. Click the start date on the calendar for the relevant room.\n5. Drag your mouse across and click the end date.\n6. Click **Set as not available**.\n7. (Optional) Add a note for yourself.\n8. Click **Save**.\n\n**Note**: Alternatively, you can mark a room as 'Not Available' by clicking **Create New** on the reservation calendar, filling out the requested information, and clicking **Save**.\n\n* Your unavailable room is grayed out on your reservation calendar.\n* To unblock a room, hover over the grayed out area on your reservation calendar and click **Unblock**.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.8714285714285711,
+        "answer_overlap": 0.676056338028169,
+        "token_f1": 0.7109375,
+        "bleu": 0.45051891286751106,
+        "rouge_1": 0.7109375,
+        "rouge_2": 0.511811023622047,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 0.8,
+        "grading_note_score": 1.0
+      },
+      "example_6": {
+        "question": "How can I disable the Event Details Page for events without tickets on my Wix site?",
+        "candidate_answer": "To disable the Event Details Page for events without tickets on your Wix site:\n\n- Go to the Wix Editor and open any of the Wix Events pages.\n- Click the Settings icon.\n- Navigate to the Pages tab.\n- Toggle off the \"Show this page when visitors register\" option to disable the Event Details Page.\n- Once disabled, guests who click to register for an event without tickets will be directed straight to the Registration Page.\n\nThis option is specifically available if your site only has events without tickets [S1][S2].",
+        "gt_answer": "To disable the Event Details Page for events without tickets on your Wix site, follow these steps:\n\n1. Click any of the Wix Events pages in the Editor.\n2. Click the Settings icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/8769cf44-f342-494c-b25f-cc98c9da3e82/2022/06/28/993b5b25-d9e7-4df5-abe8-6d667c3553a8/93b7d612-8c7b-478d-96a2-40048495bb36.png).\n3. Click the **Pages** tab.\n4. Click the **Show this page when visitors register** toggle to disable it.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7884615384615381,
+        "answer_overlap": 0.44444444444444403,
+        "token_f1": 0.48192771084337305,
+        "bleu": 0.326436763466225,
+        "rouge_1": 0.48192771084337305,
+        "rouge_2": 0.365853658536585,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 1.0
+      },
+      "example_5": {
+        "question": "How can I set up additional Google Workspace business emails from Wix?",
+        "candidate_answer": "To set up additional Google Workspace business emails from Wix, follow these steps:\n\n- Go to the Business Email section in your Wix account.\n- Click \"Show User Info\" on the relevant account.\n- Click the \"More Actions\" icon next to the account you want to set up.\n- Select \"Set Up User\" and sign in to your Google Workspace account.\n- Enter your email address and password.\n- Navigate to \"Users\" and click \"Add new user.\"\n- Enter the new user's details and optionally set a password.\n- Click \"Add\" to complete the setup.\n\nNote: You must first purchase additional business emails. It can take up to 24 hours for the new user to access Google Workspace services. Billing for additional emails is immediate and aligns with your original subscription renewal date. There is a limit of 300 business emails per domain [S1][S2].",
+        "gt_answer": "To set up additional Google Workspace business emails from Wix, follow these steps:\n\n1. [Go to Business Email](https://manage.wix.com/account/mailboxes) in your account.\n2. Click **Show User Info** on the relevant account.\n3. Click the More Actions icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/8bfd4238-b80c-4a51-9f46-b907c2acff01/2021/11/15/d38c34cd-0e14-431e-8737-1ac5973d62ea/eb08bc23-cdfb-4553-b9eb-9f7e35ce7262.png) next to the account you want to set up.\n4. Select **Set Up User**.\n5. Sign in to your Google Workspace account:\n   \n   1. Enter your email address.\n   2. Click **Next**.\n   3. Enter your password.\n6. Click **Users**.\n7. Click **Add new user**.![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/7f40210b-c6c2-4c15-bbcf-5bb78a69d10e/2020/01/14/def045a0-466f-43cc-b49c-7d77d6d4bae2/a6ccb5f3-89fa-4969-8847-3392ed929d87.png)\n8. Enter the user details and set a password (optional).\n9. Click **Add**.\n\nIt can take up to 24 hours for Google Workspace services to be available to the new user. If the user attempts to use a service that's not yet available, they'll see a message that they don't have access to it.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.8441558441558441,
+        "answer_overlap": 0.411290322580645,
+        "token_f1": 0.573134328358208,
+        "bleu": 0.274557051282632,
+        "rouge_1": 0.573134328358208,
+        "rouge_2": 0.396396396396396,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 1.0
+      },
+      "example_9": {
+        "question": "Can I change the alignment of my restaurant menu in Wix Restaurants?",
+        "candidate_answer": "No, currently it is not possible to change the alignment of your restaurant menu (e.g., right-to-left) in Wix Restaurants, including both the Menus app and the Orders app. Wix is working on improvements, and user feedback is appreciated for future updates [S1].",
+        "gt_answer": "Currently, it is not possible to change the alignment of your restaurant menu (e.g., right-to-left), for either the Menus app or the Orders app.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7837837837837831,
+        "answer_overlap": 0.9130434782608691,
+        "token_f1": 0.6944444444444441,
+        "bleu": 0.45903366115020505,
+        "rouge_1": 0.6944444444444441,
+        "rouge_2": 0.6000000000000001,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 1.0
+      }
+    },
+    "configs": {
+      "rag_configs": {
+        "run_id": "eval-9ff1fdeaa332b3aaa1d7ea5fe28191aa",
+        "name": "L2 GPT 4.1 mini - WixQA Synthetic",
+        "dataset_name": "WixQA Synthetic",
+        "knowledge_base_id": "kb-fc434e0cd0714bc1ae43cfd6f943323e",
+        "knowledge_base_name": "WixQA Curpus 10",
+        "chat_configuration_id": "cfg-d5eabad574f04c209ccd1c5a80c512a2",
+        "chat_configuration": {
+          "id": "cfg-d5eabad574f04c209ccd1c5a80c512a2",
+          "name": "L2 GPT 4.1 mini",
+          "tone": "Professional",
+          "metadata": {
+            "top_k": 2,
+            "runtime": "model-farm",
+            "classifier": "query_classifier_distilbert",
+            "route_mode": "simple_rag",
+            "retrieval_mode": "hybrid",
+            "route_strategy": "L2 Simple RAG",
+            "welcome_message": "Welcome to Adaptive RAG Studio. Workflow assistant 2 will assist you.",
+            "actual_generator": "deployment",
+            "configuration_id": "nUcjS2lW2ean",
+            "reranker_enabled": false,
+            "citations_enabled": true,
+            "agent_max_iterations": 5,
+            "agent_max_tool_calls": 8,
+            "retrieval_mode_label": "Hybrid",
+            "agent_timeout_seconds": 90,
+            "conversation_starters": [
+              "What are the main steps in this workflow?",
+              "Summarize the selected knowledge base."
+            ],
+            "generation_parameters": {},
+            "planner_deployment_id": "",
+            "reranker_deployment_id": "",
+            "fallback_deployment_ids": [],
+            "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+            "agent_public_web_enabled": false,
+            "classifier_deployment_id": "model-local-distilbert",
+            "classifier_margin_threshold": 0,
+            "conversation_awareness_enabled": false,
+            "conversation_history_exchanges": 3,
+            "classifier_confidence_threshold": 0,
+            "conversation_history_characters": 4000
+          },
+          "description": "Default configuration for concise business workflow answers.",
+          "humor_level": 0,
+          "system_prompt": "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
+          "generator_model": "gpt-4.1-mini",
+          "citations_enabled": true,
+          "predefined_prompt": "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.",
+          "generator_provider": "openai",
+          "response_structure": "Concise answer with bullets and cited workflow context",
+          "generation_parameters": {},
+          "planner_deployment_id": "",
+          "reranker_deployment_id": "",
+          "fallback_deployment_ids": [],
+          "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+          "agent_public_web_enabled": false,
+          "conversation_awareness_enabled": false
+        },
+        "retrieval_mode": "hybrid",
+        "top_k": 2,
+        "route_distribution": {
+          "l2_simple_rag": 10
+        },
+        "wixqa_metrics": {
+          "mrr": 1.0,
+          "bleu": 0.2996348092944285,
+          "rouge_1": 0.5561144612389649,
+          "rouge_2": 0.39463974335827867,
+          "hit_at_k": 1.0,
+          "token_f1": 0.5561144612389649,
+          "ndcg_at_k": 1.4416508275000202,
+          "factuality": 0.85,
+          "recall_at_k": 1.0,
+          "context_recall": 0.86,
+          "judge_coverage": 1.0,
+          "precision_at_k": 0.85,
+          "retrieval_coverage": 1.0
+        }
+      }
+    },
+    "rag_traditional_metrics": {
+      "routing_match": 0.0,
+      "context_relevance_proxy": 0.0,
+      "faithfulness_proxy": 0.748742543236079,
+      "answer_overlap": 0.5305257538436,
+      "token_f1": 0.5561144612389646,
+      "bleu": 0.3119549879965842,
+      "rouge_1": 0.5561144612389646,
+      "rouge_2": 0.3946397433582782
+    }
+  }
+}

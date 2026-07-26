@@ -42,6 +42,7 @@ embedding_dimension = 384
 use_sentence_transformers = false
 chunk_size = 800
 chunk_overlap = 120
+embed_batch_size = 64
 
 [model_farm]
 json_store = "data/knowledge/model_farm_store.json"

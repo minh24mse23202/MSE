@@ -22,7 +22,7 @@ from aragbiz.factory import (
     build_model_gateway,
 )
 from aragbiz.jobs import BackgroundJob, JobService
-from aragbiz.knowledge import IngestionSummary, KnowledgeService
+from aragbiz.knowledge import IngestionSummary, KnowledgeImportCancelled, KnowledgeService
 from aragbiz.evaluation_experiments import EvaluationExperimentService
 
 
@@ -55,6 +55,9 @@ class KnowledgeJobWorker:
             result = self._execute(job)
             self.jobs.complete(job.id, result)
             _log(f"Completed job {job.id}.")
+        except KnowledgeImportCancelled as exc:
+            self.jobs.mark_cancelled(job.id, {"status": "cancelled", "error": str(exc)})
+            _log(f"Cancelled job {job.id}.")
         except Exception as exc:
             self.jobs.fail(job.id, str(exc))
             _log(f"Failed job {job.id}: {exc}", stream=sys.stderr)
@@ -74,6 +77,15 @@ class KnowledgeJobWorker:
         if job.job_type == "knowledge_website":
             self.jobs.progress(job.id, {"step": "website", "percent": 20})
             return asdict(self.knowledge.ingest_website(knowledge_base_id, str(payload.get("url") or "")))
+        if job.job_type == "knowledge_wixqa_corpus":
+            summary = self.knowledge.ingest_prepared_wixqa_corpus(
+                knowledge_base_id,
+                document_limit=int(payload.get("document_limit") or 6221),
+                expected_checksum=str(payload.get("corpus_sha256") or ""),
+                progress_callback=lambda progress: self.jobs.progress(job.id, progress),
+                cancellation_requested=lambda: self.jobs.get(job.id).status == "cancel_requested",
+            )
+            return asdict(summary)
         if job.job_type == "knowledge_reindex":
             self.jobs.progress(job.id, {"step": "reindex", "percent": 10})
             return asdict(self.knowledge.reindex(knowledge_base_id))

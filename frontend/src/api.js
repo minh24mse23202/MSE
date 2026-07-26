@@ -506,6 +506,14 @@ export async function listJobs({ status = "", limit = 100 } = {}) {
   return response.json();
 }
 
+export async function getJob(jobId) {
+  const response = await fetch(`${API_BASE_URL}/jobs/${jobId}`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Job request failed");
+  return response.json();
+}
+
 export async function listEvaluationRuns() {
   const response = await fetch(`${API_BASE_URL}/evaluation/runs`, {
     headers: authHeaders()
@@ -514,8 +522,11 @@ export async function listEvaluationRuns() {
   return response.json();
 }
 
-export async function listEvaluationDatasets() {
-  const response = await fetch(`${API_BASE_URL}/evaluation/datasets`, {
+export async function listEvaluationDatasets(knowledgeBaseId = "") {
+  const params = new URLSearchParams();
+  if (knowledgeBaseId) params.set("knowledge_base_id", knowledgeBaseId);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(`${API_BASE_URL}/evaluation/datasets${suffix}`, {
     headers: authHeaders()
   });
   await assertOk(response, "Evaluation datasets request failed");
@@ -651,6 +662,14 @@ export async function listKnowledgeBases() {
   return response.json();
 }
 
+export async function listKnowledgeSourceCatalog() {
+  const response = await fetch(`${API_BASE_URL}/knowledge-sources/catalog`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Knowledge source catalog request failed");
+  return response.json();
+}
+
 export async function createKnowledgeBase(payload) {
   const response = await fetch(`${API_BASE_URL}/knowledge-bases`, {
     method: "POST",
@@ -702,11 +721,31 @@ export async function ingestWebsiteSource(knowledgeBaseId, url) {
   return response.json();
 }
 
-export async function reindexKnowledgeBase(knowledgeBaseId) {
-  const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/reindex`, {
+export async function importWixqaCorpus(
+  knowledgeBaseId,
+  confirmRemoteEmbedding = false,
+  documentLimit = 6221
+) {
+  const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/sources/wixqa-corpus`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      confirm_remote_embedding: Boolean(confirmRemoteEmbedding),
+      document_limit: Number(documentLimit)
+    })
+  });
+  await assertOk(response, "WixQA corpus import failed");
+  return response.json();
+}
+
+export async function reindexKnowledgeBase(knowledgeBaseId, wait = true) {
+  const response = await fetch(
+    `${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/reindex?wait=${wait ? "true" : "false"}`,
+    {
     method: "POST",
     headers: authHeaders()
-  });
+    }
+  );
   await assertOk(response, "Reindex failed");
   return response.json();
 }
@@ -716,6 +755,28 @@ export async function listKnowledgeDocuments(knowledgeBaseId) {
     headers: authHeaders()
   });
   await assertOk(response, "Documents request failed");
+  return response.json();
+}
+
+export async function listKnowledgeDocumentsPage(knowledgeBaseId, { query = "", offset = 0, limit = 25 } = {}) {
+  const params = new URLSearchParams({
+    query,
+    offset: String(offset),
+    limit: String(limit)
+  });
+  const response = await fetch(`${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/documents-page?${params.toString()}`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, "Document page request failed");
+  return response.json();
+}
+
+export async function listKnowledgeDocumentChunks(knowledgeBaseId, documentId) {
+  const response = await fetch(
+    `${API_BASE_URL}/knowledge-bases/${knowledgeBaseId}/documents/${documentId}/chunks`,
+    { headers: authHeaders() }
+  );
+  await assertOk(response, "Document chunks request failed");
   return response.json();
 }
 

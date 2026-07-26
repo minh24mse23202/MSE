@@ -22,13 +22,13 @@ class InMemoryHybridRetriever:
         self._doc_tokens = {doc.id: _tokens(doc.text) for doc in self.documents}
         self._doc_freqs = self._build_doc_freqs()
         self._avg_doc_len = _safe_average(len(tokens) for tokens in self._doc_tokens.values())
-        self._dense_vectors = {doc.id: _hashed_vector(doc.text) for doc in self.documents}
+        self._dense_vectors: Dict[str, List[float]] | None = None
 
     def search(self, query: str, top_k: int = 4, mode: RetrievalMode = "hybrid") -> List[RetrievedContext]:
         if mode not in {"bm25", "dense", "hybrid"}:
             raise ValueError(f"Unsupported retrieval mode: {mode}")
-        bm25_scores = self._bm25_scores(query)
-        dense_scores = self._dense_scores(query)
+        bm25_scores = self._bm25_scores(query) if mode in {"bm25", "hybrid"} else {}
+        dense_scores = self._dense_scores(query) if mode in {"dense", "hybrid"} else {}
         ranked = []
         for doc in self.documents:
             if mode == "bm25":
@@ -44,14 +44,16 @@ class InMemoryHybridRetriever:
             for rank, (score, doc) in enumerate(ranked[:top_k], start=1)
         ]
 
-    def score_diagnostics(self, query: str) -> Dict[str, Dict[str, float]]:
+    def score_diagnostics(self, query: str, *, include_dense: bool = True) -> Dict[str, Dict[str, float]]:
         """Return raw and normalized lexical scores for observability."""
         raw_bm25 = self._bm25_raw_scores(query)
-        return {
+        diagnostics = {
             "bm25_raw": raw_bm25,
             "bm25_normalized": _normalize(raw_bm25),
-            "dense_raw": self._dense_scores(query),
         }
+        if include_dense:
+            diagnostics["dense_raw"] = self._dense_scores(query)
+        return diagnostics
 
     def _build_doc_freqs(self) -> Dict[str, int]:
         freqs: Dict[str, int] = {}
@@ -86,6 +88,8 @@ class InMemoryHybridRetriever:
         return scores
 
     def _dense_scores(self, query: str) -> Dict[str, float]:
+        if self._dense_vectors is None:
+            self._dense_vectors = {doc.id: _hashed_vector(doc.text) for doc in self.documents}
         query_vector = _hashed_vector(query)
         return {
             doc.id: _cosine_similarity(query_vector, self._dense_vectors[doc.id])

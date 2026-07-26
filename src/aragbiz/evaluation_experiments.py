@@ -15,7 +15,7 @@ from aragbiz.evaluation_metrics import (
     quality_score,
     validate_quality_weights,
 )
-from aragbiz.knowledge import utc_now
+from aragbiz.knowledge import KnowledgeService, utc_now
 
 
 EXPERIMENT_STATUSES = {"queued", "running", "completed", "partial", "failed", "cancelled"}
@@ -207,25 +207,35 @@ class EvaluationExperimentService:
         self,
         repository: EvaluationExperimentRepository,
         evaluation_service: EvaluationService,
+        knowledge_service: Optional[KnowledgeService] = None,
     ):
         self.repository = repository
         self.evaluation_service = evaluation_service
+        self.knowledge_service = knowledge_service
         self.repository.initialize()
 
-    def datasets(self) -> List[Dict[str, Any]]:
+    def datasets(self, knowledge_base_id: str = "") -> List[Dict[str, Any]]:
+        available_article_ids = self._wixqa_article_ids(knowledge_base_id) if knowledge_base_id else None
         result = []
         for key, definition in DATASET_DEFINITIONS.items():
             path = Path(definition["path"])
-            result.append(
-                {
-                    "id": key,
-                    "name": definition["name"],
-                    "record_count": definition["count"],
-                    "path": str(path),
-                    "available": path.is_file(),
-                    "sha256": _file_sha256(path) if path.is_file() else "",
-                }
-            )
+            payload = {
+                "id": key,
+                "name": definition["name"],
+                "record_count": definition["count"],
+                "path": str(path),
+                "available": path.is_file(),
+                "sha256": _file_sha256(path) if path.is_file() else "",
+            }
+            if available_article_ids is not None:
+                compatible_ids = (
+                    _compatible_record_ids(str(path), available_article_ids)
+                    if path.is_file()
+                    else []
+                )
+                payload["compatible_record_count"] = len(compatible_ids)
+                payload["knowledge_base_document_count"] = len(available_article_ids)
+            result.append(payload)
         return result
 
     def create(
@@ -248,14 +258,58 @@ class EvaluationExperimentService:
             raise ValueError("Select an enabled judge deployment.")
         normalized_datasets = _validate_datasets(datasets)
         weights = validate_quality_weights(quality_weights or DEFAULT_QUALITY_WEIGHTS)
-        compatibility = {
-            "status": "compatible" if int(knowledge_base.document_count or 0) == 6221 else "warning",
-            "message": (
-                "The selected Knowledge Base has 6,221 documents."
-                if int(knowledge_base.document_count or 0) == 6221
-                else "The selected Knowledge Base does not match the expected 6,221-document WixQA corpus."
-            ),
-        }
+        available_article_ids = self._wixqa_article_ids(knowledge_base.id)
+        compatible_record_ids = {
+            dataset_id: _compatible_record_ids(
+                str(DATASET_DEFINITIONS[dataset_id]["path"]),
+                available_article_ids,
+            )
+            for dataset_id in normalized_datasets
+        } if available_article_ids is not None else {}
+        if available_article_ids is not None:
+            if not available_article_ids:
+                raise ValueError(
+                    "The selected Knowledge Base has no prepared WixQA corpus documents."
+                )
+            for dataset_id, requested_limit in normalized_datasets.items():
+                compatible_count = len(compatible_record_ids[dataset_id])
+                if compatible_count == 0:
+                    raise ValueError(
+                        f"The selected Knowledge Base has no compatible records for {dataset_id}."
+                    )
+                if requested_limit is not None and requested_limit > compatible_count:
+                    raise ValueError(
+                        f"{dataset_id} limit cannot exceed the {compatible_count} records "
+                        "compatible with the selected Knowledge Base documents."
+                    )
+            has_non_wixqa_documents = int(knowledge_base.document_count or 0) != len(available_article_ids)
+            compatibility = {
+                "status": "warning" if has_non_wixqa_documents else "compatible",
+                "message": (
+                    f"Evaluation is restricted to records supported by "
+                    f"{len(available_article_ids):,} imported WixQA documents."
+                    + (
+                        " Additional non-WixQA documents remain searchable and may affect retrieval."
+                        if has_non_wixqa_documents
+                        else ""
+                    )
+                ),
+                "wixqa_document_count": len(available_article_ids),
+                "total_document_count": int(knowledge_base.document_count or 0),
+                "eligible_record_counts": {
+                    key: len(value) for key, value in compatible_record_ids.items()
+                },
+                "source_record_ids_sha256": _stable_ids_sha256(available_article_ids),
+            }
+        else:
+            compatibility = {
+                "status": "compatible" if int(knowledge_base.document_count or 0) == 6221 else "warning",
+                "message": (
+                    "The selected Knowledge Base has 6,221 documents."
+                    if int(knowledge_base.document_count or 0) == 6221
+                    else "WixQA document compatibility could not be verified."
+                ),
+            }
         now = utc_now()
         record = EvaluationExperimentRecord(
             id=f"experiment-{uuid.uuid4().hex}",
@@ -272,7 +326,7 @@ class EvaluationExperimentService:
             seed=int(seed),
             metadata={
                 "configuration_snapshots": configuration_snapshots,
-                "dataset_snapshots": self.datasets(),
+                "dataset_snapshots": self.datasets(knowledge_base.id),
                 "knowledge_base_compatibility": compatibility,
                 "knowledge_base_index_version_id": str(
                     knowledge_base.metadata.get("active_index_version_id") or ""
@@ -298,6 +352,27 @@ class EvaluationExperimentService:
         experiment = self.repository.get(experiment_id)
         experiment = self.repository.save(replace(experiment, status="running", updated_at=utc_now()))
         snapshots = list(experiment.metadata.get("configuration_snapshots") or [])
+        compatibility = dict(experiment.metadata.get("knowledge_base_compatibility") or {})
+        expected_source_hash = str(compatibility.get("source_record_ids_sha256") or "")
+        available_article_ids = self._wixqa_article_ids(experiment.knowledge_base_id)
+        if expected_source_hash and (
+            available_article_ids is None
+            or _stable_ids_sha256(available_article_ids) != expected_source_hash
+        ):
+            error = (
+                "The WixQA documents in the selected Knowledge Base changed after this "
+                "experiment was created. Create a new evaluation experiment."
+            )
+            self.repository.save(
+                replace(
+                    experiment,
+                    status="failed",
+                    error=error,
+                    updated_at=utc_now(),
+                    finished_at=utc_now(),
+                )
+            )
+            raise ValueError(error)
         run_ids = list(experiment.run_ids)
         total = len(snapshots) * len(experiment.datasets)
         failures: List[str] = []
@@ -318,10 +393,19 @@ class EvaluationExperimentService:
                             raise KeyError(run_id)
                     except KeyError:
                         definition = DATASET_DEFINITIONS[dataset_id]
-                        record_ids = _sample_record_ids(
-                            definition["path"],
-                            requested_limit,
-                            experiment.seed,
+                        record_ids = (
+                            _sample_compatible_record_ids(
+                                definition["path"],
+                                available_article_ids,
+                                requested_limit,
+                                experiment.seed,
+                            )
+                            if available_article_ids is not None
+                            else _sample_record_ids(
+                                definition["path"],
+                                requested_limit,
+                                experiment.seed,
+                            )
                         )
                         metadata = dict(snapshot.get("metadata") or {})
                         retrieval_mode = str(metadata.get("retrieval_mode") or "hybrid")
@@ -403,6 +487,11 @@ class EvaluationExperimentService:
             replace(record, status="cancelled", updated_at=utc_now(), finished_at=utc_now())
         )
 
+    def _wixqa_article_ids(self, knowledge_base_id: str) -> Optional[set[str]]:
+        if self.knowledge_service is None:
+            return None
+        return set(self.knowledge_service.list_wixqa_source_record_ids(knowledge_base_id))
+
 
 def _validate_datasets(datasets: Dict[str, Optional[int]]) -> Dict[str, Optional[int]]:
     normalized: Dict[str, Optional[int]] = {}
@@ -434,6 +523,44 @@ def _sample_record_ids(path: str, limit: Optional[int], seed: int) -> List[str]:
     selected = list(records)
     rng.shuffle(selected)
     return selected[:limit]
+
+
+def _compatible_record_ids(path: str, available_article_ids: set[str]) -> List[str]:
+    compatible: List[str] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        payload = json.loads(line)
+        article_ids = {
+            str(value)
+            for value in (payload.get("metadata") or {}).get("article_ids", [])
+            if value
+        }
+        if article_ids and article_ids.issubset(available_article_ids):
+            record_id = str(payload.get("id") or "")
+            if record_id:
+                compatible.append(record_id)
+    return compatible
+
+
+def _sample_compatible_record_ids(
+    path: str,
+    available_article_ids: set[str],
+    limit: Optional[int],
+    seed: int,
+) -> List[str]:
+    records = _compatible_record_ids(path, available_article_ids)
+    if limit is None or limit >= len(records):
+        return records
+    rng = random.Random(f"{seed}:{Path(path).name}:compatible")
+    selected = list(records)
+    rng.shuffle(selected)
+    return selected[:limit]
+
+
+def _stable_ids_sha256(values: set[str]) -> str:
+    serialized = "\n".join(sorted(values))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _matrix_run_id(experiment_id: str, configuration_id: str, dataset_id: str) -> str:
@@ -475,6 +602,10 @@ def _build_leaderboard(
             violations.append("cost")
         if experiment.max_average_latency_ms is not None and average_latency > experiment.max_average_latency_ms:
             violations.append("latency")
+        if len(config_runs) != len(experiment.datasets):
+            violations.append(
+                f"incomplete results ({len(config_runs)}/{len(experiment.datasets)})"
+            )
         entries.append(
             {
                 "configuration_id": configuration_id,
@@ -484,7 +615,7 @@ def _build_leaderboard(
                 "dataset_scores": dataset_scores,
                 "average_cost_per_case_usd": average_cost,
                 "average_latency_ms": average_latency,
-                "eligible": not violations and len(config_runs) == len(experiment.datasets),
+                "eligible": not violations,
                 "constraint_violations": violations,
                 "run_ids": [run.id for run in config_runs],
             }

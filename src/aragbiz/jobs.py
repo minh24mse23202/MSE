@@ -270,6 +270,20 @@ class JobService:
         status = "cancelled" if job.status == "queued" else "cancel_requested"
         return self.repository.save(replace(job, status=status, updated_at=utc_now(), finished_at=utc_now() if status == "cancelled" else ""))
 
+    def mark_cancelled(self, job_id: str, result: Optional[Dict[str, Any]] = None) -> BackgroundJob:
+        job = self.get(job_id)
+        return self.repository.save(
+            replace(
+                job,
+                status="cancelled",
+                result=dict(result or job.result),
+                worker_id="",
+                lease_until="",
+                updated_at=utc_now(),
+                finished_at=utc_now(),
+            )
+        )
+
     def complete(self, job_id: str, result: Dict[str, Any]) -> BackgroundJob:
         job = self.get(job_id)
         return self.repository.save(replace(job, status="completed", result=dict(result), progress={"percent": 100}, error="", updated_at=utc_now(), finished_at=utc_now(), lease_until=""))
@@ -350,4 +364,3 @@ def _safe_error(error: str) -> str:
         if key.startswith("ARAGBIZ_MODEL_") and secret:
             value = value.replace(secret, "[REDACTED]")
     return value[:2000]
-

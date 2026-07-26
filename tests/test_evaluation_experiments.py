@@ -100,6 +100,14 @@ class _FakeEvaluationService:
         self.runs.pop(run_id, None)
 
 
+class _FakeKnowledgeService:
+    def __init__(self, article_ids):
+        self.article_ids = list(article_ids)
+
+    def list_wixqa_source_record_ids(self, knowledge_base_id):
+        return list(self.article_ids)
+
+
 def test_experiment_matrix_uses_shared_samples_and_ranks_configurations(monkeypatch, tmp_path):
     dataset = tmp_path / "expert.jsonl"
     dataset.write_text(
@@ -146,3 +154,180 @@ def test_experiment_matrix_uses_shared_samples_and_ranks_configurations(monkeypa
     resumed = service.execute(experiment.id)
     assert resumed.run_ids == completed.run_ids
     assert len(fake.runs) == 2
+
+
+def test_failed_experiment_cells_report_incomplete_results(monkeypatch, tmp_path):
+    dataset = tmp_path / "expert.jsonl"
+    dataset.write_text(
+        json.dumps(
+            {
+                "id": "record-1",
+                "question": "q",
+                "answer": "a",
+                "context": "c",
+                "complexity_label": "moderate",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        experiments_module,
+        "DATASET_DEFINITIONS",
+        {"expertwritten": {"name": "WixQA ExpertWritten", "path": str(dataset), "count": 1}},
+    )
+
+    class FailingEvaluationService(_FakeEvaluationService):
+        def run(self, config):
+            raise ValueError("Judge output is not valid JSON")
+
+    service = EvaluationExperimentService(
+        JsonEvaluationExperimentRepository(str(tmp_path / "evaluation.json")),
+        FailingEvaluationService(),  # type: ignore[arg-type]
+    )
+    experiment = service.create(
+        name="Failed matrix",
+        knowledge_base=SimpleNamespace(
+            id="kb-wixqa",
+            name="WixQA",
+            document_count=6221,
+            metadata={"active_index_version_id": "index-1"},
+        ),
+        configuration_snapshots=[{"id": "config-a", "name": "A", "metadata": {}}],
+        datasets={"expertwritten": 1},
+        judge_deployment_id="judge-1",
+    )
+
+    completed = service.execute(experiment.id)
+
+    assert completed.status == "failed"
+    assert completed.leaderboard[0]["eligible"] is False
+    assert completed.leaderboard[0]["constraint_violations"] == [
+        "incomplete results (0/1)"
+    ]
+    assert "Judge output is not valid JSON" in completed.error
+
+
+def test_partial_wixqa_kb_limits_evaluation_to_exact_article_coverage(monkeypatch, tmp_path):
+    dataset = tmp_path / "synthetic.jsonl"
+    dataset.write_text(
+        "\n".join(
+            [
+                json.dumps({
+                    "id": "record-a",
+                    "question": "q",
+                    "answer": "a",
+                    "context": "c",
+                    "complexity_label": "moderate",
+                    "metadata": {"article_ids": ["article-a"]},
+                }),
+                json.dumps({
+                    "id": "record-b",
+                    "question": "q",
+                    "answer": "a",
+                    "context": "c",
+                    "complexity_label": "moderate",
+                    "metadata": {"article_ids": ["article-b"]},
+                }),
+                json.dumps({
+                    "id": "record-cross",
+                    "question": "q",
+                    "answer": "a",
+                    "context": "c",
+                    "complexity_label": "complex",
+                    "metadata": {"article_ids": ["article-a", "article-b"]},
+                }),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        experiments_module,
+        "DATASET_DEFINITIONS",
+        {"synthetic": {"name": "WixQA Synthetic", "path": str(dataset), "count": 3}},
+    )
+    fake_evaluation = _FakeEvaluationService()
+    fake_knowledge = _FakeKnowledgeService(["article-a"])
+    service = EvaluationExperimentService(
+        JsonEvaluationExperimentRepository(str(tmp_path / "evaluation.json")),
+        fake_evaluation,  # type: ignore[arg-type]
+        fake_knowledge,  # type: ignore[arg-type]
+    )
+    knowledge_base = SimpleNamespace(
+        id="kb-partial",
+        name="Partial WixQA",
+        document_count=1,
+        metadata={"active_index_version_id": "index-1"},
+    )
+
+    datasets = service.datasets(knowledge_base.id)
+    assert datasets[0]["compatible_record_count"] == 1
+    assert datasets[0]["knowledge_base_document_count"] == 1
+
+    with pytest.raises(ValueError, match="cannot exceed the 1 records compatible"):
+        service.create(
+            name="Too many",
+            knowledge_base=knowledge_base,
+            configuration_snapshots=[{"id": "config-a", "name": "A", "metadata": {}}],
+            datasets={"synthetic": 2},
+            judge_deployment_id="judge-1",
+        )
+
+    experiment = service.create(
+        name="Exact subset",
+        knowledge_base=knowledge_base,
+        configuration_snapshots=[{"id": "config-a", "name": "A", "metadata": {}}],
+        datasets={"synthetic": 1},
+        judge_deployment_id="judge-1",
+    )
+    completed = service.execute(experiment.id)
+
+    assert completed.status == "completed"
+    assert completed.metadata["knowledge_base_compatibility"]["wixqa_document_count"] == 1
+    assert completed.metadata["knowledge_base_compatibility"]["eligible_record_counts"] == {
+        "synthetic": 1
+    }
+    assert next(iter(fake_evaluation.runs.values())).limit == 1
+
+
+def test_evaluation_rejects_kb_document_changes_after_experiment_creation(monkeypatch, tmp_path):
+    dataset = tmp_path / "synthetic.jsonl"
+    dataset.write_text(
+        json.dumps({
+            "id": "record-a",
+            "question": "q",
+            "answer": "a",
+            "context": "c",
+            "complexity_label": "moderate",
+            "metadata": {"article_ids": ["article-a"]},
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        experiments_module,
+        "DATASET_DEFINITIONS",
+        {"synthetic": {"name": "WixQA Synthetic", "path": str(dataset), "count": 1}},
+    )
+    fake_knowledge = _FakeKnowledgeService(["article-a"])
+    service = EvaluationExperimentService(
+        JsonEvaluationExperimentRepository(str(tmp_path / "evaluation.json")),
+        _FakeEvaluationService(),  # type: ignore[arg-type]
+        fake_knowledge,  # type: ignore[arg-type]
+    )
+    knowledge_base = SimpleNamespace(
+        id="kb-partial",
+        name="Partial WixQA",
+        document_count=1,
+        metadata={"active_index_version_id": "index-1"},
+    )
+    experiment = service.create(
+        name="Stable subset",
+        knowledge_base=knowledge_base,
+        configuration_snapshots=[{"id": "config-a", "name": "A", "metadata": {}}],
+        datasets={"synthetic": 1},
+        judge_deployment_id="judge-1",
+    )
+
+    fake_knowledge.article_ids.append("article-b")
+    with pytest.raises(ValueError, match="changed after this experiment was created"):
+        service.execute(experiment.id)
+    assert service.get(experiment.id).status == "failed"

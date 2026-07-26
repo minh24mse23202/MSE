@@ -12,6 +12,7 @@ from aragbiz.evaluation import (
     EvaluationRunConfig,
     EvaluationService,
     JsonEvaluationRepository,
+    _parse_partial_judge_payload,
     evaluate_predictions,
 )
 from aragbiz.generation import ExtractiveGenerator
@@ -256,6 +257,86 @@ def test_wixqa_judge_metrics_use_model_gateway_with_metric_purposes(tmp_path):
         ("judge-1", "evaluation_wixqa_context_recall"),
         ("judge-1", "evaluation_wixqa_factuality"),
     ]
+
+
+def test_wixqa_judge_requests_schema_and_retries_malformed_json(tmp_path):
+    service, kb = build_answer_service(tmp_path, label="moderate")
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '{"id":"q1","question":"How are invoice mismatches handled?",'
+        '"answer":"Escalate to finance operations.","context":"Invoice mismatch",'
+        '"complexity_label":"moderate","metadata":{}}\n',
+        encoding="utf-8",
+    )
+
+    class RetryingJudgeGateway:
+        def __init__(self):
+            self.calls = []
+            self.service = SimpleNamespace(
+                get_deployment=lambda _deployment_id: SimpleNamespace(
+                    provider="gemini",
+                    model="gemini-2.5-flash",
+                )
+            )
+            self.outputs = [
+                '{"score": 0.8, "explanation": "Context is complete but the response was cut off',
+                '{"score":',
+                '{"score": 0.9, "explanation": "Answer is factual."}',
+            ]
+
+        def generate_sync(self, messages, deployment_id, **kwargs):
+            self.calls.append((messages, deployment_id, kwargs))
+            return ModelGenerationResult(
+                text=self.outputs[len(self.calls) - 1],
+                deployment_id=deployment_id,
+                provider="test",
+                model="judge",
+                status="completed",
+                metadata={"usage_event_id": f"usage-{len(self.calls)}"},
+            )
+
+    gateway = RetryingJudgeGateway()
+    evaluation = EvaluationService(
+        JsonEvaluationRepository(str(tmp_path / "eval.json")),
+        service,
+        str(dataset_path),
+        model_gateway=gateway,  # type: ignore[arg-type]
+    )
+
+    run = evaluation.run(
+        EvaluationRunConfig(
+            knowledge_base_id=kb.id,
+            retrieval_mode="bm25",
+            top_k=2,
+            limit=1,
+            judge_deployment_id="judge-1",
+        )
+    )
+    wixqa = evaluation.list_cases(run.id)[0].metrics["adaptive"]["wixqa"]
+
+    assert len(gateway.calls) == 3
+    assert gateway.calls[0][2]["parameters"]["response_format"]["type"] == "json_schema"
+    assert gateway.calls[0][2]["parameters"]["response_format"]["json_schema"]["strict"] is True
+    assert gateway.calls[0][2]["parameters"]["max_tokens"] == 800
+    assert gateway.calls[0][2]["parameters"]["reasoning_effort"] == "disable"
+    assert wixqa["context_recall"] == pytest.approx(0.8)
+    assert wixqa["context_recall_judge_attempts"] == 2
+    assert wixqa["context_recall_structured_output_recovered"] is True
+    assert wixqa["context_recall_usage_event_id"] == "usage-1"
+    assert wixqa["factuality"] == pytest.approx(0.9)
+    assert wixqa["factuality_judge_attempts"] == 1
+
+
+def test_partial_judge_payload_recovers_score_from_truncated_explanation():
+    recovered = _parse_partial_judge_payload(
+        '{"score": 1, "explanation": "The answer is factually aligned but was cut off'
+    )
+
+    assert recovered == {
+        "score": 1.0,
+        "explanation": "The answer is factually aligned but was cut off",
+    }
+    assert _parse_partial_judge_payload('{"score":') is None
 
 
 def _ragxplain_case():

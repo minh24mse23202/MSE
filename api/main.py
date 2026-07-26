@@ -312,10 +312,60 @@ class EvaluationCaseResponse(BaseModel):
     created_at: str
 
 
+class KnowledgeEmbeddingOptionsRequest(BaseModel):
+    hard_max_wordpieces: int = Field(512, ge=16, le=512)
+
+
+class KnowledgeMetadataPrefixRequest(BaseModel):
+    include_title: bool = True
+    include_heading_path: bool = True
+    include_article_type: bool = False
+    maximum_tokens: int = Field(40, ge=0, le=509)
+
+
+class KnowledgeChunkingRulesRequest(BaseModel):
+    preserve_numbered_lists: bool = True
+    preserve_bullet_lists: bool = True
+    merge_small_adjacent_chunks: bool = True
+    overlap_only_within_same_section: bool = True
+    never_merge_across_articles: bool = True
+
+
+class KnowledgeChunkingOptionsRequest(BaseModel):
+    parent_document: str = "article_id"
+    target_body_tokens: int = Field(180, ge=16, le=510)
+    soft_max_body_tokens: int = Field(210, ge=16, le=510)
+    overlap_tokens: int = Field(30, ge=0, le=509)
+    minimum_chunk_tokens: int = Field(60, ge=1, le=510)
+    separators: List[str] = Field(
+        default_factory=lambda: [
+            "heading",
+            "subheading",
+            "paragraph",
+            "list",
+            "sentence",
+            "token",
+        ]
+    )
+    metadata_prefix: KnowledgeMetadataPrefixRequest = Field(
+        default_factory=KnowledgeMetadataPrefixRequest
+    )
+    rules: KnowledgeChunkingRulesRequest = Field(
+        default_factory=KnowledgeChunkingRulesRequest
+    )
+
+
 class KnowledgeBaseConfigurationRequest(BaseModel):
     chunking_strategy: str = "sliding_window_overlap"
+    chunking_profile_id: str = ""
     chunk_size: int = Field(800, ge=1)
     chunk_overlap: int = Field(120, ge=0)
+    embedding_options: KnowledgeEmbeddingOptionsRequest = Field(
+        default_factory=KnowledgeEmbeddingOptionsRequest
+    )
+    chunking_options: KnowledgeChunkingOptionsRequest = Field(
+        default_factory=KnowledgeChunkingOptionsRequest
+    )
     embedding_provider: str = "Local"
     embedding_model: str = "hash-embedding-384"
     embedding_deployment_id: str = ""
@@ -330,6 +380,11 @@ class KnowledgeBaseCreateRequest(BaseModel):
 
 class WebsiteSourceRequest(BaseModel):
     url: str = Field(..., min_length=1)
+
+
+class PreparedCorpusImportRequest(BaseModel):
+    confirm_remote_embedding: bool = False
+    document_limit: int = Field(6221, ge=1, le=6221)
 
 
 class KnowledgeDocumentRequest(BaseModel):
@@ -360,6 +415,14 @@ class KnowledgeDocumentResponse(BaseModel):
     content_hash: str
     text: str
     metadata: Dict[str, Any]
+
+
+class KnowledgeDocumentPageResponse(BaseModel):
+    items: List[KnowledgeDocumentResponse]
+    total: int
+    offset: int
+    limit: int
+    query: str
 
 
 class KnowledgeChunkResponse(BaseModel):
@@ -611,6 +674,8 @@ class JobResponse(BaseModel):
     created_at: str
     updated_at: str
     finished_at: str
+    resource_type: str = ""
+    resource_id: str = ""
 
 
 class KnowledgeIndexVersionResponse(BaseModel):
@@ -2038,9 +2103,15 @@ def list_chat_message_versions(
 
 
 @app.get("/evaluation/datasets", response_model=List[Dict[str, Any]])
-def list_evaluation_datasets(authorization: str = Header(default="")) -> List[Dict[str, Any]]:
+def list_evaluation_datasets(
+    knowledge_base_id: str = "",
+    authorization: str = Header(default=""),
+) -> List[Dict[str, Any]]:
     _require_user(authorization)
-    return evaluation_experiment_service.datasets()
+    try:
+        return evaluation_experiment_service.datasets(knowledge_base_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/evaluation/experiments", response_model=List[EvaluationExperimentResponse])
@@ -2308,6 +2379,11 @@ def list_knowledge_bases() -> List[KnowledgeBaseResponse]:
     return [_knowledge_base_response(record) for record in knowledge_service.list_knowledge_bases()]
 
 
+@app.get("/knowledge-sources/catalog", response_model=List[Dict[str, Any]])
+def list_prepared_knowledge_sources() -> List[Dict[str, Any]]:
+    return [knowledge_service.prepared_source_catalog()]
+
+
 @app.post("/knowledge-bases", response_model=KnowledgeBaseResponse)
 def create_knowledge_base(request: KnowledgeBaseCreateRequest) -> KnowledgeBaseResponse:
     try:
@@ -2405,6 +2481,47 @@ def ingest_website_source(knowledge_base_id: str, request: WebsiteSourceRequest,
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/knowledge-bases/{knowledge_base_id}/sources/wixqa-corpus", response_model=JobResponse, status_code=202)
+def ingest_wixqa_corpus_source(
+    knowledge_base_id: str,
+    request: PreparedCorpusImportRequest,
+) -> JobResponse:
+    try:
+        knowledge_base = knowledge_service.get_knowledge_base(knowledge_base_id)
+        catalog = knowledge_service.prepared_source_catalog()
+        if not catalog.get("available"):
+            raise KnowledgeProcessingError(
+                f"{catalog.get('error') or 'Prepared WixQA corpus is unavailable.'} "
+                f"Run `{catalog.get('download_command')}` first."
+            )
+        if (
+            knowledge_service.embedding_requires_remote_confirmation(knowledge_base_id)
+            and not request.confirm_remote_embedding
+        ):
+            raise KnowledgeProcessingError(
+                "This Knowledge Base uses a remote embedding deployment. "
+                "Confirm remote embedding before importing the prepared WixQA corpus."
+            )
+        payload = {
+            "knowledge_base_id": knowledge_base_id,
+            "corpus_id": catalog["id"],
+            "corpus_sha256": catalog["sha256"],
+            "document_limit": min(request.document_limit, int(catalog["document_count"])),
+            "document_count_before": knowledge_base.document_count,
+        }
+        return _job_response(
+            job_service.enqueue(
+                "knowledge_wixqa_corpus",
+                payload,
+                idempotency_key=job_idempotency_key("knowledge_wixqa_corpus", payload),
+            )
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except KnowledgeProcessingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/knowledge-bases/{knowledge_base_id}/reindex")
 def reindex_knowledge_base(knowledge_base_id: str, wait: bool = True) -> Any:
     try:
@@ -2426,6 +2543,31 @@ def list_knowledge_documents(knowledge_base_id: str) -> List[KnowledgeDocumentRe
     try:
         knowledge_service.get_knowledge_base(knowledge_base_id)
         return [_document_response(document) for document in knowledge_service.list_documents(knowledge_base_id)]
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/knowledge-bases/{knowledge_base_id}/documents-page", response_model=KnowledgeDocumentPageResponse)
+def list_knowledge_documents_page(
+    knowledge_base_id: str,
+    query: str = "",
+    offset: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
+) -> KnowledgeDocumentPageResponse:
+    try:
+        items, total = knowledge_service.list_documents_page(
+            knowledge_base_id,
+            query=query,
+            offset=offset,
+            limit=limit,
+        )
+        return KnowledgeDocumentPageResponse(
+            items=[_document_response(document) for document in items],
+            total=total,
+            offset=offset,
+            limit=limit,
+            query=query,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -2452,6 +2594,23 @@ def create_knowledge_document(knowledge_base_id: str, request: KnowledgeDocument
 def get_knowledge_document(knowledge_base_id: str, document_id: str) -> KnowledgeDocumentResponse:
     try:
         return _document_response(knowledge_service.get_document(knowledge_base_id, document_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get(
+    "/knowledge-bases/{knowledge_base_id}/documents/{document_id}/chunks",
+    response_model=List[KnowledgeChunkResponse],
+)
+def list_knowledge_document_chunks(
+    knowledge_base_id: str,
+    document_id: str,
+) -> List[KnowledgeChunkResponse]:
+    try:
+        return [
+            _chunk_response(chunk)
+            for chunk in knowledge_service.list_document_chunks(knowledge_base_id, document_id)
+        ]
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -3014,10 +3173,25 @@ def _model_usage_response(event: ModelUsageEvent) -> ModelUsageResponse:
 
 
 def _job_response(job: BackgroundJob) -> JobResponse:
+    resource_id = str(
+        job.payload.get("knowledge_base_id")
+        or job.payload.get("experiment_id")
+        or job.payload.get("run_id")
+        or ""
+    )
+    resource_type = (
+        "knowledge_base"
+        if job.payload.get("knowledge_base_id")
+        else "evaluation_experiment"
+        if job.payload.get("experiment_id")
+        else "evaluation_run"
+        if job.payload.get("run_id")
+        else ""
+    )
     return JobResponse(
         id=job.id, job_type=job.job_type, status=job.status, progress=job.progress, result=job.result,
         error=job.error, attempts=job.attempts, created_at=job.created_at, updated_at=job.updated_at,
-        finished_at=job.finished_at,
+        finished_at=job.finished_at, resource_type=resource_type, resource_id=resource_id,
     )
 
 

@@ -1349,7 +1349,7 @@ button .icon-label,
   width: min(760px, calc(100vw - 40px));
   max-height: min(760px, calc(100vh - 56px));
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
   overflow: hidden;
   border: 1px solid #dbe5f2;
   border-radius: 14px;
@@ -1470,6 +1470,12 @@ button .icon-label,
   gap: 10px;
   border-top: 1px solid #e2e8f0;
   padding: 16px 24px;
+}
+
+.document-filter-dialog .compact-pagination {
+  margin: 0;
+  padding: 10px 24px;
+  border-top: 1px solid #e2e8f0;
 }
 
 
@@ -2443,6 +2449,52 @@ textarea {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.kb-advanced-config {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 12px;
+}
+
+.kb-advanced-config > summary {
+  cursor: pointer;
+  color: #334155;
+  font-weight: 700;
+}
+
+.kb-advanced-config[open] > summary {
+  margin-bottom: 14px;
+}
+
+.kb-advanced-config {
+  display: grid;
+  gap: 14px;
+}
+
+.kb-option-fieldset {
+  min-width: 0;
+  margin: 0;
+  border: 1px solid #dbe4ec;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.kb-option-fieldset legend {
+  padding: 0 6px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.kb-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+}
+
+.kb-checkbox-grid .check-row {
+  align-items: center;
+  margin: 0;
 }
 
 .source-selector {
@@ -3432,6 +3484,195 @@ button .icon-label,
 .document-list {
   display: grid;
   gap: 10px;
+}
+
+.document-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.document-list-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(520px, 100%);
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: #64748b;
+  background: #fff;
+}
+
+.document-list-toolbar input {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  padding: 0;
+  box-shadow: none;
+}
+
+.document-list-toolbar input:focus {
+  outline: 0;
+}
+
+.document-list-toolbar > span {
+  color: #64748b;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.document-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.document-pagination .secondary-action {
+  padding: 8px 10px;
+}
+
+.knowledge-job-banner {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 420px);
+  align-items: center;
+  gap: 18px;
+  padding: 12px 14px;
+  border: 1px solid #bad4df;
+  border-radius: 8px;
+  background: #f4fafc;
+}
+
+.knowledge-job-banner > div:first-child {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 4px 12px;
+  min-width: 0;
+}
+
+.knowledge-job-banner span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.knowledge-job-banner small {
+  grid-column: 1 / -1;
+}
+
+.knowledge-job-banner.status-completed {
+  border-color: #add3bd;
+  background: #f1faf5;
+}
+
+.knowledge-job-banner.status-failed,
+.knowledge-job-banner.status-cancelled {
+  border-color: #e1aaa5;
+  background: #fff4f3;
+}
+
+.knowledge-job-progress {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dce8ed;
+}
+
+.knowledge-job-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6d9eae, #c07f7b);
+  transition: width 220ms ease;
+}
+
+.local-source-options {
+  display: grid;
+  gap: 12px;
+}
+
+.prepared-corpus-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.prepared-corpus-option.selected {
+  border-color: #7da3b3;
+  background: #edf6f8;
+}
+
+.prepared-corpus-option input {
+  margin-top: 3px;
+}
+
+.prepared-corpus-option div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.prepared-corpus-option span,
+.prepared-corpus-option small {
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.prepared-corpus-option code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border-radius: 5px;
+  padding: 5px 7px;
+  background: #e8eef2;
+  font-size: 12px;
+}
+
+.prepared-corpus-limit {
+  display: grid;
+  gap: 6px;
+}
+
+.prepared-corpus-limit input {
+  width: 25%;
+}
+
+.prepared-corpus-limit small {
+  align-self: center;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+@media (max-width: 760px) {
+  .knowledge-job-banner {
+    grid-template-columns: 1fr;
+  }
+
+  .knowledge-job-banner > div:first-child,
+  .document-list-toolbar,
+  .document-pagination {
+    align-items: stretch;
+  }
+
+  .document-list-toolbar,
+  .document-pagination {
+    flex-direction: column;
+  }
+
+  .document-list-toolbar > span {
+    white-space: normal;
+  }
 }
 
 .document-card {
@@ -5120,6 +5361,10 @@ textarea:focus {
   border-color: #e9c98e;
   background: #fff8e8;
   color: #775415;
+}
+
+.evaluation-compatibility small {
+  line-height: 1.4;
 }
 
 .evaluation-ragxplain-status {

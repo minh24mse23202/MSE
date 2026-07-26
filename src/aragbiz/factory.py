@@ -199,6 +199,8 @@ def build_knowledge_service(
         ),
         model_farm_service=model_farm_service,
         model_gateway=model_gateway,
+        prepared_corpus_path=config.kb_corpus,
+        embedding_batch_size=config.knowledge_embed_batch_size,
     )
 
 
@@ -268,6 +270,7 @@ def build_evaluation_experiment_service(
     return EvaluationExperimentService(
         repository,
         evaluation_service or build_evaluation_service(config),
+        build_knowledge_service(config),
     )
 
 

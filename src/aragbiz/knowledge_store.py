@@ -154,6 +154,21 @@ class JsonKnowledgeRepository:
         self._write(state)
         return record
 
+    def update_data_source(
+        self,
+        source_id: str,
+        *,
+        status: str,
+        metadata: Dict[str, Any],
+    ) -> None:
+        state = self._read()
+        source = state["data_sources"].get(source_id)
+        if not source:
+            raise KeyError(f"Data source not found: {source_id}")
+        source["status"] = status
+        source["metadata"] = dict(metadata)
+        self._write(state)
+
     def existing_hashes(self, knowledge_base_id: str) -> set[str]:
         state = self._read()
         return {
@@ -167,6 +182,22 @@ class JsonKnowledgeRepository:
         state["documents"][document.id] = _document_to_dict(document)
         self._write(state)
 
+    def add_documents(self, documents: List[StoredKnowledgeDocument]) -> None:
+        if not documents:
+            return
+        state = self._read()
+        existing = {
+            payload["content_hash"]
+            for payload in state["documents"].values()
+            if payload["knowledge_base_id"] == documents[0].knowledge_base_id
+        }
+        for document in documents:
+            if document.content_hash in existing:
+                continue
+            existing.add(document.content_hash)
+            state["documents"][document.id] = _document_to_dict(document)
+        self._write(state)
+
     def list_documents(self, knowledge_base_id: str) -> List[StoredKnowledgeDocument]:
         state = self._read()
         return [
@@ -174,6 +205,38 @@ class JsonKnowledgeRepository:
             for payload in state["documents"].values()
             if payload["knowledge_base_id"] == knowledge_base_id
         ]
+
+    def list_documents_page(
+        self,
+        knowledge_base_id: str,
+        *,
+        query: str = "",
+        offset: int = 0,
+        limit: int = 25,
+    ) -> tuple[List[StoredKnowledgeDocument], int]:
+        normalized = query.strip().lower()
+        documents = self.list_documents(knowledge_base_id)
+        if normalized:
+            documents = [
+                document
+                for document in documents
+                if normalized in document.title.lower()
+                or normalized in str(document.metadata.get("source_record_id") or "").lower()
+                or normalized in str(document.metadata.get("url") or document.metadata.get("uri") or "").lower()
+            ]
+        documents.sort(key=lambda document: (document.title.lower(), document.id))
+        return documents[offset : offset + limit], len(documents)
+
+    def list_wixqa_source_record_ids(self, knowledge_base_id: str) -> List[str]:
+        state = self._read()
+        record_ids = {
+            str(payload.get("metadata", {}).get("source_record_id") or "")
+            for payload in state["documents"].values()
+            if payload["knowledge_base_id"] == knowledge_base_id
+            and payload.get("metadata", {}).get("source_type") == "wixqa_corpus"
+        }
+        record_ids.discard("")
+        return sorted(record_ids)
 
     def get_document(self, knowledge_base_id: str, document_id: str) -> StoredKnowledgeDocument:
         state = self._read()
@@ -260,6 +323,27 @@ class JsonKnowledgeRepository:
         ]
         chunks.sort(key=lambda chunk: (chunk.document_id, chunk.chunk_index))
         return chunks[:limit]
+
+    def list_document_chunks(self, knowledge_base_id: str, document_id: str) -> List[StoredKnowledgeChunk]:
+        return self.list_active_chunks(knowledge_base_id, document_ids=[document_id])
+
+    def list_active_chunks(
+        self,
+        knowledge_base_id: str,
+        document_ids: Optional[List[str]] = None,
+    ) -> List[StoredKnowledgeChunk]:
+        state = self._read()
+        active_version = state["knowledge_bases"].get(knowledge_base_id, {}).get("active_index_version_id", "")
+        selected = set(document_ids or [])
+        chunks = [
+            _chunk_from_dict(payload, state["chunk_embeddings"].get(chunk_id))
+            for chunk_id, payload in state["chunks"].items()
+            if payload["knowledge_base_id"] == knowledge_base_id
+            and (not active_version or payload.get("index_version_id", "") == active_version)
+            and (not selected or payload["document_id"] in selected)
+        ]
+        chunks.sort(key=lambda chunk: (chunk.document_id, chunk.chunk_index))
+        return chunks
 
     def search_chunks_by_embedding(
         self,
@@ -804,6 +888,29 @@ class PostgresKnowledgeRepository:
             )
         return record
 
+    def update_data_source(
+        self,
+        source_id: str,
+        *,
+        status: str,
+        metadata: Dict[str, Any],
+    ) -> None:
+        from sqlalchemy import text
+
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                text(
+                    """
+                    UPDATE data_sources
+                    SET status = :status, metadata_json = CAST(:metadata AS JSONB)
+                    WHERE id = :id
+                    """
+                ),
+                {"id": source_id, "status": status, "metadata": json.dumps(metadata)},
+            )
+            if result.rowcount == 0:
+                raise KeyError(f"Data source not found: {source_id}")
+
     def existing_hashes(self, knowledge_base_id: str) -> set[str]:
         from sqlalchemy import text
 
@@ -829,6 +936,26 @@ class PostgresKnowledgeRepository:
                 {**_document_to_dict(document), "metadata": json.dumps(document.metadata)},
             )
 
+    def add_documents(self, documents: List[StoredKnowledgeDocument]) -> None:
+        if not documents:
+            return
+        from sqlalchemy import text
+
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO documents (id, knowledge_base_id, source_id, title, content_hash, text, metadata_json)
+                    VALUES (:id, :knowledge_base_id, :source_id, :title, :content_hash, :text, CAST(:metadata AS JSONB))
+                    ON CONFLICT (knowledge_base_id, content_hash) DO NOTHING
+                    """
+                ),
+                [
+                    {**_document_to_dict(document), "metadata": json.dumps(document.metadata)}
+                    for document in documents
+                ],
+            )
+
     def list_documents(self, knowledge_base_id: str) -> List[StoredKnowledgeDocument]:
         from sqlalchemy import text
 
@@ -838,6 +965,67 @@ class PostgresKnowledgeRepository:
                 {"id": knowledge_base_id},
             ).mappings()
             return [_document_from_row(row) for row in rows]
+
+    def list_documents_page(
+        self,
+        knowledge_base_id: str,
+        *,
+        query: str = "",
+        offset: int = 0,
+        limit: int = 25,
+    ) -> tuple[List[StoredKnowledgeDocument], int]:
+        from sqlalchemy import text
+
+        normalized = query.strip()
+        where = """
+            knowledge_base_id = :id
+            AND (
+                :query = ''
+                OR title ILIKE :pattern
+                OR COALESCE(metadata_json->>'source_record_id', '') ILIKE :pattern
+                OR COALESCE(metadata_json->>'url', metadata_json->>'uri', '') ILIKE :pattern
+            )
+        """
+        params = {
+            "id": knowledge_base_id,
+            "query": normalized,
+            "pattern": f"%{normalized}%",
+            "offset": max(0, offset),
+            "limit": max(1, limit),
+        }
+        with self.engine.begin() as connection:
+            total = int(connection.execute(text(f"SELECT COUNT(*) FROM documents WHERE {where}"), params).scalar_one())
+            rows = connection.execute(
+                text(
+                    f"""
+                    SELECT * FROM documents
+                    WHERE {where}
+                    ORDER BY LOWER(title), id
+                    OFFSET :offset LIMIT :limit
+                    """
+                ),
+                params,
+            ).mappings()
+            return [_document_from_row(row) for row in rows], total
+
+    def list_wixqa_source_record_ids(self, knowledge_base_id: str) -> List[str]:
+        from sqlalchemy import text
+
+        with self.engine.begin() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT metadata_json->>'source_record_id'
+                    FROM documents
+                    WHERE knowledge_base_id = :id
+                      AND metadata_json->>'source_type' = 'wixqa_corpus'
+                      AND COALESCE(metadata_json->>'source_record_id', '') <> ''
+                    ORDER BY metadata_json->>'source_record_id'
+                    """
+                ),
+                {"id": knowledge_base_id},
+            )
+            return [str(row[0]) for row in rows]
 
     def get_document(self, knowledge_base_id: str, document_id: str) -> StoredKnowledgeDocument:
         from sqlalchemy import text
@@ -922,34 +1110,38 @@ class PostgresKnowledgeRepository:
         self.append_chunks(chunks, embeddings, model)
 
     def append_chunks(self, chunks: List[StoredKnowledgeChunk], embeddings: List[List[float]], model: str) -> None:
+        if not chunks:
+            return
         from sqlalchemy import text
 
         with self.engine.begin() as connection:
-            for chunk, embedding in zip(chunks, embeddings):
-                connection.execute(
-                    text(
-                        """
-                        INSERT INTO chunks (id, knowledge_base_id, document_id, chunk_index, text, token_count, metadata_json, index_version_id, parent_chunk_id)
-                        VALUES (:id, :knowledge_base_id, :document_id, :chunk_index, :text, :token_count, CAST(:metadata AS JSONB), :index_version_id, :parent_chunk_id)
-                        """
-                    ),
-                    {**_chunk_to_dict(chunk), "metadata": json.dumps(chunk.metadata)},
-                )
-                connection.execute(
-                    text(
-                        """
-                        INSERT INTO chunk_embeddings (chunk_id, embedding, embedding_model, embedding_deployment_id, embedding_dimension)
-                        VALUES (:chunk_id, :embedding, :embedding_model, :embedding_deployment_id, :embedding_dimension)
-                        """
-                    ),
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO chunks (id, knowledge_base_id, document_id, chunk_index, text, token_count, metadata_json, index_version_id, parent_chunk_id)
+                    VALUES (:id, :knowledge_base_id, :document_id, :chunk_index, :text, :token_count, CAST(:metadata AS JSONB), :index_version_id, :parent_chunk_id)
+                    """
+                ),
+                [{**_chunk_to_dict(chunk), "metadata": json.dumps(chunk.metadata)} for chunk in chunks],
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO chunk_embeddings (chunk_id, embedding, embedding_model, embedding_deployment_id, embedding_dimension)
+                    VALUES (:chunk_id, :embedding, :embedding_model, :embedding_deployment_id, :embedding_dimension)
+                    """
+                ),
+                [
                     {
                         "chunk_id": chunk.id,
                         "embedding": _vector_literal(embedding),
                         "embedding_model": model,
                         "embedding_deployment_id": chunk.metadata.get("embedding_deployment_id", ""),
                         "embedding_dimension": len(embedding),
-                    },
-                )
+                    }
+                    for chunk, embedding in zip(chunks, embeddings)
+                ],
+            )
 
     def list_chunks(self, knowledge_base_id: str, limit: int = 100) -> List[StoredKnowledgeChunk]:
         from sqlalchemy import text
@@ -981,6 +1173,54 @@ class PostgresKnowledgeRepository:
                         """
                     ),
                     params,
+                ).mappings()
+                return [_chunk_from_row(row) for row in rows]
+
+        return _retry_transient_db_error(_query)
+
+    def list_document_chunks(self, knowledge_base_id: str, document_id: str) -> List[StoredKnowledgeChunk]:
+        return self.list_active_chunks(knowledge_base_id, document_ids=[document_id])
+
+    def list_active_chunks(
+        self,
+        knowledge_base_id: str,
+        document_ids: Optional[List[str]] = None,
+    ) -> List[StoredKnowledgeChunk]:
+        from sqlalchemy import text
+
+        selected = list(dict.fromkeys(document_ids or []))
+        document_filter = "AND c.document_id = ANY(:document_ids)" if selected else ""
+
+        def _query() -> List[StoredKnowledgeChunk]:
+            with self.engine.begin() as connection:
+                active_version = connection.execute(
+                    text("SELECT active_index_version_id FROM knowledge_bases WHERE id = :id"),
+                    {"id": knowledge_base_id},
+                ).scalar_one_or_none()
+                if active_version is None:
+                    raise KeyError(f"Knowledge base not found: {knowledge_base_id}")
+                version_filter = "AND c.index_version_id = :active_version" if active_version else ""
+                rows = connection.execute(
+                    text(
+                        f"""
+                        SELECT c.*,
+                               ce.embedding_model,
+                               ce.embedding_deployment_id,
+                               ce.embedding_dimension,
+                               ce.embedding::text AS embedding_text
+                        FROM chunks c
+                        LEFT JOIN chunk_embeddings ce ON ce.chunk_id = c.id
+                        WHERE c.knowledge_base_id = :id
+                          {version_filter}
+                          {document_filter}
+                        ORDER BY c.document_id, c.chunk_index
+                        """
+                    ),
+                    {
+                        "id": knowledge_base_id,
+                        "active_version": active_version or "",
+                        "document_ids": selected,
+                    },
                 ).mappings()
                 return [_chunk_from_row(row) for row in rows]
 

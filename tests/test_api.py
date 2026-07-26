@@ -15,12 +15,13 @@ from aragbiz.answering import AdaptiveRAGAnswerService
 from aragbiz.chat import ChatService, JsonChatRepository
 from aragbiz.evaluation import EvaluationRunRecord, EvaluationService, JsonEvaluationRepository
 from aragbiz.evaluation_experiments import EvaluationExperimentRecord
-from aragbiz.jobs import BackgroundJob
+from aragbiz.jobs import BackgroundJob, JobService, JsonJobRepository, LocalBlobStore
 from aragbiz.knowledge import HashEmbeddingModel, KnowledgeService, OverlapChunker, SentenceTransformerEmbeddingModel
 from aragbiz.knowledge_store import JsonKnowledgeRepository
 from aragbiz.model_farm import JsonModelFarmRepository, ModelFarmError, ModelFarmService, ModelGateway, ModelStreamEvent
 from aragbiz.ragxplain import RagxplainRunner
 from aragbiz.tracing import FileTraceRepository, TraceArtifactStore, TraceService
+from aragbiz.worker import KnowledgeJobWorker
 
 app = api_main.app
 
@@ -683,6 +684,145 @@ def test_knowledge_base_endpoints_ingest_upload(monkeypatch, tmp_path):
     trace = client.get(f"/knowledge-bases/{created['id']}/processing-trace").json()
     assert any(step["step"] == "Chunking" for step in trace)
     assert any(step["step"] == "Embedding" for step in trace)
+
+
+def test_knowledge_base_api_round_trips_wixqa_minilm_profile(monkeypatch, tmp_path):
+    service = KnowledgeService(
+        repository=JsonKnowledgeRepository(str(tmp_path / "knowledge.json")),
+        chunker=OverlapChunker(chunk_size=80, chunk_overlap=10),
+        embedder=HashEmbeddingModel(dimension=16),
+    )
+    monkeypatch.setattr(api_main, "knowledge_service", service)
+    client = TestClient(app)
+    response = client.post(
+        "/knowledge-bases",
+        json={
+            "name": "WixQA structure-aware",
+            "configuration": {
+                "chunking_strategy": "structure_aware_recursive",
+                "chunking_profile_id": "wixqa_minilm_structure_v1",
+                "embedding_provider": "Local",
+                "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+                "embedding_deployment_id": "model-local-minilm-384",
+                "embedding_options": {"hard_max_wordpieces": 240},
+                "chunking_options": {
+                    "parent_document": "article_id",
+                    "target_body_tokens": 180,
+                    "soft_max_body_tokens": 210,
+                    "overlap_tokens": 30,
+                    "minimum_chunk_tokens": 60,
+                    "separators": [
+                        "heading",
+                        "subheading",
+                        "paragraph",
+                        "list",
+                        "sentence",
+                        "token",
+                    ],
+                    "metadata_prefix": {
+                        "include_title": True,
+                        "include_heading_path": True,
+                        "include_article_type": False,
+                        "maximum_tokens": 40,
+                    },
+                    "rules": {
+                        "preserve_numbered_lists": True,
+                        "preserve_bullet_lists": True,
+                        "merge_small_adjacent_chunks": True,
+                        "overlap_only_within_same_section": True,
+                        "never_merge_across_articles": True,
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    configuration = response.json()["metadata"]["configuration"]
+    assert configuration["chunking_profile_id"] == "wixqa_minilm_structure_v1"
+    assert configuration["embedding_options"]["hard_max_wordpieces"] == 240
+    assert configuration["chunking_options"]["target_body_tokens"] == 180
+    assert configuration["chunking_options"]["metadata_prefix"]["maximum_tokens"] == 40
+
+
+def test_prepared_wixqa_catalog_job_and_document_paging(monkeypatch, tmp_path):
+    corpus_path = tmp_path / "wixqa.jsonl"
+    corpus_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "id": "article-1",
+                        "text": "Invoice workflow\nMatch the invoice before approval.",
+                        "metadata": {"url": "https://support.wix.com/article-1", "article_type": "article"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "id": "article-2",
+                        "text": "Refund workflow\nValidate the payment before refunding.",
+                        "metadata": {"url": "https://support.wix.com/article-2", "article_type": "article"},
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    service = KnowledgeService(
+        repository=JsonKnowledgeRepository(str(tmp_path / "knowledge.json")),
+        chunker=OverlapChunker(chunk_size=60, chunk_overlap=10),
+        embedder=HashEmbeddingModel(dimension=16),
+        prepared_corpus_path=str(corpus_path),
+        prepared_corpus_expected_documents=2,
+        embedding_batch_size=2,
+    )
+    jobs = JobService(JsonJobRepository(str(tmp_path / "jobs.json")))
+    monkeypatch.setattr(api_main, "knowledge_service", service)
+    monkeypatch.setattr(api_main, "job_service", jobs)
+    client = TestClient(app)
+
+    catalog_response = client.get("/knowledge-sources/catalog")
+    assert catalog_response.status_code == 200
+    catalog = catalog_response.json()[0]
+    assert catalog["available"] is True
+    assert catalog["document_count"] == 2
+
+    created = client.post(
+        "/knowledge-bases",
+        json={"name": "Prepared WixQA", "description": "Benchmark corpus"},
+    ).json()
+    queued_response = client.post(
+        f"/knowledge-bases/{created['id']}/sources/wixqa-corpus",
+        json={"confirm_remote_embedding": False, "document_limit": 1},
+    )
+    assert queued_response.status_code == 202
+    queued = queued_response.json()
+    assert queued["resource_type"] == "knowledge_base"
+    assert queued["resource_id"] == created["id"]
+
+    worker = KnowledgeJobWorker(
+        jobs,
+        service,
+        LocalBlobStore(str(tmp_path / "blobs")),
+        worker_id="test-worker",
+    )
+    assert worker.run_once() is True
+    assert jobs.get(queued["id"]).status == "completed"
+    assert service.get_knowledge_base(created["id"]).document_count == 1
+
+    page_response = client.get(
+        f"/knowledge-bases/{created['id']}/documents-page",
+        params={"query": "invoice", "offset": 0, "limit": 25},
+    )
+    assert page_response.status_code == 200
+    page = page_response.json()
+    assert page["total"] == 1
+    assert page["items"][0]["metadata"]["source_record_id"] == "article-1"
+    chunks_response = client.get(
+        f"/knowledge-bases/{created['id']}/documents/{page['items'][0]['id']}/chunks"
+    )
+    assert chunks_response.status_code == 200
+    assert chunks_response.json()
 
 
 def test_upload_embedding_runtime_failure_returns_bad_request(monkeypatch, tmp_path):

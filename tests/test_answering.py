@@ -2,11 +2,17 @@ import asyncio
 
 import pytest
 
-from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions
+from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions, KnowledgeBaseRetriever
 from aragbiz.classifier import ClassificationPrediction
 from aragbiz.cancellation import AnswerCancelled, CancellationToken
 from aragbiz.generation import ExtractiveGenerator
-from aragbiz.knowledge import HashEmbeddingModel, KnowledgeService, OverlapChunker
+from aragbiz.knowledge import (
+    HashEmbeddingModel,
+    KnowledgeIndexVersionRecord,
+    KnowledgeService,
+    OverlapChunker,
+    StoredKnowledgeChunk,
+)
 from aragbiz.knowledge_store import JsonKnowledgeRepository
 from aragbiz.model_farm import (
     ModelClassificationResult,
@@ -624,3 +630,75 @@ def test_l2_retrieval_can_be_filtered_to_selected_documents(tmp_path):
     assert result.metadata["document_filter_count"] == 1
     assert result.contexts
     assert {context.document.metadata["document_id"] for context in result.contexts} == {invoice_document.id}
+
+
+def test_bm25_indexes_all_active_chunks_and_invalidates_by_index_version():
+    class CorpusKnowledgeService:
+        def __init__(self):
+            self.version_id = "index-v1"
+            self.load_count = 0
+            self.chunks = [
+                StoredKnowledgeChunk(
+                    id=f"chunk-{index}",
+                    knowledge_base_id="kb-wixqa",
+                    document_id=f"doc-{index}",
+                    chunk_index=0,
+                    text="needle benchmark evidence" if index == 10_000 else "ordinary workflow guidance",
+                    token_count=3,
+                    index_version_id=self.version_id,
+                )
+                for index in range(10_001)
+            ]
+
+        def list_index_versions(self, knowledge_base_id):
+            return [
+                KnowledgeIndexVersionRecord(
+                    id=self.version_id,
+                    knowledge_base_id=knowledge_base_id,
+                    status="active",
+                )
+            ]
+
+        def list_active_chunks(self, knowledge_base_id, document_ids=None):
+            self.load_count += 1
+            selected = set(document_ids or [])
+            return [
+                chunk
+                for chunk in self.chunks
+                if not selected or chunk.document_id in selected
+            ]
+
+    knowledge = CorpusKnowledgeService()
+    retriever = KnowledgeBaseRetriever(knowledge)
+
+    first_contexts, first_diagnostics = retriever.search_with_diagnostics(
+        "needle",
+        "kb-wixqa",
+        top_k=1,
+        mode="bm25",
+    )
+    second_contexts, second_diagnostics = retriever.search_with_diagnostics(
+        "needle",
+        "kb-wixqa",
+        top_k=1,
+        mode="bm25",
+    )
+
+    assert first_contexts[0].document.id == "chunk-10000"
+    assert second_contexts[0].document.id == "chunk-10000"
+    assert first_diagnostics["bm25_indexed_chunk_count"] == 10_001
+    assert first_diagnostics["bm25_cache_hit"] is False
+    assert second_diagnostics["bm25_cache_hit"] is True
+    assert knowledge.load_count == 1
+
+    knowledge.version_id = "index-v2"
+    _, changed_diagnostics = retriever.search_with_diagnostics(
+        "needle",
+        "kb-wixqa",
+        top_k=1,
+        mode="bm25",
+    )
+
+    assert changed_diagnostics["active_index_version_id"] == "index-v2"
+    assert changed_diagnostics["bm25_cache_hit"] is False
+    assert knowledge.load_count == 2

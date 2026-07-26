@@ -1,0 +1,269 @@
+{
+  "analysis": {
+    "executive_summary": "The RAG system demonstrates strong performance in generating relevant, factual, and well-structured answers when provided with adequate context. However, its overall effectiveness is significantly hampered by critical weaknesses in the retrieval stage, leading to low context relevancy and recall. This deficiency forces the generator to hallucinate specific details, resulting in poor context adherence despite the model's inherent generation capabilities.",
+    "executive_summary_gist": "The RAG system excels at generating relevant and factual answers but struggles significantly with retrieving appropriate context. This retrieval weakness leads to the model fabricating information, undermining its overall reliability.",
+    "insights": [
+      {
+        "title": "Improve Retrieval Precision and Recall for Granular Information",
+        "priority": "critical",
+        "problem_detection": "The system frequently retrieves context that is too general or misses specific, essential details required to fully answer user queries, particularly for nuanced configuration steps. This is reflected in low `context_relevancy` (0.4) and moderate `context_recall` (0.6).",
+        "problem_detection_gist": "The system frequently retrieves context that is too general or misses specific details, leading to low relevancy and recall.",
+        "root_cause_analysis": "The current retrieval mechanism, potentially limited by `top_k=2` and the `hybrid` mode's configuration, struggles to pinpoint highly specific information within the knowledge base. The knowledge base itself might also lack sufficiently granular, step-by-step content for UI navigation, or the chunking strategy might break up critical instructions. The absence of a reranker further exacerbates this by not re-ranking potentially relevant but lower-ranked initial retrievals.",
+        "root_cause_analysis_gist": "The current retrieval mechanism, limited by `top_k` and lack of reranking, struggles with nuanced queries and granular content.",
+        "evidence_trace": "The `context_relevancy` metric averages **0.4**, indicating frequent retrieval of broadly related but not precisely targeted information. `context_recall` averages **0.6**, showing that essential ground truth details are often missing from the retrieved context. For the question \"I need help with setting up two different emails on my website. One for receiving order invoices and the other for general inquiries. Im specifically looking for guidance on how to set the email address for order confirmations in the Business Info section of my sites settings.\", the system retrieved general information about creating Google Workspace emails but failed to provide the specific steps for navigating to and updating the \"Business Info section\" as requested.",
+        "evidence_trace_gist": "Low `context_relevancy` (0.4) and `context_recall` (0.6) show the system retrieves general info instead of specific steps for 'Business Info section' email setup.",
+        "recommended_protocol": "### 1. Enhance Retrieval Granularity and Scope\nIncrease the `top_k` parameter from its current value of `2` to `5` or `7` to retrieve a broader set of potentially relevant documents. This will improve `context_recall` by providing the generator with more information to draw from.\n> Note: This will increase retrieval latency and potentially cost, but is necessary to address the current recall deficit.\n### 2. Implement a Reranker for Precision\nEnable and configure a reranker (`reranker_enabled: False` currently) to re-score the expanded set of retrieved documents. A reranker can significantly improve `context_relevancy` by identifying the most pertinent passages from the `top_k` candidates, ensuring the generator receives highly focused context.\n> Note: This adds an additional step to the retrieval pipeline, increasing latency, but is crucial for balancing increased `top_k` with maintaining precision.\n### 3. Optimize Knowledge Base Chunking and Content\nReview the knowledge base content and chunking strategy. Ensure that step-by-step instructions for specific UI navigation (e.g., \"Business Info section\") are contained within single, semantically complete chunks. Consider using a hierarchical chunking approach or fine-tuning the embedding model to better capture the nuances of configuration queries.",
+        "recommended_protocol_gist": "- Increase `top_k` for broader retrieval.\n- Implement a reranker to improve precision.\n- Optimize knowledge base chunking and content."
+      },
+      {
+        "title": "Strengthen Generation Grounding to Eliminate Hallucination",
+        "priority": "critical",
+        "problem_detection": "The RAG system frequently introduces information not present in the retrieved context, fabricating specific instructions or details to answer user queries. This is evidenced by a critically low `context_adherence` score of **0.4**.",
+        "problem_detection_gist": "The RAG system often introduces information not present in the retrieved context, fabricating specific instructions.",
+        "root_cause_analysis": "While primarily a generation issue, the root cause is heavily influenced by the poor `context_relevancy` and `context_recall`. When the retrieved context is insufficient or irrelevant, the `gpt-4.1-mini` model, despite its instruction to \"mention uncertainty,\" attempts to generate a plausible answer by inferring or fabricating details, leading to hallucination. The current `system_prompt` and `predefined_prompt` are not sufficiently strict to prevent this behavior when context is lacking.",
+        "root_cause_analysis_gist": "Insufficient or irrelevant context forces the LLM to hallucinate details, as current prompts are not strict enough to prevent this.",
+        "evidence_trace": "The `context_adherence` metric averages a low **0.4**, indicating a significant tendency for the model to generate content not supported by the provided context. The `faithfulness_proxy` also shows a low score of **0.518**, reinforcing the issue of ungrounded generation. In response to the question about setting an email in the \"Business Info section,\" the model fabricated specific navigation steps like \"After creating the emails, go to your Wix site's Business Info section in the site settings. In Business Info, update the email address...\" even though the retrieved context did not contain these precise instructions.",
+        "evidence_trace_gist": "A low `context_adherence` (0.4) and `faithfulness_proxy` (0.518) indicate the model fabricates navigation steps for the 'Business Info section' when context is missing.",
+        "recommended_protocol": "### 1. Implement Strict Contextual Guardrails in Prompting\nModify the `predefined_prompt` to explicitly instruct the `gpt-4.1-mini` model to state when it cannot answer a question based *solely* on the provided context. For example, add a phrase like: \"If the retrieved context does not contain the specific information needed to answer, explicitly state that the information is not available in the provided context rather than fabricating details.\"\n> Note: This may lead to more \"I don't know\" responses, but significantly improves trustworthiness and reduces hallucination.\n### 2. Leverage Confidence Scoring for Fallback\nExplore integrating a confidence score from the generator or a separate classifier. If the model's confidence in its answer (based on retrieved context) falls below a certain threshold, trigger a fallback mechanism, such as a human agent handoff or a more general response, instead of attempting to generate a specific but ungrounded answer.\n> Note: This requires additional development for confidence scoring and fallback routing.\n### 3. Prioritize Retrieval Improvements\nRecognize that while prompt engineering helps, the most effective long-term solution for `context_adherence` is to improve `context_relevancy` and `context_recall`. Continue to iterate on retrieval strategies (as outlined in the previous insight) to ensure the generator consistently receives comprehensive and accurate context, thereby reducing the *need* for it to infer or fabricate.",
+        "recommended_protocol_gist": "- Modify prompt for explicit uncertainty statements.\n- Explore confidence scoring for fallback.\n- Prioritize underlying retrieval improvements."
+      }
+    ],
+    "strategic_conclusion": "The system's current strengths in `answer_relevancy` and `factuality` are commendable, but its foundational retrieval weaknesses are a critical bottleneck. Addressing `context_relevancy` and `context_recall` through enhanced retrieval mechanisms and knowledge base optimization, coupled with stricter generation grounding, will unlock the full potential of this RAG system, transforming it into a highly reliable and accurate information provider.",
+    "configuration_targets": [
+      {
+        "diagnostic_area": "Retrieval quality",
+        "metrics": [
+          "Context Relevancy",
+          "Context Recall"
+        ],
+        "sections": [
+          "Knowledge Base",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "chunking_strategy",
+          "embedding_deployment_id",
+          "retrieval_mode",
+          "top_k",
+          "reranker_deployment_id"
+        ]
+      },
+      {
+        "diagnostic_area": "Faithfulness and grounding",
+        "metrics": [
+          "Context Adherence",
+          "Factuality"
+        ],
+        "sections": [
+          "Generator target & prompts",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "generator_deployment_id",
+          "system_prompt",
+          "predefined_prompt",
+          "citations_enabled"
+        ]
+      },
+      {
+        "diagnostic_area": "Relevance and intent",
+        "metrics": [
+          "Answer Relevancy"
+        ],
+        "sections": [
+          "Adaptive RAG",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "route_mode",
+          "classifier_deployment_id",
+          "planner_deployment_id",
+          "response_structure"
+        ]
+      },
+      {
+        "diagnostic_area": "Structure and style",
+        "metrics": [
+          "Grading Note"
+        ],
+        "sections": [
+          "General",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "response_structure",
+          "tone",
+          "humor_level",
+          "system_prompt",
+          "predefined_prompt"
+        ]
+      }
+    ]
+  },
+  "prompt": {
+    "insights": {
+      "context_relevancy": {
+        "analysis": "The Context Relevancy score is low at 0.4, indicating that the retrieved information frequently fails to directly address the user's specific needs. The primary issue is that the context often provides general information (e.g., creating emails) instead of the precise, granular steps requested (e.g., setting an email in a specific 'Business Info section'). To improve, enhance retrieval precision by fine-tuning the retriever to better match specific configuration queries and ensure the knowledge base contains detailed, step-by-step instructions for UI navigation. Additionally, review and optimize the chunking strategy to prevent context from being split mid-sentence, ensuring semantic completeness of retrieved passages.",
+        "metric_name": "Context Relevancy",
+        "metric_description": "How relevant retrieved context is to the question.",
+        "avg_score": 0.4,
+        "min_score": 0.4,
+        "max_score": 0.4
+      },
+      "context_adherence": {
+        "analysis": "The Context Adherence metric is low at 0.4, indicating a significant issue with the model introducing information not present in the retrieved context. A common pattern observed is the model fabricating specific instructions, such as navigating to a 'Wix site's Business Info section,' to address user queries even when the provided context only covers related but distinct topics like Google Workspace email creation. To improve, enhance retrieval to ensure the knowledge base contains comprehensive platform-specific settings and improve the retriever's precision. Additionally, strengthen generation constraints through stricter prompting to explicitly instruct the LLM to state when it cannot answer a question due to insufficient context, preventing hallucination.",
+        "metric_name": "Context Adherence",
+        "metric_description": "How faithfully the answer uses only retrieved context.",
+        "avg_score": 0.4,
+        "min_score": 0.4,
+        "max_score": 0.4
+      },
+      "answer_relevancy": {
+        "analysis": "The Answer Relevancy metric demonstrates exceptional performance with an average score of 1.0, indicating that the generated answers consistently and fully address the user's questions. The provided example confirms that the system effectively covers all aspects of the query, including specific configuration steps. Given this perfect score, there is very limited room for improvement in terms of answer relevancy.",
+        "metric_name": "Answer Relevancy",
+        "metric_description": "How well the answer addresses the question.",
+        "avg_score": 1.0,
+        "min_score": 1.0,
+        "max_score": 1.0
+      },
+      "context_recall": {
+        "analysis": "The Context Recall metric shows moderate performance with an average score of 0.6. The primary issue identified is that the retrieved context often partially addresses the user's query but critically misses specific, essential details required for a complete and accurate ground truth answer, particularly regarding precise configuration steps within specific UI sections. To improve, focus on enhancing retrieval granularity to ensure specific configuration steps are captured. This can involve refining embedding models to better match nuanced queries or implementing query decomposition to retrieve targeted information for multi-faceted questions.",
+        "metric_name": "Context Recall",
+        "metric_description": "Whether retrieved context contains information needed for ground truth.",
+        "avg_score": 0.6,
+        "min_score": 0.6,
+        "max_score": 0.6
+      },
+      "factuality": {
+        "analysis": "The Factuality metric demonstrates excellent performance with an average score of 1.0, indicating that the RAG system consistently generates factually correct answers that align perfectly with the ground truth. The provided example further confirms the system's ability to deliver comprehensive and accurate information, directly addressing user queries with high precision. Given this high level of accuracy, there is minimal room for improvement in terms of factual correctness, and the system is performing exceptionally well in this regard.",
+        "metric_name": "Factuality",
+        "metric_description": "Answer correctness vs ground truth reference.",
+        "avg_score": 1.0,
+        "min_score": 1.0,
+        "max_score": 1.0
+      },
+      "grading_note": {
+        "analysis": "The overall performance for the 'Grading Note' metric is excellent, with an average score of 1.0. The provided example demonstrates the system's ability to generate highly accurate, complete, and contextually relevant responses that fully satisfy the grading criteria. This indicates strong performance in understanding complex user queries and providing detailed, actionable instructions. Given the perfect score, there is very limited potential for further improvement in this specific area.",
+        "metric_name": "Grading Note",
+        "metric_description": "Two-stage grading note generation then scoring.",
+        "avg_score": 1.0,
+        "min_score": 1.0,
+        "max_score": 1.0
+      }
+    },
+    "examples": {
+      "example_0": {
+        "question": "I need help with setting up two different emails on my website. One for receiving order invoices and the other for general inquiries. Im specifically looking for guidance on how to set the email address for order confirmations in the Business Info section of my sites settings.",
+        "candidate_answer": "To set up two different emails on your website—one for order invoices and another for general inquiries—and specifically configure the email address for order confirmations in the Business Info section, follow these steps:\n\n- First, create additional business email addresses for your domain, such as orders@yourdomain.com for order invoices and info@yourdomain.com for general inquiries. This requires purchasing additional business emails via your Google Workspace account linked to your Wix site [S1].\n- To create these emails: Go to Business Email in your Wix account, select the relevant account, click More Actions, then Set Up User. Sign in to Google Workspace, add new users with the desired email addresses, and set passwords if needed [S2].\n- After creating the emails, go to your Wix site's Business Info section in the site settings.\n- In Business Info, update the email address for order confirmations by entering the newly created orders@yourdomain.com email. This ensures order confirmation emails are sent to the correct inbox.\n- Note that it may take up to 24 hours for Google Workspace services to activate for new users [S2].\n\nThis process allows you to manage incoming emails efficiently by directing order confirmations and general inquiries to separate addresses [S1].\n\nIf you need detailed navigation within Wix settings beyond this, please specify.",
+        "gt_answer": "To set the email address for order confirmations in the Business Info section of your site's settings, follow these steps: \n\n1. Go to the Business Info section of your site's settings. \n2. Scroll down to the Location & Contact Info section. \n3. Enter an email address in the Email field. \n\nFor setting up additional business emails for different purposes, such as general inquiries, you can manage your incoming emails by setting up additional business email addresses for different parts of your company. If you own a company called Clothes by Wix, for example, and have the domain name clothesbywix.com, you can create more business emails for the different departments: info@clothesbywix.com, contact@clothesbywix.com, orders@clothesbywix.com, etc. To set up additional business emails, go to Business Email in your account, click Show User Info on the relevant account, click the More Actions icon next to the account you want to set up, select Set Up User, sign in to your Google Workspace account, enter your email address, click Next, enter your password, click Users, click Add new user, enter the user details and set a password (optional), and click Add.",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.518518518518518,
+        "answer_overlap": 0.620689655172413,
+        "token_f1": 0.5658536585365851,
+        "bleu": 0.20475819309183702,
+        "rouge_1": 0.5658536585365851,
+        "rouge_2": 0.259803921568627,
+        "context_relevancy_score": 0.4,
+        "context_adherence_score": 0.4,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 0.6,
+        "factuality_score": 1.0,
+        "grading_note_score": 1.0
+      }
+    },
+    "configs": {
+      "rag_configs": {
+        "run_id": "eval-5985d73da14b9f491f40d76ae1b62673",
+        "name": "L2 GPT 4.1 mini - WixQA ExpertWritten",
+        "dataset_name": "WixQA ExpertWritten",
+        "knowledge_base_id": "kb-fc434e0cd0714bc1ae43cfd6f943323e",
+        "knowledge_base_name": "WixQA Curpus 10",
+        "chat_configuration_id": "cfg-d5eabad574f04c209ccd1c5a80c512a2",
+        "chat_configuration": {
+          "id": "cfg-d5eabad574f04c209ccd1c5a80c512a2",
+          "name": "L2 GPT 4.1 mini",
+          "tone": "Professional",
+          "metadata": {
+            "top_k": 2,
+            "runtime": "model-farm",
+            "classifier": "query_classifier_distilbert",
+            "route_mode": "simple_rag",
+            "retrieval_mode": "hybrid",
+            "route_strategy": "L2 Simple RAG",
+            "welcome_message": "Welcome to Adaptive RAG Studio. Workflow assistant 2 will assist you.",
+            "actual_generator": "deployment",
+            "configuration_id": "nUcjS2lW2ean",
+            "reranker_enabled": false,
+            "citations_enabled": true,
+            "agent_max_iterations": 5,
+            "agent_max_tool_calls": 8,
+            "retrieval_mode_label": "Hybrid",
+            "agent_timeout_seconds": 90,
+            "conversation_starters": [
+              "What are the main steps in this workflow?",
+              "Summarize the selected knowledge base."
+            ],
+            "generation_parameters": {},
+            "planner_deployment_id": "",
+            "reranker_deployment_id": "",
+            "fallback_deployment_ids": [],
+            "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+            "agent_public_web_enabled": false,
+            "classifier_deployment_id": "model-local-distilbert",
+            "classifier_margin_threshold": 0,
+            "conversation_awareness_enabled": false,
+            "conversation_history_exchanges": 3,
+            "classifier_confidence_threshold": 0,
+            "conversation_history_characters": 4000
+          },
+          "description": "Default configuration for concise business workflow answers.",
+          "humor_level": 0,
+          "system_prompt": "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
+          "generator_model": "gpt-4.1-mini",
+          "citations_enabled": true,
+          "predefined_prompt": "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.",
+          "generator_provider": "openai",
+          "response_structure": "Concise answer with bullets and cited workflow context",
+          "generation_parameters": {},
+          "planner_deployment_id": "",
+          "reranker_deployment_id": "",
+          "fallback_deployment_ids": [],
+          "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+          "agent_public_web_enabled": false,
+          "conversation_awareness_enabled": false
+        },
+        "retrieval_mode": "hybrid",
+        "top_k": 2,
+        "route_distribution": {
+          "l2_simple_rag": 1
+        },
+        "wixqa_metrics": {
+          "mrr": 1.0,
+          "bleu": 0.2047581930918377,
+          "rouge_1": 0.5658536585365854,
+          "rouge_2": 0.2598039215686274,
+          "hit_at_k": 1.0,
+          "token_f1": 0.5658536585365854,
+          "ndcg_at_k": 1.6309297535714575,
+          "factuality": 0.9,
+          "recall_at_k": 1.0,
+          "context_recall": 0.5,
+          "judge_coverage": 1.0,
+          "precision_at_k": 1.0,
+          "retrieval_coverage": 1.0
+        }
+      }
+    },
+    "rag_traditional_metrics": {
+      "routing_match": 1.0,
+      "context_relevance_proxy": 0.0,
+      "faithfulness_proxy": 0.518518518518518,
+      "answer_overlap": 0.620689655172413,
+      "token_f1": 0.5658536585365851,
+      "bleu": 0.20475819309183702,
+      "rouge_1": 0.5658536585365851,
+      "rouge_2": 0.259803921568627
+    }
+  }
+}

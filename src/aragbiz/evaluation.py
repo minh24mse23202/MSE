@@ -256,7 +256,7 @@ class EvaluationService:
             (
                 "Evaluate how completely the retrieved context contains the essential information "
                 "needed to produce the reference answer. Ignore irrelevant extra context. Return "
-                'strict JSON: {"score": number from 0 to 1, "explanation": "brief reason"}.'
+                'strict JSON: {"score": number from 0 to 1, "explanation": "reason in 20 words or fewer"}.'
             ),
             {
                 "question": record.question,
@@ -272,7 +272,7 @@ class EvaluationService:
             (
                 "Evaluate factual alignment between the candidate and reference answer. Score how "
                 "accurately the candidate preserves the essential facts without contradictions. "
-                'Return strict JSON: {"score": number from 0 to 1, "explanation": "brief reason"}.'
+                'Return strict JSON: {"score": number from 0 to 1, "explanation": "reason in 20 words or fewer"}.'
             ),
             {
                 "question": record.question,
@@ -286,9 +286,13 @@ class EvaluationService:
             "context_recall": recall["score"],
             "context_recall_explanation": recall["explanation"],
             "context_recall_usage_event_id": recall["usage_event_id"],
+            "context_recall_judge_attempts": recall["attempts"],
+            "context_recall_structured_output_recovered": recall["structured_output_recovered"],
             "factuality": factuality["score"],
             "factuality_explanation": factuality["explanation"],
             "factuality_usage_event_id": factuality["usage_event_id"],
+            "factuality_judge_attempts": factuality["attempts"],
+            "factuality_structured_output_recovered": factuality["structured_output_recovered"],
             "judge_deployment_id": deployment_id,
         }
 
@@ -301,29 +305,82 @@ class EvaluationService:
         context: ModelCallContext,
         external_processing_allowed: bool,
     ) -> Dict[str, Any]:
-        try:
-            response = self.model_gateway.generate_sync(
-                [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                ],
-                deployment_id,
-                parameters={"temperature": 0, "max_tokens": 300},
-                context=replace(
-                    context,
-                    purpose=f"evaluation_wixqa_{metric}",
-                    request_id=f"{context.request_id}:{metric}",
-                ),
-                external_processing_allowed=external_processing_allowed,
-                capability="judge",
-            )
-        except ModelFarmError as exc:
-            raise ValueError(f"WixQA {metric} judge failed: {exc}") from exc
-        parsed = _parse_judge_payload(response.text)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ]
+        call_context = replace(
+            context,
+            purpose=f"evaluation_wixqa_{metric}",
+            request_id=f"{context.request_id}:{metric}",
+        )
+        response_format = _judge_response_format(metric)
+        parameters = {
+            "temperature": 0,
+            "max_tokens": 800,
+            "response_format": response_format,
+            **_judge_provider_parameters(self.model_gateway, deployment_id),
+        }
+        responses = []
+        recovered = False
+        for attempt in range(2):
+            attempt_messages = list(messages)
+            if attempt:
+                attempt_messages.extend(
+                    [
+                        {"role": "assistant", "content": responses[-1].text},
+                        {
+                            "role": "user",
+                            "content": (
+                                "The previous response was not valid JSON. Return only one complete "
+                                "JSON object matching the required schema. Use no more than 12 words "
+                                "for explanation. Do not use Markdown."
+                            ),
+                        },
+                    ]
+                )
+            try:
+                response = self.model_gateway.generate_sync(
+                    attempt_messages,
+                    deployment_id,
+                    parameters=parameters,
+                    context=replace(
+                        call_context,
+                        request_id=f"{call_context.request_id}:attempt-{attempt + 1}",
+                    ),
+                    external_processing_allowed=external_processing_allowed,
+                    capability="judge",
+                )
+            except ModelFarmError as exc:
+                raise ValueError(f"WixQA {metric} judge failed: {exc}") from exc
+            responses.append(response)
+            try:
+                parsed = _parse_judge_payload(response.text)
+                break
+            except ValueError:
+                if attempt:
+                    partial_result = next(
+                        (
+                            (candidate, item)
+                            for item in reversed(responses)
+                            for candidate in [_parse_partial_judge_payload(item.text)]
+                            if candidate is not None
+                        ),
+                        None,
+                    )
+                    if partial_result is None:
+                        raise ValueError(
+                            f"WixQA {metric} judge returned invalid structured output after one retry: "
+                            f"{response.text[:300]}"
+                        )
+                    parsed, response = partial_result
+                    recovered = True
         return {
             "score": parsed["score"],
             "explanation": parsed["explanation"],
             "usage_event_id": str(response.metadata.get("usage_event_id") or ""),
+            "attempts": len(responses),
+            "structured_output_recovered": recovered,
         }
 
     def list_runs(self) -> List[EvaluationRunRecord]:
@@ -887,6 +944,77 @@ def _parse_judge_payload(raw: str) -> Dict[str, Any]:
     return {
         "score": score,
         "explanation": str(payload.get("explanation") or "").strip(),
+    }
+
+
+def _parse_partial_judge_payload(raw: str) -> Optional[Dict[str, Any]]:
+    text = (raw or "").strip()
+    score_match = re.search(
+        r"""["']?score["']?\s*:\s*(-?(?:\d+(?:\.\d*)?|\.\d+))""",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not score_match:
+        return None
+    try:
+        score = float(score_match.group(1))
+    except ValueError:
+        return None
+    if score > 1 and score <= 5:
+        score /= 5
+    if score < 0 or score > 1:
+        return None
+    explanation_match = re.search(
+        r"""["']?explanation["']?\s*:\s*["'](.*)""",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    explanation = ""
+    if explanation_match:
+        explanation = explanation_match.group(1)
+        explanation = re.split(r"""["']\s*[,}]""", explanation, maxsplit=1)[0]
+        explanation = explanation.rstrip("\"'` \r\n\t")
+    return {
+        "score": score,
+        "explanation": explanation[:500].strip() or "Recovered from truncated judge output.",
+    }
+
+
+def _judge_provider_parameters(model_gateway: ModelGateway, deployment_id: str) -> Dict[str, Any]:
+    service = getattr(model_gateway, "service", None)
+    if service is None:
+        return {}
+    try:
+        deployment = service.get_deployment(deployment_id)
+    except (KeyError, ModelFarmError):
+        return {}
+    provider = str(getattr(deployment, "provider", "") or "").lower()
+    model = str(getattr(deployment, "model", "") or "").lower()
+    if provider == "gemini" and model.startswith("gemini-2.5"):
+        return {"reasoning_effort": "disable"}
+    return {}
+
+
+def _judge_response_format(metric: str) -> Dict[str, Any]:
+    safe_metric = re.sub(r"[^a-zA-Z0-9_-]+", "_", metric).strip("_")[:40] or "metric"
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": f"wixqa_{safe_metric}",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "score": {"type": "number", "minimum": 0, "maximum": 1},
+                    "explanation": {
+                        "type": "string",
+                        "description": "A concise reason using no more than 20 words.",
+                    },
+                },
+                "required": ["score", "explanation"],
+                "additionalProperties": False,
+            },
+        },
     }
 
 

@@ -143,8 +143,11 @@ Knowledge-base ingestion APIs are available under:
 - `DELETE /knowledge-bases/{id}`
 - `POST /knowledge-bases/{id}/sources/upload`
 - `POST /knowledge-bases/{id}/sources/website`
+- `POST /knowledge-bases/{id}/sources/wixqa-corpus`
 - `POST /knowledge-bases/{id}/reindex`
 - `GET /knowledge-bases/{id}/documents`
+- `GET /knowledge-bases/{id}/documents-page`
+- `GET /knowledge-bases/{id}/documents/{document_id}/chunks`
 - `POST /knowledge-bases/{id}/documents`
 - `PUT /knowledge-bases/{id}/documents/{document_id}`
 - `DELETE /knowledge-bases/{id}/documents/{document_id}`
@@ -154,6 +157,45 @@ Download and convert WixQA:
 ```powershell
 $env:PYTHONPATH='src'
 python scripts/download_wixqa.py --subset all
+```
+
+After the download prepares `data/processed/wix_kb_corpus_documents.jsonl`, open
+**Knowledge Bases**, add or update a Knowledge Base, and select **Use prepared
+WixQA corpus** under Local device. Choose between 1 and 6,221 documents. Selection
+uses a deterministic prefix of the normalized corpus, so increasing the number
+adds missing documents without duplicating records. The API queues a durable
+worker job, so keep `python -m aragbiz.worker` running. The selected Knowledge
+Base chunking and embedding configuration is applied in batches; a draft index
+becomes active only after the selected corpus subset succeeds.
+
+For a token-aware WixQA index, choose the **WixQA MiniLM optimized** chunking
+profile in the Knowledge Base modal. The profile uses the local
+`sentence-transformers/all-MiniLM-L6-v2` deployment, exact WordPiece counting,
+structure-aware recursive chunking, and embedding-only title/section prefixes.
+Every embedding input, including metadata and special tokens, is capped at 240
+WordPieces. Install the ML dependencies before indexing:
+
+```powershell
+python -m pip install -e ".[ml]"
+```
+
+The profile's resolved token budgets and structure rules are stored in each
+index-version snapshot. Updating the settings of a populated Knowledge Base
+queues a draft re-index; the previous active index remains queryable until the
+new version completes successfully.
+
+Evaluation compatibility is calculated from the actual imported WixQA article
+IDs. A benchmark question is eligible only when all of its `metadata.article_ids`
+exist in the selected Knowledge Base. Dataset limits in the Evaluation screen are
+therefore capped to the exact compatible ExpertWritten, Simulated, and Synthetic
+record counts. Changing the imported corpus after creating an experiment requires
+creating a new experiment.
+
+Override the prepared corpus location and embedding batch size when needed:
+
+```powershell
+$env:ARAGBIZ_WIXQA_KB_CORPUS="D:\datasets\wix_kb_corpus_documents.jsonl"
+$env:ARAGBIZ_KNOWLEDGE_EMBED_BATCH_SIZE="64"
 ```
 
 Run the evaluation:

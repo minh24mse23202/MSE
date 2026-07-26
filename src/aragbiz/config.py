@@ -57,6 +57,7 @@ class AppConfig:
     use_sentence_transformers: bool = False
     chunk_size: int = 800
     chunk_overlap: int = 120
+    knowledge_embed_batch_size: int = 64
 
 
 def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
@@ -93,7 +94,10 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
     return AppConfig(
         sample_dataset=raw.get("paths", {}).get("sample_dataset", AppConfig.sample_dataset),
         fallback_sample_dataset=raw.get("paths", {}).get("fallback_sample_dataset", AppConfig.fallback_sample_dataset),
-        kb_corpus=raw.get("paths", {}).get("kb_corpus", AppConfig.kb_corpus),
+        kb_corpus=os.getenv(
+            "ARAGBIZ_WIXQA_KB_CORPUS",
+            raw.get("paths", {}).get("kb_corpus", AppConfig.kb_corpus),
+        ),
         feedback_store=raw.get("paths", {}).get("feedback_store", AppConfig.feedback_store),
         simple_top_k=int(raw.get("classifier", {}).get("simple_top_k", AppConfig.simple_top_k)),
         moderate_top_k=int(raw.get("classifier", {}).get("moderate_top_k", AppConfig.moderate_top_k)),
@@ -231,6 +235,18 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
         ),
         chunk_size=int(raw.get("knowledge", {}).get("chunk_size", AppConfig.chunk_size)),
         chunk_overlap=int(raw.get("knowledge", {}).get("chunk_overlap", AppConfig.chunk_overlap)),
+        knowledge_embed_batch_size=max(
+            1,
+            min(
+                256,
+                int(
+                    os.getenv(
+                        "ARAGBIZ_KNOWLEDGE_EMBED_BATCH_SIZE",
+                        raw.get("knowledge", {}).get("embed_batch_size", AppConfig.knowledge_embed_batch_size),
+                    )
+                ),
+            ),
+        ),
     )
 
 

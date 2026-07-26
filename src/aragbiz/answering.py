@@ -4,6 +4,8 @@ import re
 import time
 import hashlib
 import asyncio
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 import json
 from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, Tuple
@@ -2111,6 +2113,9 @@ class KnowledgeBaseRetriever:
         self.knowledge_service = knowledge_service
         self.bm25_weight = bm25_weight
         self.dense_weight = dense_weight
+        self._lexical_cache: "OrderedDict[tuple[str, str], tuple[InMemoryHybridRetriever, int]]" = OrderedDict()
+        self._lexical_cache_lock = threading.Lock()
+        self._lexical_cache_size = 3
 
     def search(
         self,
@@ -2142,12 +2147,13 @@ class KnowledgeBaseRetriever:
         bm25_contexts: List[RetrievedContext] = []
         dense_contexts: List[RetrievedContext] = []
         bm25_raw: Dict[str, float] = {}
+        bm25_index_details: Dict[str, Any] = {}
         bm25_duration_ms = 0.0
         dense_duration_ms = 0.0
         hybrid_duration_ms = 0.0
         if mode == "bm25":
             component_started = time.perf_counter()
-            bm25_contexts, bm25_raw = self._bm25_search_details(
+            bm25_contexts, bm25_raw, bm25_index_details = self._bm25_search_details(
                 query, knowledge_base_id, candidate_limit, document_ids=document_ids
             )
             bm25_duration_ms = (time.perf_counter() - component_started) * 1000
@@ -2159,7 +2165,7 @@ class KnowledgeBaseRetriever:
             contexts = dense_contexts[:top_k]
         elif mode == "hybrid":
             component_started = time.perf_counter()
-            bm25_contexts, bm25_raw = self._bm25_search_details(
+            bm25_contexts, bm25_raw, bm25_index_details = self._bm25_search_details(
                 query, knowledge_base_id, candidate_limit, document_ids=document_ids
             )
             bm25_duration_ms = (time.perf_counter() - component_started) * 1000
@@ -2222,6 +2228,9 @@ class KnowledgeBaseRetriever:
             "bm25_duration_ms": round(bm25_duration_ms, 3),
             "dense_duration_ms": round(dense_duration_ms, 3),
             "hybrid_duration_ms": round(hybrid_duration_ms, 3),
+            "bm25_indexed_chunk_count": int(bm25_index_details.get("indexed_chunk_count") or 0),
+            "active_index_version_id": str(bm25_index_details.get("active_index_version_id") or ""),
+            "bm25_cache_hit": bool(bm25_index_details.get("cache_hit")),
             "candidates": candidates,
         }
 
@@ -2232,7 +2241,7 @@ class KnowledgeBaseRetriever:
         top_k: int,
         document_ids: Optional[List[str]] = None,
     ) -> List[RetrievedContext]:
-        contexts, _ = self._bm25_search_details(query, knowledge_base_id, top_k, document_ids)
+        contexts, _, _ = self._bm25_search_details(query, knowledge_base_id, top_k, document_ids)
         return contexts
 
     def _bm25_search_details(
@@ -2241,18 +2250,13 @@ class KnowledgeBaseRetriever:
         knowledge_base_id: str,
         top_k: int,
         document_ids: Optional[List[str]] = None,
-    ) -> Tuple[List[RetrievedContext], Dict[str, float]]:
-        chunks = self._filtered_chunks(knowledge_base_id, document_ids)
-        if not chunks:
-            return [], {}
-        retriever = InMemoryHybridRetriever(
-            [_document_from_chunk(chunk) for chunk in chunks],
-            bm25_weight=self.bm25_weight,
-            dense_weight=self.dense_weight,
-        )
-        contexts = retriever.search(query, top_k=min(top_k, len(chunks)), mode="bm25")
-        raw_scores = retriever.score_diagnostics(query)["bm25_raw"]
-        return contexts, raw_scores
+    ) -> Tuple[List[RetrievedContext], Dict[str, float], Dict[str, Any]]:
+        retriever, details = self._lexical_retriever(knowledge_base_id, document_ids)
+        if retriever is None:
+            return [], {}, details
+        contexts = retriever.search(query, top_k=min(top_k, len(retriever.documents)), mode="bm25")
+        raw_scores = retriever.score_diagnostics(query, include_dense=False)["bm25_raw"]
+        return contexts, raw_scores, details
 
     def _dense_search(
         self,
@@ -2314,11 +2318,65 @@ class KnowledgeBaseRetriever:
         ]
 
     def _filtered_chunks(self, knowledge_base_id: str, document_ids: Optional[List[str]] = None) -> List[StoredKnowledgeChunk]:
-        chunks = self.knowledge_service.list_chunks(knowledge_base_id, limit=10000)
-        document_id_set = set(_normalize_document_ids(document_ids))
-        if not document_id_set:
-            return chunks
-        return [chunk for chunk in chunks if chunk.document_id in document_id_set]
+        return self.knowledge_service.list_active_chunks(
+            knowledge_base_id,
+            document_ids=_normalize_document_ids(document_ids) or None,
+        )
+
+    def _lexical_retriever(
+        self,
+        knowledge_base_id: str,
+        document_ids: Optional[List[str]],
+    ) -> Tuple[Optional[InMemoryHybridRetriever], Dict[str, Any]]:
+        selected = _normalize_document_ids(document_ids)
+        versions = self.knowledge_service.list_index_versions(knowledge_base_id)
+        active_version_id = next((version.id for version in versions if version.status == "active"), "")
+        if selected:
+            chunks = self.knowledge_service.list_active_chunks(knowledge_base_id, document_ids=selected)
+            retriever = self._build_lexical_retriever(chunks)
+            return retriever, {
+                "indexed_chunk_count": len(chunks),
+                "active_index_version_id": active_version_id,
+                "cache_hit": False,
+                "document_filter_count": len(selected),
+            }
+        cache_key = (knowledge_base_id, active_version_id)
+        with self._lexical_cache_lock:
+            cached = self._lexical_cache.get(cache_key)
+            if cached is not None:
+                self._lexical_cache.move_to_end(cache_key)
+                return cached[0], {
+                    "indexed_chunk_count": cached[1],
+                    "active_index_version_id": active_version_id,
+                    "cache_hit": True,
+                    "document_filter_count": 0,
+                }
+        chunks = self.knowledge_service.list_active_chunks(knowledge_base_id)
+        retriever = self._build_lexical_retriever(chunks)
+        if retriever is not None:
+            with self._lexical_cache_lock:
+                self._lexical_cache[cache_key] = (retriever, len(chunks))
+                self._lexical_cache.move_to_end(cache_key)
+                while len(self._lexical_cache) > self._lexical_cache_size:
+                    self._lexical_cache.popitem(last=False)
+        return retriever, {
+            "indexed_chunk_count": len(chunks),
+            "active_index_version_id": active_version_id,
+            "cache_hit": False,
+            "document_filter_count": 0,
+        }
+
+    def _build_lexical_retriever(
+        self,
+        chunks: List[StoredKnowledgeChunk],
+    ) -> Optional[InMemoryHybridRetriever]:
+        if not chunks:
+            return None
+        return InMemoryHybridRetriever(
+            [_document_from_chunk(chunk) for chunk in chunks],
+            bm25_weight=self.bm25_weight,
+            dense_weight=self.dense_weight,
+        )
 
 
 def _document_from_chunk(chunk: StoredKnowledgeChunk, extra_metadata: Optional[Dict[str, Any]] = None) -> Document:

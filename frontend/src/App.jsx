@@ -65,6 +65,7 @@ import {
   deleteModelDeployment,
   getChatConfigurationLimits,
   getChatMessageTrace,
+  getJob,
   getTrace,
   getModelUsageSummary,
   getCurrentUser,
@@ -74,6 +75,7 @@ import {
   getEvaluationRun,
   downloadTrace,
   ingestWebsiteSource,
+  importWixqaCorpus,
   listChatConfigurations,
   listChatConversations,
   listChatMessageVersions,
@@ -82,10 +84,12 @@ import {
   listEvaluationDatasets,
   listEvaluationExperiments,
   listEvaluationExperimentRuns,
-  listKnowledgeChunks,
-  listKnowledgeDocuments,
+  listKnowledgeDocumentChunks,
+  listKnowledgeDocumentsPage,
   listKnowledgeBases,
   listKnowledgeIndexVersions,
+  listKnowledgeSourceCatalog,
+  listJobs,
   listAgentTools,
   listModelDeployments,
   listModelConnections,
@@ -197,6 +201,7 @@ const chunkingStrategies = [
   { value: "header_based", label: "Header-based Chunking" },
   { value: "semantic", label: "Semantic Chunking" },
   { value: "recursive", label: "Recursive Chunking" },
+  { value: "structure_aware_recursive", label: "Structure-aware recursive chunking" },
   { value: "hierarchical_parent_child", label: "Hierarchical / parent-child chunking" },
   { value: "structure_aware_custom", label: "Structure-aware / custom ara* chunking" }
 ];
@@ -230,10 +235,35 @@ const embeddingModelsByProvider = {
 };
 const supportedEmbeddingProvider = "Local";
 const supportedLocalEmbeddingModels = embeddingModelsByProvider.Local;
+const wixqaMiniLmProfileId = "wixqa_minilm_structure_v1";
+const defaultStructureAwareOptions = {
+  parent_document: "article_id",
+  target_body_tokens: 180,
+  soft_max_body_tokens: 210,
+  overlap_tokens: 30,
+  minimum_chunk_tokens: 60,
+  separators: ["heading", "subheading", "paragraph", "list", "sentence", "token"],
+  metadata_prefix: {
+    include_title: true,
+    include_heading_path: true,
+    include_article_type: false,
+    maximum_tokens: 40
+  },
+  rules: {
+    preserve_numbered_lists: true,
+    preserve_bullet_lists: true,
+    merge_small_adjacent_chunks: true,
+    overlap_only_within_same_section: true,
+    never_merge_across_articles: true
+  }
+};
 const defaultKnowledgeConfiguration = {
   chunking_strategy: "sliding_window_overlap",
+  chunking_profile_id: "",
   chunk_size: 800,
   chunk_overlap: 120,
+  embedding_options: { hard_max_wordpieces: 512 },
+  chunking_options: defaultStructureAwareOptions,
   embedding_deployment_id: defaultEmbeddingDeploymentId,
   external_processing_allowed: false,
   embedding_provider: "Local",
@@ -2086,6 +2116,8 @@ function ChatPanel({
   const [isFilterLoading, setIsFilterLoading] = useState(false);
   const [filterError, setFilterError] = useState("");
   const [filterQuery, setFilterQuery] = useState("");
+  const [filterPage, setFilterPage] = useState(0);
+  const [filterTotal, setFilterTotal] = useState(0);
   const [draftFilterDocumentIds, setDraftFilterDocumentIds] = useState(selectedFilterDocumentIds);
   const selectedKnowledgeBase = knowledgeBases.find((knowledgeBase) => knowledgeBase.id === selectedKnowledgeBaseId);
   const chatPlaceholder = selectedKnowledgeBase
@@ -2115,8 +2147,34 @@ function ChatPanel({
     setIsFilterOpen(false);
     setFilterDocuments([]);
     setFilterQuery("");
+    setFilterPage(0);
+    setFilterTotal(0);
     setDraftFilterDocumentIds([]);
   }, [selectedKnowledgeBaseId]);
+
+  useEffect(() => {
+    if (!isFilterOpen || !selectedKnowledgeBaseId) return undefined;
+    const timeout = window.setTimeout(async () => {
+      setIsFilterLoading(true);
+      setFilterError("");
+      try {
+        const page = await listKnowledgeDocumentsPage(selectedKnowledgeBaseId, {
+          query: filterQuery,
+          offset: filterPage * 50,
+          limit: 50
+        });
+        setFilterDocuments(page.items || []);
+        setFilterTotal(Number(page.total || 0));
+      } catch (error) {
+        setFilterError(`Document filter load failed: ${error.message}`);
+        setFilterDocuments([]);
+        setFilterTotal(0);
+      } finally {
+        setIsFilterLoading(false);
+      }
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [isFilterOpen, selectedKnowledgeBaseId, filterQuery, filterPage]);
 
   useEffect(() => {
     const list = messageListRef.current;
@@ -2131,18 +2189,9 @@ function ChatPanel({
     if (!selectedKnowledgeBaseId) return;
     setIsFilterOpen(true);
     setFilterQuery("");
+    setFilterPage(0);
     setFilterError("");
     setDraftFilterDocumentIds(selectedFilterDocumentIds);
-    setIsFilterLoading(true);
-    try {
-      const documents = await listKnowledgeDocuments(selectedKnowledgeBaseId);
-      setFilterDocuments(documents);
-    } catch (error) {
-      setFilterError(`Document filter load failed: ${error.message}`);
-      setFilterDocuments([]);
-    } finally {
-      setIsFilterLoading(false);
-    }
   }
 
   function toggleDraftFilterDocument(documentId) {
@@ -2163,8 +2212,6 @@ function ChatPanel({
     onFilterDocumentsChange([]);
     setIsFilterOpen(false);
   }
-
-  const filteredDocuments = filterDocuments.filter((document) => documentMatchesFilterQuery(document, filterQuery));
 
   return (
     <section className="chat-panel">
@@ -2389,7 +2436,10 @@ function ChatPanel({
               <IconOnly icon={Search} size={16} />
               <input
                 value={filterQuery}
-                onChange={(event) => setFilterQuery(event.target.value)}
+                onChange={(event) => {
+                  setFilterQuery(event.target.value);
+                  setFilterPage(0);
+                }}
                 placeholder="Search documents"
                 aria-label="Search documents"
               />
@@ -2399,19 +2449,21 @@ function ChatPanel({
               <button
                 className="text-action"
                 type="button"
-                onClick={() => setDraftFilterDocumentIds(filterDocuments.map((document) => document.id))}
+                onClick={() => setDraftFilterDocumentIds((current) => [
+                  ...new Set([...current, ...filterDocuments.map((document) => document.id)])
+                ])}
                 disabled={!filterDocuments.length}
               >
-                Select all
+                Select page
               </button>
             </div>
             <div className="document-filter-list">
               {isFilterLoading && <p className="muted-text">Loading documents...</p>}
               {filterError && <p className="config-warning-note">{filterError}</p>}
-              {!isFilterLoading && !filterError && filteredDocuments.length === 0 && (
-                <p className="muted-text">{filterDocuments.length ? "No documents match your search." : "No documents found in this Knowledge Base."}</p>
+              {!isFilterLoading && !filterError && filterDocuments.length === 0 && (
+                <p className="muted-text">{filterQuery ? "No documents match your search." : "No documents found in this Knowledge Base."}</p>
               )}
-              {!isFilterLoading && !filterError && filteredDocuments.map((document) => (
+              {!isFilterLoading && !filterError && filterDocuments.map((document) => (
                 <label key={document.id} className="document-filter-item">
                   <input
                     type="checkbox"
@@ -2426,6 +2478,27 @@ function ChatPanel({
                 </label>
               ))}
             </div>
+            {filterTotal > 50 && (
+              <div className="document-pagination compact-pagination">
+                <button
+                  className="secondary-action"
+                  type="button"
+                  disabled={filterPage === 0}
+                  onClick={() => setFilterPage((current) => Math.max(0, current - 1))}
+                >
+                  <IconLabel icon={ChevronLeft}>Previous</IconLabel>
+                </button>
+                <span>Page {filterPage + 1} of {Math.ceil(filterTotal / 50)} | {filterTotal} documents</span>
+                <button
+                  className="secondary-action"
+                  type="button"
+                  disabled={(filterPage + 1) * 50 >= filterTotal}
+                  onClick={() => setFilterPage((current) => current + 1)}
+                >
+                  <IconLabel icon={ChevronRight}>Next</IconLabel>
+                </button>
+              </div>
+            )}
             <footer>
               <button className="secondary-action" type="button" onClick={clearDocumentFilter}>Clear filter</button>
               <button className="secondary-action" type="button" onClick={() => setIsFilterOpen(false)}>Cancel</button>
@@ -3452,10 +3525,16 @@ function formatTraceScore(value) {
 function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAction }) {
   const [items, setItems] = useState([]);
   const [documents, setDocuments] = useState([]);
-  const [chunks, setChunks] = useState([]);
+  const [documentChunks, setDocumentChunks] = useState({});
+  const [loadingDocumentChunks, setLoadingDocumentChunks] = useState([]);
+  const [documentQuery, setDocumentQuery] = useState("");
+  const [documentPage, setDocumentPage] = useState(0);
+  const [documentTotal, setDocumentTotal] = useState(0);
   const [processingTrace, setProcessingTrace] = useState([]);
   const [indexVersions, setIndexVersions] = useState([]);
   const [embeddingDeployments, setEmbeddingDeployments] = useState([]);
+  const [preparedSources, setPreparedSources] = useState([]);
+  const [knowledgeJobs, setKnowledgeJobs] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingDocuments, setIsLoadingDocuments] = useState(false);
   const [error, setError] = useState("");
@@ -3469,9 +3548,15 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, 
     try {
       const nextItems = await listKnowledgeBases();
       setItems(nextItems);
-      listModelDeployments({ capability: "embedding", enabled: true })
-        .then(setEmbeddingDeployments)
-        .catch(() => setEmbeddingDeployments([]));
+      Promise.all([
+        listModelDeployments({ capability: "embedding", enabled: true }).catch(() => []),
+        listKnowledgeSourceCatalog().catch(() => []),
+        listJobs({ limit: 200 }).catch(() => [])
+      ]).then(([deployments, sources, jobs]) => {
+        setEmbeddingDeployments(deployments);
+        setPreparedSources(sources);
+        setKnowledgeJobs(jobs.filter((job) => job.resource_type === "knowledge_base"));
+      });
       if (!selectedKnowledgeBaseId && nextItems.length > 0) {
         onSelectKnowledgeBase(nextItems[0].id);
       }
@@ -3485,21 +3570,26 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, 
   async function refreshDocuments(knowledgeBaseId = selectedKnowledgeBaseId) {
     if (!knowledgeBaseId) {
       setDocuments([]);
-      setChunks([]);
+      setDocumentChunks({});
+      setDocumentTotal(0);
       setProcessingTrace([]);
       setIndexVersions([]);
       return;
     }
     setIsLoadingDocuments(true);
     try {
-      const [nextDocuments, nextChunks, nextTrace, nextVersions] = await Promise.all([
-        listKnowledgeDocuments(knowledgeBaseId),
-        listKnowledgeChunks(knowledgeBaseId),
+      const [documentResult, nextTrace, nextVersions] = await Promise.all([
+        listKnowledgeDocumentsPage(knowledgeBaseId, {
+          query: documentQuery,
+          offset: documentPage * 25,
+          limit: 25
+        }),
         getKnowledgeProcessingTrace(knowledgeBaseId),
         listKnowledgeIndexVersions(knowledgeBaseId).catch(() => [])
       ]);
-      setDocuments(nextDocuments);
-      setChunks(nextChunks);
+      setDocuments(documentResult.items || []);
+      setDocumentTotal(Number(documentResult.total || 0));
+      setDocumentChunks({});
       setProcessingTrace(nextTrace);
       setIndexVersions(nextVersions);
     } catch (requestError) {
@@ -3514,8 +3604,44 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, 
   }, []);
 
   useEffect(() => {
-    refreshDocuments();
+    setDocumentPage(0);
+    setDocumentQuery("");
   }, [selectedKnowledgeBaseId]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => refreshDocuments(), 250);
+    return () => window.clearTimeout(timeout);
+  }, [selectedKnowledgeBaseId, documentPage, documentQuery]);
+
+  useEffect(() => {
+    const activeJobs = knowledgeJobs.filter((job) => ["queued", "running", "cancel_requested"].includes(job.status));
+    if (!activeJobs.length) return undefined;
+    const timer = window.setInterval(async () => {
+      const refreshed = await Promise.all(activeJobs.map((job) => getJob(job.id).catch(() => job)));
+      setKnowledgeJobs((current) => {
+        const updates = new Map(refreshed.map((job) => [job.id, job]));
+        return current.map((job) => updates.get(job.id) || job);
+      });
+      if (refreshed.some((job) => ["completed", "failed", "cancelled"].includes(job.status))) {
+        await refreshKnowledgeBases();
+        if (selectedKnowledgeBaseId) await refreshDocuments(selectedKnowledgeBaseId);
+      }
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [knowledgeJobs, selectedKnowledgeBaseId]);
+
+  async function loadDocumentChunks(documentId) {
+    if (!selectedKnowledgeBaseId || documentChunks[documentId] || loadingDocumentChunks.includes(documentId)) return;
+    setLoadingDocumentChunks((current) => [...current, documentId]);
+    try {
+      const chunks = await listKnowledgeDocumentChunks(selectedKnowledgeBaseId, documentId);
+      setDocumentChunks((current) => ({ ...current, [documentId]: chunks }));
+    } catch (requestError) {
+      setActionStatus(`Chunk load failed: ${requestError.message}`);
+    } finally {
+      setLoadingDocumentChunks((current) => current.filter((id) => id !== documentId));
+    }
+  }
 
   async function handleReindex(knowledgeBaseId) {
     setActionStatus("Re-indexing knowledge base...");
@@ -3565,7 +3691,7 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, 
       setActionStatus("Knowledge base deleted");
       onSelectKnowledgeBase("");
       setDocuments([]);
-      setChunks([]);
+      setDocumentChunks({});
       setProcessingTrace([]);
       setIndexVersions([]);
       await refreshKnowledgeBases();
@@ -3575,12 +3701,9 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, 
   }
 
   const selectedKnowledgeBase = items.find((item) => item.id === selectedKnowledgeBaseId);
-  const chunksByDocument = chunks.reduce((groups, chunk) => {
-    const nextGroups = groups;
-    if (!nextGroups[chunk.document_id]) nextGroups[chunk.document_id] = [];
-    nextGroups[chunk.document_id].push(chunk);
-    return nextGroups;
-  }, {});
+  const visibleKnowledgeJobs = knowledgeJobs
+    .filter((job) => job.job_type === "knowledge_wixqa_corpus")
+    .slice(0, 3);
 
   return (
     <section className="page-stack">
@@ -3591,6 +3714,25 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, 
       </div>
       {error && <div className="alert">Knowledge API unavailable: {error}</div>}
       {actionStatus && <div className="inline-status">{actionStatus}</div>}
+      {visibleKnowledgeJobs.map((job) => (
+        <div className={`knowledge-job-banner status-${job.status}`} key={job.id}>
+          <div>
+            <strong>{job.job_type === "knowledge_wixqa_corpus" ? "WixQA corpus import" : "Knowledge processing"}</strong>
+            <span>
+              {job.progress?.step ? formatPipelineStep(job.progress.step) : job.status}
+              {Number.isFinite(Number(job.progress?.percent)) ? ` · ${Number(job.progress.percent).toFixed(0)}%` : ""}
+            </span>
+            {job.error && <small className="error-text">{job.error}</small>}
+          </div>
+          <div className="knowledge-job-progress" aria-label={`${Number(job.progress?.percent || 0)} percent complete`}>
+            <span
+              style={{
+                width: `${job.status === "completed" ? 100 : Math.max(0, Math.min(100, Number(job.progress?.percent || 0)))}%`
+              }}
+            />
+          </div>
+        </div>
+      ))}
       <div className="table-panel">
         <table>
           <thead>
@@ -3698,10 +3840,30 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, 
             </div>
             {detailTab === "documents" ? (
               <div className="document-list detail-tab-panel">
+                <div className="document-list-toolbar">
+                  <label>
+                    <IconOnly icon={Search} size={16} />
+                    <input
+                      value={documentQuery}
+                      placeholder="Search document title, WixQA ID, or URL"
+                      onChange={(event) => {
+                        setDocumentQuery(event.target.value);
+                        setDocumentPage(0);
+                      }}
+                    />
+                  </label>
+                  <span>{documentTotal.toLocaleString()} document{documentTotal === 1 ? "" : "s"}</span>
+                </div>
                 {isLoadingDocuments && <p className="muted-text">Loading documents...</p>}
                 {!isLoadingDocuments && documents.length === 0 && <p className="muted-text">No documents yet. Use Modify KB to add local files or website sources.</p>}
-                {documents.map((document, index) => (
-                  <details key={document.id} className="document-card document-accordion" open={index === 0}>
+                {documents.map((document) => (
+                  <details
+                    key={document.id}
+                    className="document-card document-accordion"
+                    onToggle={(event) => {
+                      if (event.currentTarget.open) loadDocumentChunks(document.id);
+                    }}
+                  >
                     <summary className="document-card-top">
                       <div>
                         <strong>{document.title}</strong>
@@ -3722,10 +3884,33 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, 
                     <div className="document-accordion-body">
                       <p className="document-preview">{document.text.slice(0, 260)}{document.text.length > 260 ? "..." : ""}</p>
                       <MetadataGrid metadata={document.metadata} />
-                      <DocumentChunkList chunks={chunksByDocument[document.id] || []} />
+                      {loadingDocumentChunks.includes(document.id)
+                        ? <p className="muted-text">Loading chunks...</p>
+                        : <DocumentChunkList chunks={documentChunks[document.id] || []} />}
                     </div>
                   </details>
                 ))}
+                {documentTotal > 25 && (
+                  <div className="document-pagination">
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      disabled={documentPage === 0}
+                      onClick={() => setDocumentPage((current) => Math.max(0, current - 1))}
+                    >
+                      <IconLabel icon={ChevronLeft}>Previous</IconLabel>
+                    </button>
+                    <span>Page {documentPage + 1} of {Math.ceil(documentTotal / 25)}</span>
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      disabled={(documentPage + 1) * 25 >= documentTotal}
+                      onClick={() => setDocumentPage((current) => current + 1)}
+                    >
+                      <IconLabel icon={ChevronRight}>Next</IconLabel>
+                    </button>
+                  </div>
+                )}
               </div>
             ) : detailTab === "indexes" ? (
               <IndexVersionPanel versions={indexVersions} />
@@ -3742,11 +3927,18 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, 
           mode={knowledgeBaseModal.mode}
           knowledgeBase={knowledgeBaseModal.knowledgeBase}
           embeddingDeployments={embeddingDeployments}
+          preparedSources={preparedSources}
+          confirmAction={confirmAction}
           onClose={() => setKnowledgeBaseModal(null)}
-          onCreated={async () => {
+          onJobQueued={(job, knowledgeBaseId) => {
+            setKnowledgeJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
+            onSelectKnowledgeBase(knowledgeBaseId);
+            setActionStatus("WixQA corpus import queued. Keep the worker running to process it.");
+          }}
+          onCreated={async (knowledgeBaseId) => {
             setKnowledgeBaseModal(null);
             await refreshKnowledgeBases();
-            await refreshDocuments();
+            await refreshDocuments(knowledgeBaseId);
           }}
         />
       )}
@@ -3903,8 +4095,11 @@ function AddKnowledgeBaseModal({
   mode = "create",
   knowledgeBase,
   embeddingDeployments = [],
+  preparedSources = [],
+  confirmAction,
   onClose,
-  onCreated
+  onCreated,
+  onJobQueued = () => {}
 }) {
   const isEdit = mode === "edit";
   const [name, setName] = useState(knowledgeBase?.name || "Business Workflow Knowledge Base");
@@ -3912,26 +4107,109 @@ function AddKnowledgeBaseModal({
   const [configuration, setConfiguration] = useState(() => knowledgeConfigurationFromRecord(knowledgeBase));
   const [sourceType, setSourceType] = useState("upload");
   const [files, setFiles] = useState([]);
+  const [usePreparedWixqaCorpus, setUsePreparedWixqaCorpus] = useState(false);
+  const [preparedCorpusDocumentLimit, setPreparedCorpusDocumentLimit] = useState(6221);
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [status, setStatus] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const wixqaCorpus = preparedSources.find((source) => source.id === "wix_kb_corpus");
+  const availableCorpusDocuments = Number(wixqaCorpus?.document_count || 6221);
+  const selectedCorpusDocuments = Math.max(
+    1,
+    Math.min(Number(preparedCorpusDocumentLimit || 1), availableCorpusDocuments)
+  );
+  const selectedEmbedding = embeddingDeployments.find(
+    (deployment) => deployment.id === configuration.embedding_deployment_id
+  );
+  const usesStructureAwareProfile = configuration.chunking_strategy === "structure_aware_recursive";
+  const structureAwareOptions = configuration.chunking_options || defaultStructureAwareOptions;
+  const estimatedCorpusChunks = estimateCorpusChunks(
+    Number(wixqaCorpus?.character_count || 0)
+      * selectedCorpusDocuments
+      / Math.max(availableCorpusDocuments, 1),
+    selectedCorpusDocuments,
+    usesStructureAwareProfile
+      ? Number(structureAwareOptions.target_body_tokens || 180) * 4
+      : Number(configuration.chunk_size || 800),
+    usesStructureAwareProfile
+      ? Number(structureAwareOptions.overlap_tokens || 30) * 4
+      : chunkingStrategyUsesOverlap(configuration.chunking_strategy) ? Number(configuration.chunk_overlap || 0) : 0
+  );
+
+  function applyWixqaMiniLmProfile() {
+    const miniLmDeployment = embeddingDeployments.find(
+      (deployment) => deployment.id === "model-local-minilm-384"
+        || (
+          deployment.model === "sentence-transformers/all-MiniLM-L6-v2"
+          && Number(deployment.limits?.dimension || 0) === 384
+        )
+    );
+    setConfiguration((current) => sanitizeKnowledgeConfiguration({
+      ...current,
+      chunking_strategy: "structure_aware_recursive",
+      chunking_profile_id: wixqaMiniLmProfileId,
+      embedding_deployment_id: miniLmDeployment?.id || "model-local-minilm-384",
+      embedding_provider: miniLmDeployment?.provider || "Local",
+      embedding_model: "sentence-transformers/all-MiniLM-L6-v2",
+      embedding_options: { hard_max_wordpieces: 240 },
+      chunking_options: defaultStructureAwareOptions
+    }));
+  }
 
   async function submit(event) {
     event.preventDefault();
     setIsSubmitting(true);
     setStatus(isEdit ? "Updating knowledge base..." : "Creating knowledge base...");
     try {
+      const usesRemoteEmbedding = Boolean(
+        usePreparedWixqaCorpus
+        && (
+          selectedEmbedding
+            ? selectedEmbedding.locality !== "local"
+            : String(configuration.embedding_provider || "").toLowerCase() !== "local"
+        )
+      );
+      if (usesRemoteEmbedding) {
+        const confirmed = await confirmAction({
+          title: "Use remote embedding for WixQA?",
+          message: `This import will embed approximately ${estimatedCorpusChunks.toLocaleString()} chunks using "${selectedEmbedding.name}".`,
+          detail: "Remote processing may send WixQA content to the provider and incur usage charges.",
+          confirmLabel: "Confirm and queue import"
+        });
+        if (!confirmed) {
+          setStatus("WixQA corpus import was not queued.");
+          return;
+        }
+      }
+      const normalizedConfiguration = sanitizeKnowledgeConfiguration(configuration);
       const payload = {
         name,
         description,
-        configuration: sanitizeKnowledgeConfiguration(configuration)
+        configuration: normalizedConfiguration
       };
+      const previousConfiguration = sanitizeKnowledgeConfiguration(
+        knowledgeBase?.metadata?.configuration || defaultKnowledgeConfiguration
+      );
+      const configurationChanged = isEdit
+        && JSON.stringify(previousConfiguration) !== JSON.stringify(normalizedConfiguration);
       const savedKnowledgeBase = isEdit
         ? await updateKnowledgeBase(knowledgeBase.id, payload)
         : await createKnowledgeBase(payload);
       if (sourceType === "upload") {
-        if (!isEdit && !files.length) throw new Error("Choose at least one local file.");
-        if (files.length) {
+        if (usePreparedWixqaCorpus) {
+          if (!wixqaCorpus?.available) {
+            throw new Error(wixqaCorpus?.error || "Prepared WixQA corpus is not available.");
+          }
+          setStatus("Queueing WixQA corpus import...");
+          const job = await importWixqaCorpus(
+            savedKnowledgeBase.id,
+            usesRemoteEmbedding,
+            selectedCorpusDocuments
+          );
+          onJobQueued(job, savedKnowledgeBase.id);
+        } else if (!isEdit && !files.length) {
+          throw new Error("Choose at least one local file or select the prepared WixQA corpus.");
+        } else if (files.length) {
           setStatus("Uploading and indexing files...");
           await uploadKnowledgeSource(savedKnowledgeBase.id, files);
         }
@@ -3941,8 +4219,24 @@ function AddKnowledgeBaseModal({
       } else if (!isEdit) {
         throw new Error("Enter a public website URL.");
       }
-      setStatus(isEdit ? "Knowledge base updated" : "Knowledge base indexed");
-      await onCreated();
+      const sourceWillReindex = usePreparedWixqaCorpus
+        || files.length > 0
+        || (sourceType === "website" && Boolean(websiteUrl.trim()));
+      if (
+        configurationChanged
+        && Number(knowledgeBase?.document_count || 0) > 0
+        && !sourceWillReindex
+      ) {
+        setStatus("Knowledge base updated. Queueing a draft re-index...");
+        const job = await reindexKnowledgeBase(savedKnowledgeBase.id, false);
+        onJobQueued(job, savedKnowledgeBase.id);
+      }
+      setStatus(
+        usePreparedWixqaCorpus
+          ? "Knowledge base saved and WixQA import queued"
+          : isEdit ? "Knowledge base updated" : "Knowledge base indexed"
+      );
+      await onCreated(savedKnowledgeBase.id);
     } catch (requestError) {
       setStatus(requestError.message);
     } finally {
@@ -3956,7 +4250,7 @@ function AddKnowledgeBaseModal({
         <header className="modal-header">
           <div>
             <h2>{isEdit ? "Update knowledge base" : "Add knowledge base"}</h2>
-            <p>{isEdit ? "Update name, description, add more documents, or delete existing documents." : "Enter details and select multiple files or a public website source."}</p>
+            <p>{isEdit ? "Update settings and add local, prepared WixQA, or website content." : "Enter details and select local files, the prepared WixQA corpus, or a public website."}</p>
           </div>
           <button className="icon-button modal-close" aria-label="Close modal" onClick={onClose}><IconOnly icon={X} /></button>
         </header>
@@ -3975,14 +4269,35 @@ function AddKnowledgeBaseModal({
               <p>These settings are saved with the knowledge base and applied to new ingestion or re-indexing.</p>
             </div>
             <label>
+              Chunking preset
+              <select
+                value={configuration.chunking_profile_id || ""}
+                onChange={(event) => {
+                  if (event.target.value === wixqaMiniLmProfileId) {
+                    applyWixqaMiniLmProfile();
+                  } else {
+                    setConfiguration((current) => ({ ...current, chunking_profile_id: "" }));
+                  }
+                }}
+              >
+                <option value="">Custom / existing configuration</option>
+                <option value={wixqaMiniLmProfileId}>WixQA MiniLM optimized</option>
+              </select>
+            </label>
+            <label>
               Chunking strategy
               <select
                 value={configuration.chunking_strategy}
                 onChange={(event) => {
                   const strategy = event.target.value;
+                  if (strategy === "structure_aware_recursive") {
+                    applyWixqaMiniLmProfile();
+                    return;
+                  }
                   setConfiguration((current) => ({
                     ...current,
                     chunking_strategy: strategy,
+                    chunking_profile_id: "",
                     chunk_overlap: strategy === "fixed_size" ? 0 : current.chunk_overlap
                   }));
                 }}
@@ -3992,31 +4307,33 @@ function AddKnowledgeBaseModal({
                 ))}
               </select>
             </label>
-            <div className="kb-config-grid">
-              <label>
-                Chunk size
-                <input
-                  type="number"
-                  min="100"
-                  max="12000"
-                  step="50"
-                  value={configuration.chunk_size}
-                  onChange={(event) => setConfiguration((current) => ({ ...current, chunk_size: Number(event.target.value) }))}
-                />
-              </label>
-              <label>
-                Overlap size
-                <input
-                  type="number"
-                  min="0"
-                  max={Math.max(Number(configuration.chunk_size) - 1, 0)}
-                  step="10"
-                  disabled={!chunkingStrategyUsesOverlap(configuration.chunking_strategy)}
-                  value={chunkingStrategyUsesOverlap(configuration.chunking_strategy) ? configuration.chunk_overlap : 0}
-                  onChange={(event) => setConfiguration((current) => ({ ...current, chunk_overlap: Number(event.target.value) }))}
-                />
-              </label>
-            </div>
+            {!usesStructureAwareProfile && (
+              <div className="kb-config-grid">
+                <label>
+                  Chunk size
+                  <input
+                    type="number"
+                    min="100"
+                    max="12000"
+                    step="50"
+                    value={configuration.chunk_size}
+                    onChange={(event) => setConfiguration((current) => ({ ...current, chunk_size: Number(event.target.value) }))}
+                  />
+                </label>
+                <label>
+                  Overlap size
+                  <input
+                    type="number"
+                    min="0"
+                    max={Math.max(Number(configuration.chunk_size) - 1, 0)}
+                    step="10"
+                    disabled={!chunkingStrategyUsesOverlap(configuration.chunking_strategy)}
+                    value={chunkingStrategyUsesOverlap(configuration.chunking_strategy) ? configuration.chunk_overlap : 0}
+                    onChange={(event) => setConfiguration((current) => ({ ...current, chunk_overlap: Number(event.target.value) }))}
+                  />
+                </label>
+              </div>
+            )}
             <div className="kb-config-grid">
               <label>
                 Embedding deployment
@@ -4037,7 +4354,17 @@ function AddKnowledgeBaseModal({
                     <option value={configuration.embedding_deployment_id}>{configuration.embedding_deployment_id} (current)</option>
                   )}
                   {embeddingDeployments.map((deployment) => (
-                    <option key={deployment.id} value={deployment.id}>
+                    <option
+                      key={deployment.id}
+                      value={deployment.id}
+                      disabled={
+                        usesStructureAwareProfile
+                        && (
+                          deployment.model !== "sentence-transformers/all-MiniLM-L6-v2"
+                          || Number(deployment.limits?.dimension || 0) !== 384
+                        )
+                      }
+                    >
                       {shortDeploymentLabel(deployment)}
                     </option>
                   ))}
@@ -4047,7 +4374,188 @@ function AddKnowledgeBaseModal({
                 Resolved embedding model
                 <input value={`${configuration.embedding_provider} / ${configuration.embedding_model}`} readOnly />
               </label>
+              <label>
+                Embedding dimensions
+                <input value={selectedEmbedding?.limits?.dimension || (configuration.embedding_model === "sentence-transformers/all-MiniLM-L6-v2" ? 384 : "-")} readOnly />
+              </label>
             </div>
+            {usesStructureAwareProfile && (
+              <details className="kb-advanced-config">
+                <summary>Advanced structure-aware settings</summary>
+                <div className="kb-config-grid">
+                  <label>
+                    Hard maximum WordPieces
+                    <input
+                      type="number"
+                      min="16"
+                      max="512"
+                      value={configuration.embedding_options?.hard_max_wordpieces || 240}
+                      onChange={(event) => setConfiguration((current) => ({
+                        ...current,
+                        embedding_options: {
+                          ...current.embedding_options,
+                          hard_max_wordpieces: Number(event.target.value)
+                        }
+                      }))}
+                    />
+                  </label>
+                  <label>
+                    Parent document
+                    <select
+                      value={structureAwareOptions.parent_document || "article_id"}
+                      onChange={(event) => setConfiguration((current) => ({
+                        ...current,
+                        chunking_options: {
+                          ...current.chunking_options,
+                          parent_document: event.target.value
+                        }
+                      }))}
+                    >
+                      <option value="article_id">WixQA article ID</option>
+                      <option value="document_id">Stored document ID</option>
+                    </select>
+                  </label>
+                  {[
+                    ["target_body_tokens", "Target body tokens"],
+                    ["soft_max_body_tokens", "Soft maximum body tokens"],
+                    ["overlap_tokens", "Overlap tokens"],
+                    ["minimum_chunk_tokens", "Minimum chunk tokens"]
+                  ].map(([key, label]) => (
+                    <label key={key}>
+                      {label}
+                      <input
+                        type="number"
+                        min={key === "minimum_chunk_tokens" ? 1 : 0}
+                        max="510"
+                        value={structureAwareOptions[key]}
+                        onChange={(event) => setConfiguration((current) => ({
+                          ...current,
+                          chunking_options: {
+                            ...current.chunking_options,
+                            [key]: Number(event.target.value)
+                          }
+                        }))}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <fieldset className="kb-option-fieldset">
+                  <legend>Recursive separators</legend>
+                  <div className="kb-checkbox-grid">
+                    {["heading", "subheading", "paragraph", "list", "sentence", "token"].map((separator) => (
+                      <label className="check-row" key={separator}>
+                        <input
+                          type="checkbox"
+                          checked={(structureAwareOptions.separators || []).includes(separator)}
+                          disabled={separator === "token"}
+                          onChange={(event) => setConfiguration((current) => {
+                            const existing = current.chunking_options?.separators || [];
+                            const selected = new Set(existing);
+                            if (event.target.checked) selected.add(separator);
+                            else selected.delete(separator);
+                            selected.add("token");
+                            const separators = [
+                              "heading",
+                              "subheading",
+                              "paragraph",
+                              "list",
+                              "sentence",
+                              "token"
+                            ].filter((item) => selected.has(item));
+                            return {
+                              ...current,
+                              chunking_options: { ...current.chunking_options, separators }
+                            };
+                          })}
+                        />
+                        {separator}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <fieldset className="kb-option-fieldset">
+                  <legend>Embedding metadata prefix</legend>
+                  <div className="kb-checkbox-grid">
+                    {[
+                      ["include_title", "Include title"],
+                      ["include_heading_path", "Include heading path"],
+                      ["include_article_type", "Include article type"]
+                    ].map(([key, label]) => (
+                      <label className="check-row" key={key}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(structureAwareOptions.metadata_prefix?.[key])}
+                          onChange={(event) => setConfiguration((current) => ({
+                            ...current,
+                            chunking_options: {
+                              ...current.chunking_options,
+                              metadata_prefix: {
+                                ...current.chunking_options?.metadata_prefix,
+                                [key]: event.target.checked
+                              }
+                            }
+                          }))}
+                        />
+                        {label}
+                      </label>
+                    ))}
+                    <label>
+                      Prefix maximum tokens
+                      <input
+                        type="number"
+                        min="0"
+                        max="509"
+                        value={structureAwareOptions.metadata_prefix?.maximum_tokens || 0}
+                        onChange={(event) => setConfiguration((current) => ({
+                          ...current,
+                          chunking_options: {
+                            ...current.chunking_options,
+                            metadata_prefix: {
+                              ...current.chunking_options?.metadata_prefix,
+                              maximum_tokens: Number(event.target.value)
+                            }
+                          }
+                        }))}
+                      />
+                    </label>
+                  </div>
+                </fieldset>
+                <fieldset className="kb-option-fieldset">
+                  <legend>Preservation rules</legend>
+                  <div className="kb-checkbox-grid">
+                    {Object.entries({
+                      preserve_numbered_lists: "Preserve numbered lists",
+                      preserve_bullet_lists: "Preserve bullet lists",
+                      merge_small_adjacent_chunks: "Merge small adjacent chunks",
+                      overlap_only_within_same_section: "Overlap only within the same section",
+                      never_merge_across_articles: "Never merge across articles"
+                    }).map(([key, label]) => (
+                      <label className="check-row" key={key}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(structureAwareOptions.rules?.[key])}
+                          disabled={key === "never_merge_across_articles"}
+                          onChange={(event) => setConfiguration((current) => ({
+                            ...current,
+                            chunking_options: {
+                              ...current.chunking_options,
+                              rules: {
+                                ...current.chunking_options?.rules,
+                                [key]: event.target.checked
+                              }
+                            }
+                          }))}
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <p className="muted-text compact-muted">
+                  The 240 WordPiece limit includes metadata and special tokens. Prefixes affect embeddings only.
+                </p>
+              </details>
+            )}
             <label className="check-row">
               <input
                 type="checkbox"
@@ -4064,7 +4572,14 @@ function AddKnowledgeBaseModal({
             <button type="button" className={sourceType === "upload" ? "selected" : ""} onClick={() => setSourceType("upload")}>
               <IconLabel icon={HardDrive}>{isEdit ? "Add local files" : "Local device"}</IconLabel>
             </button>
-            <button type="button" className={sourceType === "website" ? "selected" : ""} onClick={() => setSourceType("website")}>
+            <button
+              type="button"
+              className={sourceType === "website" ? "selected" : ""}
+              onClick={() => {
+                setSourceType("website");
+                setUsePreparedWixqaCorpus(false);
+              }}
+            >
               <IconLabel icon={Globe}>{isEdit ? "Add website" : "Public website"}</IconLabel>
             </button>
             <button type="button" disabled><IconLabel icon={Database}>Google Drive soon</IconLabel></button>
@@ -4072,16 +4587,64 @@ function AddKnowledgeBaseModal({
             <button type="button" disabled><IconLabel icon={Database}>Databases soon</IconLabel></button>
           </div>
           {sourceType === "upload" ? (
-            <label>
-              Files
-              <input
-                type="file"
-                multiple
-                accept=".txt,.json,.jsonl,.md,.pdf,.docx,.aratxt,.arajson,.aramd"
-                onChange={(event) => setFiles(Array.from(event.target.files || []))}
-              />
-              <small>Supported: txt, json, jsonl, md, pdf, docx, aratxt, arajson, aramd.</small>
-            </label>
+            <div className="local-source-options">
+              <label className={`prepared-corpus-option ${usePreparedWixqaCorpus ? "selected" : ""}`}>
+                <input
+                  type="checkbox"
+                  checked={usePreparedWixqaCorpus}
+                  disabled={!wixqaCorpus?.available}
+                  onChange={(event) => {
+                    setUsePreparedWixqaCorpus(event.target.checked);
+                    if (event.target.checked) setFiles([]);
+                  }}
+                />
+                <div>
+                  <strong>Use prepared WixQA corpus</strong>
+                  <span>
+                    {wixqaCorpus?.available
+                      ? `${availableCorpusDocuments.toLocaleString()} available documents - ${formatBytes(wixqaCorpus.size_bytes)}`
+                      : wixqaCorpus?.error || "Checking prepared corpus availability..."}
+                  </span>
+                  {isEdit && knowledgeBase?.document_count > 0 && (
+                    <small>
+                      Existing documents remain, so the final Knowledge Base may contain more than the requested selection.
+                    </small>
+                  )}
+                  {!wixqaCorpus?.available && wixqaCorpus?.download_command && (
+                    <code>{wixqaCorpus.download_command}</code>
+                  )}
+                </div>
+              </label>
+              {usePreparedWixqaCorpus && wixqaCorpus?.available && (
+                <label className="prepared-corpus-limit">
+                  Documents to include
+                  <input
+                    type="number"
+                    min="1"
+                    max={availableCorpusDocuments}
+                    value={preparedCorpusDocumentLimit}
+                    onChange={(event) => setPreparedCorpusDocumentLimit(
+                      Math.max(1, Math.min(Number(event.target.value || 1), availableCorpusDocuments))
+                    )}
+                  />
+                  <small>
+                    Imports the first {selectedCorpusDocuments.toLocaleString()} normalized corpus records
+                    deterministically. Estimated index size: {estimatedCorpusChunks.toLocaleString()} chunks.
+                  </small>
+                </label>
+              )}
+              <label>
+                Files
+                <input
+                  type="file"
+                  multiple
+                  disabled={usePreparedWixqaCorpus}
+                  accept=".txt,.json,.jsonl,.md,.pdf,.docx,.aratxt,.arajson,.aramd"
+                  onChange={(event) => setFiles(Array.from(event.target.files || []))}
+                />
+                <small>Supported: txt, json, jsonl, md, pdf, docx, aratxt, arajson, aramd.</small>
+              </label>
+            </div>
           ) : (
             <label>
               Public website URL
@@ -4916,6 +5479,7 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
   const [view, setView] = useState("setup");
   const [status, setStatus] = useState("");
   const [isBusy, setIsBusy] = useState(false);
+  const [isLoadingCompatibility, setIsLoadingCompatibility] = useState(false);
   const [diagnosticLimit, setDiagnosticLimit] = useState(100);
   const [form, setForm] = useState({
     name: "WixQA configuration benchmark",
@@ -4938,6 +5502,11 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
     && selectedRagxplain.judge === selectedRun?.metadata?.judge_deployment_id
   );
   const selectedKnowledgeBase = knowledgeBases.find((item) => item.id === form.knowledgeBaseId);
+  const wixqaDocumentCount = Number(datasets[0]?.knowledge_base_document_count || 0);
+  const hasCompatibleDataset = datasets.some((item) => Number(item.compatible_record_count || 0) > 0);
+  const hasNonWixqaDocuments = Boolean(
+    selectedKnowledgeBase && Number(selectedKnowledgeBase.document_count || 0) !== wixqaDocumentCount
+  );
   const activeExperiment = selectedExperiment && ["queued", "running"].includes(selectedExperiment.status);
 
   useEffect(() => {
@@ -4948,7 +5517,7 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
           listKnowledgeBases(),
           listChatConfigurations(),
           listModelDeployments({ capability: "judge", enabled: true }).catch(() => []),
-          listEvaluationDatasets(),
+          listEvaluationDatasets(selectedKnowledgeBaseId || ""),
           listEvaluationExperiments()
         ]);
         if (cancelled) return;
@@ -4974,6 +5543,46 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
     load();
     return () => { cancelled = true; };
   }, [selectedKnowledgeBaseId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadDatasetCompatibility() {
+      if (!form.knowledgeBaseId) return;
+      setIsLoadingCompatibility(true);
+      try {
+        const nextDatasets = await listEvaluationDatasets(form.knowledgeBaseId);
+        if (cancelled) return;
+        setDatasets(nextDatasets);
+        setForm((current) => {
+          const nextLimits = {};
+          Object.entries(current.datasetLimits).forEach(([datasetId, value]) => {
+            const dataset = nextDatasets.find((item) => item.id === datasetId);
+            const maximum = Number(dataset?.compatible_record_count || 0);
+            if (maximum > 0) {
+              nextLimits[datasetId] = Math.min(Math.max(Number(value) || 1, 1), maximum);
+            }
+          });
+          if (!Object.keys(nextLimits).length) {
+            nextDatasets.forEach((dataset) => {
+              const maximum = Number(dataset.compatible_record_count || 0);
+              if (maximum > 0) {
+                nextLimits[dataset.id] = Math.min(maximum, dataset.id === "synthetic" ? 100 : 20);
+              }
+            });
+          }
+          return { ...current, datasetLimits: nextLimits };
+        });
+      } catch (error) {
+        if (!cancelled) {
+          setStatus(`WixQA compatibility load failed: ${error.message}`);
+        }
+      } finally {
+        if (!cancelled) setIsLoadingCompatibility(false);
+      }
+    }
+    loadDatasetCompatibility();
+    return () => { cancelled = true; };
+  }, [form.knowledgeBaseId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -5038,7 +5647,14 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
   function setDatasetEnabled(dataset, enabled) {
     setForm((current) => {
       const datasetLimits = { ...current.datasetLimits };
-      if (enabled) datasetLimits[dataset.id] = Math.min(dataset.record_count, dataset.id === "synthetic" ? 100 : 20);
+      const maximum = Number(
+        current.knowledgeBaseId
+          ? dataset.compatible_record_count
+          : dataset.record_count
+      ) || 0;
+      if (enabled && maximum > 0) {
+        datasetLimits[dataset.id] = Math.min(maximum, dataset.id === "synthetic" ? 100 : 20);
+      }
       else delete datasetLimits[dataset.id];
       return { ...current, datasetLimits };
     });
@@ -5167,9 +5783,24 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
               onChange={(knowledgeBaseId) => setForm({ ...form, knowledgeBaseId })}
             />
             {selectedKnowledgeBase && (
-              <div className={`evaluation-compatibility ${selectedKnowledgeBase.document_count === 6221 ? "is-compatible" : "is-warning"}`}>
-                <strong>{selectedKnowledgeBase.document_count === 6221 ? "WixQA corpus size matched" : "Knowledge Base compatibility warning"}</strong>
-                <span>{selectedKnowledgeBase.document_count} documents, {selectedKnowledgeBase.chunk_count} chunks, {selectedKnowledgeBase.embedding_model}</span>
+              <div className={`evaluation-compatibility ${hasCompatibleDataset && !hasNonWixqaDocuments ? "is-compatible" : "is-warning"}`}>
+                <strong>
+                  {isLoadingCompatibility
+                    ? "Checking WixQA compatibility..."
+                    : hasCompatibleDataset
+                      ? `${wixqaDocumentCount.toLocaleString()} WixQA documents available`
+                      : "No compatible WixQA benchmark records"}
+                </strong>
+                <span>
+                  {selectedKnowledgeBase.document_count.toLocaleString()} total documents,{" "}
+                  {selectedKnowledgeBase.chunk_count.toLocaleString()} chunks,{" "}
+                  {selectedKnowledgeBase.embedding_model}
+                </span>
+                {hasNonWixqaDocuments && (
+                  <small>
+                    Additional non-WixQA documents may affect retrieval. Benchmark cases remain restricted to imported WixQA article IDs.
+                  </small>
+                )}
               </div>
             )}
             <SelectField
@@ -5200,13 +5831,46 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
             <div className="evaluation-dataset-list">
               {datasets.map((dataset) => {
                 const enabled = Object.prototype.hasOwnProperty.call(form.datasetLimits, dataset.id);
+                const maximum = Number(
+                  form.knowledgeBaseId
+                    ? dataset.compatible_record_count
+                    : dataset.record_count
+                ) || 0;
                 return (
                   <div className="evaluation-dataset-row" key={dataset.id}>
                     <label className="check-row">
-                      <input type="checkbox" checked={enabled} onChange={(event) => setDatasetEnabled(dataset, event.target.checked)} />
-                      <span><strong>{dataset.name}</strong><small>{dataset.record_count.toLocaleString()} records</small></span>
+                      <input
+                        type="checkbox"
+                        checked={enabled}
+                        disabled={isLoadingCompatibility || maximum === 0}
+                        onChange={(event) => setDatasetEnabled(dataset, event.target.checked)}
+                      />
+                      <span>
+                        <strong>{dataset.name}</strong>
+                        <small>
+                          {form.knowledgeBaseId
+                            ? `${maximum.toLocaleString()} compatible of ${dataset.record_count.toLocaleString()} records`
+                            : `${dataset.record_count.toLocaleString()} records`}
+                        </small>
+                      </span>
                     </label>
-                    <label>Limit<input disabled={!enabled} type="number" min="1" max={dataset.record_count} value={form.datasetLimits[dataset.id] ?? ""} onChange={(event) => setForm({ ...form, datasetLimits: { ...form.datasetLimits, [dataset.id]: Number(event.target.value) } })} /></label>
+                    <label>
+                      Limit
+                      <input
+                        disabled={!enabled || maximum === 0}
+                        type="number"
+                        min="1"
+                        max={maximum}
+                        value={form.datasetLimits[dataset.id] ?? ""}
+                        onChange={(event) => setForm({
+                          ...form,
+                          datasetLimits: {
+                            ...form.datasetLimits,
+                            [dataset.id]: Math.min(Math.max(Number(event.target.value) || 1, 1), maximum)
+                          }
+                        })}
+                      />
+                    </label>
                   </div>
                 );
               })}
@@ -5258,6 +5922,12 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
                 <div className="evaluation-progress-track"><span style={{ width: `${selectedExperiment.progress?.percent || 0}%` }} /></div>
                 <p className="muted-text">{selectedExperiment.progress?.completed_cells || 0} / {selectedExperiment.progress?.total_cells || 0} configuration-dataset cells</p>
                 {compatibility?.status === "warning" && <div className="evaluation-compatibility is-warning"><strong>Compatibility warning</strong><span>{compatibility.message}</span></div>}
+                {selectedExperiment.error && (
+                  <div className="evaluation-compatibility is-failed">
+                    <strong>Experiment execution failed</strong>
+                    <span>{selectedExperiment.error}</span>
+                  </div>
+                )}
                 <div className="table-panel">
                   <table>
                     <thead><tr><th>Rank</th><th>Configuration</th><th>Quality</th><th>Cost / case</th><th>Latency</th><th>Eligibility</th></tr></thead>
@@ -5269,7 +5939,11 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
                           <td>{formatPercentMetric(entry.quality_score)}</td>
                           <td>${formatNumber(entry.average_cost_per_case_usd, 4)}</td>
                           <td>{formatNumber(entry.average_latency_ms)} ms</td>
-                          <td>{entry.eligible ? "Eligible" : `Excluded: ${(entry.constraint_violations || []).join(", ")}`}</td>
+                          <td>
+                            {entry.eligible
+                              ? "Eligible"
+                              : `Excluded: ${(entry.constraint_violations || []).join(", ") || "incomplete results"}`}
+                          </td>
                         </tr>
                       ))}
                       {!selectedExperiment.leaderboard?.length && <tr><td colSpan="6">The leaderboard will appear when the worker completes this experiment.</td></tr>}
@@ -5780,19 +6454,29 @@ function fallbackConfigurationCode(value = "") {
   return output;
 }
 
-function documentMatchesFilterQuery(document, query) {
-  const normalizedQuery = String(query || "").trim().toLowerCase();
-  if (!normalizedQuery) return true;
-  const searchable = [
-    document.title,
-    document.text,
-    document.metadata?.filename,
-    document.metadata?.source_type,
-    document.metadata?.mime_type,
-    document.metadata?.uri,
-    document.id
-  ].filter(Boolean).join(" ").toLowerCase();
-  return searchable.includes(normalizedQuery);
+function estimateCorpusChunks(characterCount, documentCount, chunkSize, chunkOverlap) {
+  if (!characterCount || !documentCount || !chunkSize) return 0;
+  const stride = Math.max(1, chunkSize - Math.max(0, chunkOverlap));
+  const averageDocumentLength = characterCount / documentCount;
+  const averageChunksPerDocument = Math.max(
+    1,
+    Math.ceil(Math.max(0, averageDocumentLength - chunkOverlap) / stride)
+  );
+  return documentCount * averageChunksPerDocument;
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / (1024 ** unitIndex)).toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function formatPipelineStep(value) {
+  return String(value || "")
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 function compactPreview(value, maxLength = 120) {
@@ -6530,12 +7214,87 @@ function sanitizeKnowledgeConfiguration(configuration) {
     : defaultKnowledgeConfiguration.chunking_strategy;
   const provider = raw.embedding_provider || defaultKnowledgeConfiguration.embedding_provider;
   const embeddingModel = raw.embedding_model || defaultKnowledgeConfiguration.embedding_model;
+  const rawEmbeddingOptions = objectOrEmpty(raw.embedding_options);
+  const hardMaxWordpieces = clampNumber(
+    rawEmbeddingOptions.hard_max_wordpieces,
+    strategy === "structure_aware_recursive" ? 240 : 512,
+    16,
+    512
+  );
+  const rawChunkingOptions = {
+    ...defaultStructureAwareOptions,
+    ...objectOrEmpty(raw.chunking_options)
+  };
+  const rawPrefix = {
+    ...defaultStructureAwareOptions.metadata_prefix,
+    ...objectOrEmpty(rawChunkingOptions.metadata_prefix)
+  };
+  const rawRules = {
+    ...defaultStructureAwareOptions.rules,
+    ...objectOrEmpty(rawChunkingOptions.rules)
+  };
+  const targetBodyTokens = clampNumber(
+    rawChunkingOptions.target_body_tokens,
+    180,
+    16,
+    Math.max(hardMaxWordpieces - 2, 16)
+  );
+  const softMaxBodyTokens = clampNumber(
+    rawChunkingOptions.soft_max_body_tokens,
+    210,
+    targetBodyTokens,
+    Math.max(hardMaxWordpieces - 2, targetBodyTokens)
+  );
+  const allowedSeparators = ["heading", "subheading", "paragraph", "list", "sentence", "token"];
+  const separators = Array.from(new Set(
+    (Array.isArray(rawChunkingOptions.separators)
+      ? rawChunkingOptions.separators
+      : defaultStructureAwareOptions.separators
+    ).filter((item) => allowedSeparators.includes(item))
+  ));
+  if (!separators.includes("token")) separators.push("token");
   return {
     chunking_strategy: strategy,
+    chunking_profile_id: String(raw.chunking_profile_id || ""),
     chunk_size: chunkSize,
     chunk_overlap: chunkingStrategyUsesOverlap(strategy)
       ? clampNumber(raw.chunk_overlap, 120, 0, Math.max(chunkSize - 1, 0))
       : 0,
+    embedding_options: {
+      hard_max_wordpieces: hardMaxWordpieces
+    },
+    chunking_options: {
+      parent_document: rawChunkingOptions.parent_document === "document_id" ? "document_id" : "article_id",
+      target_body_tokens: targetBodyTokens,
+      soft_max_body_tokens: softMaxBodyTokens,
+      overlap_tokens: clampNumber(
+        rawChunkingOptions.overlap_tokens,
+        30,
+        0,
+        Math.max(targetBodyTokens - 1, 0)
+      ),
+      minimum_chunk_tokens: clampNumber(
+        rawChunkingOptions.minimum_chunk_tokens,
+        60,
+        1,
+        targetBodyTokens
+      ),
+      separators: separators.length ? separators : [...defaultStructureAwareOptions.separators],
+      metadata_prefix: {
+        include_title: Boolean(rawPrefix.include_title),
+        include_heading_path: Boolean(rawPrefix.include_heading_path),
+        include_article_type: Boolean(rawPrefix.include_article_type),
+        maximum_tokens: clampNumber(
+          rawPrefix.maximum_tokens,
+          40,
+          0,
+          Math.max(hardMaxWordpieces - 3, 0)
+        )
+      },
+      rules: Object.fromEntries(
+        Object.keys(defaultStructureAwareOptions.rules).map((key) => [key, Boolean(rawRules[key])])
+      )
+    },
     embedding_deployment_id: raw.embedding_deployment_id || defaultKnowledgeConfiguration.embedding_deployment_id,
     external_processing_allowed: Boolean(raw.external_processing_allowed),
     embedding_provider: provider,
