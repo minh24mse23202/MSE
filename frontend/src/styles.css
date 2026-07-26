@@ -3905,11 +3905,6 @@ th {
   overflow-wrap: anywhere;
 }
 
-.evaluation-ragxplain-summary.is-completed {
-  border-left-color: #1f9d68;
-  background: #f2fbf6;
-}
-
 .evaluation-ragxplain-summary.is-failed {
   border-left-color: #d92d20;
   background: #fff7f7;
@@ -3938,7 +3933,7 @@ th {
 
 .ragxplain-viewer-frame {
   width: 100%;
-  height: max(640px, calc(100vh - 255px));
+  height: 100vh;
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--line);

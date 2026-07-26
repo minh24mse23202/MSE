@@ -1,0 +1,370 @@
+{
+  "analysis": {
+    "executive_summary": "The RAG system exhibits strong answer relevancy and grading note generation, indicating effective user intent understanding and clear explanation of answer quality. However, retrieval quality is critically low, with both context relevancy and recall averaging only 0.2, severely limiting the generator's ability to produce factually accurate and context-adherent answers. This retrieval deficiency cascades into low factuality (0.4) and context adherence (0.44), causing frequent hallucinations and unsupported content. Addressing retrieval precision and coverage is paramount to improving overall system trustworthiness and answer completeness.",
+    "executive_summary_gist": "The system excels at addressing user intent and grading notes but suffers from critically poor retrieval quality, leading to low factuality and context adherence. Improving retrieval precision and coverage is essential to enhance answer accuracy and faithfulness.",
+    "insights": [
+      {
+        "title": "Critical Retrieval Quality Deficiency Undermines Answer Accuracy",
+        "priority": "critical",
+        "problem_detection": "Context Relevancy and Context Recall metrics are extremely low (avg 0.2), indicating that retrieved documents are largely irrelevant or missing key information needed to answer queries.",
+        "problem_detection_gist": "Retrieved documents are mostly irrelevant or lack necessary information, severely limiting answer quality.",
+        "root_cause_analysis": "The retrieval component uses a hybrid method with top_k=2 but fails to surface relevant documents due to insufficient indexing coverage, poor query formulation, and lack of effective semantic matching or reranking. The knowledge base appears skewed towards unrelated topics (e.g., Wix Events instead of Wix Stores), and no reranker is enabled to improve precision. This results in retrieval of unrelated or empty contexts, as seen in multiple examples where answers disclaim missing information.",
+        "root_cause_analysis_gist": "Retrieval fails due to limited knowledge base coverage, weak query formulation, and absence of reranking, causing irrelevant or empty contexts.",
+        "evidence_trace": "Metrics pattern: Both Context Relevancy and Context Recall average only 0.2 with no variation, indicating consistent failure to retrieve relevant or sufficient context. Examples include questions about refund policies and Wix Store customization where retrieved context is unrelated (e.g., Wix Events pages) or missing, leading to disclaimers about insufficient information. This retrieval failure cascades into low factuality and context adherence scores, as the generator lacks grounding data.\n\nExamples:\n- \"I'm inquiring about the refund policy for canceling my Premium Light account\" received irrelevant context and a low factuality score of 0.2.\n- \"I'm attempting to redesign the product page of my Wix Store\" retrieved only Wix Events context, resulting in disclaimers and low context relevancy.\n- \"My website displays correctly on PC and smartphone, but not on a tablet\" also suffered from irrelevant context retrieval.",
+        "evidence_trace_gist": "Context Relevancy and Recall are critically low at 0.2, with examples showing irrelevant or missing context for refund policy and Wix Store questions.",
+        "recommended_protocol": "### Enhance Knowledge Base Coverage and Indexing\n- Expand the knowledge base to comprehensively include all relevant Wix features, especially Wix Stores and refund policies.\n- Re-index documents with enriched metadata tags to enable precise filtering (e.g., by product category or feature).\n\n### Improve Retrieval Query Formulation and Semantic Matching\n- Implement query expansion and reformulation techniques to better capture user intent.\n- Upgrade semantic retrieval models to domain-specific dense embeddings trained on Wix workflows.\n\n### Enable and Tune Reranking\n- Activate a reranker component to reorder retrieved documents based on relevance scores.\n- Experiment with reranker thresholds to balance precision and recall.\n\n### Increase Retrieval Depth and Diversity\n- Increase `top_k` from 2 to at least 5 to allow more candidate documents for generation.\n- Incorporate diversity-promoting retrieval strategies to cover multiple relevant facets.\n\n> Note: Increasing `top_k` and reranking will increase latency and computational cost but is necessary to improve retrieval precision and recall, which directly impacts generation quality.",
+        "recommended_protocol_gist": "- Expand and re-index knowledge base with detailed metadata.\n- Upgrade semantic retrieval with domain-specific embeddings.\n- Enable and tune reranker for better document ordering.\n- Increase `top_k` to 5+ for richer context coverage."
+      },
+      {
+        "title": "Low Context Adherence Indicates Frequent Hallucinations in Generation",
+        "priority": "critical",
+        "problem_detection": "Context Adherence averages only 0.44, showing that generated answers often include unsupported information or deviate from retrieved context.",
+        "problem_detection_gist": "Generated answers frequently hallucinate or introduce unsupported content beyond retrieved documents.",
+        "root_cause_analysis": "Due to poor retrieval quality, the generator lacks sufficient grounding context and compensates by fabricating details or providing generic instructions. The generation configuration lacks explicit constraints or grounding enforcement mechanisms, and no abstention or uncertainty detection is implemented. This leads to answers that are not faithful to the retrieved passages, as seen in examples where the model provides detailed instructions without supporting context or discusses unrelated topics.",
+        "root_cause_analysis_gist": "Insufficient retrieved context and lack of generation constraints cause the model to hallucinate or stray from source documents.",
+        "evidence_trace": "Metrics pattern: Context Adherence scores vary from 0.2 to 1.0 but average only 0.44, indicating frequent deviations from retrieved context. Examples include the refund policy question where the answer admits missing context but still provides unsupported advice, and the Wix Store customization question where unrelated Wix Events context leads to generic guidance. This pattern shows the generator attempts to answer despite insufficient grounding, reducing trustworthiness.\n\nExamples:\n- Refund policy question with 0.2 adherence score and disclaimers but still hallucinated content.\n- Wix Store product page customization with 1.0 adherence but irrelevant context, showing the model cannot ground answers properly.\n- Tablet display issue with 0.6 adherence but still some unsupported assumptions.",
+        "evidence_trace_gist": "Context Adherence averages 0.44 with examples showing hallucinations due to insufficient grounding context.",
+        "recommended_protocol": "### Implement Stricter Generation Grounding Constraints\n- Modify generation prompts to explicitly instruct the model to only answer based on retrieved context and to abstain or indicate uncertainty if context is insufficient.\n- Introduce token-level grounding penalties or constrained decoding to reduce hallucinations.\n\n### Integrate Context Quality Filtering\n- Before generation, filter or weight retrieved passages by relevance confidence to prioritize high-quality context.\n- Use retrieval confidence scores to trigger abstention or fallback responses when context is poor.\n\n### Add Post-Generation Verification\n- Implement automated factuality checks comparing generated content against retrieved context.\n- Flag or suppress answers with low grounding confidence.\n\n> Note: These measures may reduce answer coverage or increase abstentions but will significantly improve trustworthiness and factuality.",
+        "recommended_protocol_gist": "- Enforce strict grounding in generation prompts.\n- Filter and weight retrieved context by relevance.\n- Add post-generation factuality verification and abstention mechanisms."
+      },
+      {
+        "title": "Answer Relevancy is Strong but Limited by Retrieval Gaps",
+        "priority": "high",
+        "problem_detection": "Answer Relevancy averages 0.88, indicating answers generally address user intent well, but some responses are vague or redirect users externally due to missing specific information.",
+        "problem_detection_gist": "Answers mostly address questions but sometimes lack actionable detail, deferring to external resources.",
+        "root_cause_analysis": "The generation component effectively interprets user intent and produces relevant answers, but retrieval gaps limit the availability of detailed context. Consequently, the model resorts to generic advice or external references. Prompt design encourages acknowledging missing context but does not sufficiently drive generation of actionable steps when partial context exists.",
+        "root_cause_analysis_gist": "Good intent understanding in generation is hampered by retrieval gaps, causing generic or deflective answers.",
+        "evidence_trace": "Metrics pattern: Answer Relevancy is high at 0.88 with a minimum of 0.6, showing consistent relevance. Examples include the refund policy question where the answer acknowledges missing info and directs to external resources, and the Wix Store customization question providing general guidance but lacking detailed steps. This suggests generation is well-aligned with user intent but constrained by retrieval coverage.\n\nExamples:\n- Refund policy question with 0.6 relevancy score, deferring to external support.\n- Wix Store customization with 0.8 relevancy, providing general but not detailed instructions.\n- Tablet display issue with 1.0 relevancy, offering practical troubleshooting steps.",
+        "evidence_trace_gist": "Answer Relevancy is strong (0.88 avg) but some answers lack actionable detail due to retrieval gaps.",
+        "recommended_protocol": "### Enhance Retrieval Coverage to Support Detailed Answers\n- Follow recommendations from retrieval improvement to increase context availability.\n\n### Refine Generation Prompts for Actionable Guidance\n- Adjust prompts to encourage step-by-step instructions when partial context is available.\n- Include fallback templates that suggest concrete next steps rather than generic external references.\n\n### Integrate Retrieval-Generation Feedback Loop\n- Use generation failures or vague answers as signals to trigger additional retrieval attempts or dynamic context expansion.\n\n> Note: Improving retrieval coverage synergistically enhances answer relevancy and factuality, while prompt refinements improve user satisfaction.",
+        "recommended_protocol_gist": "- Improve retrieval coverage to provide richer context.\n- Refine prompts to elicit actionable, stepwise answers.\n- Implement feedback loops to dynamically expand retrieval on vague answers."
+      },
+      {
+        "title": "Grading Note Generation is Robust but Can Gain from More Specificity",
+        "priority": "medium",
+        "problem_detection": "Grading Note metric scores very high (avg 0.96), showing strong ability to assess and explain answer quality, but minor gaps exist in providing detailed step-by-step instructions when context is limited.",
+        "problem_detection_gist": "Grading notes are accurate and clear but sometimes lack detailed guidance due to limited context.",
+        "root_cause_analysis": "The grading note generation effectively synthesizes answer quality and context sufficiency, likely due to well-designed prompts and stable generation settings. However, limited retrieval context constrains the granularity of grading notes, especially for procedural or customization queries. This suggests grading note generation depends heavily on retrieval improvements to unlock further gains.",
+        "root_cause_analysis_gist": "Strong grading note generation is limited by retrieval context scarcity, reducing detail in explanations.",
+        "evidence_trace": "Metrics pattern: Grading Note scores range from 0.8 to 1.0 with an average of 0.96, indicating consistent high performance. Examples show clear acknowledgments of insufficient context and practical guidance aligned with user queries. Minor gaps appear in cases lacking detailed stepwise instructions due to retrieval limitations.\n\nExamples:\n- Refund policy question grading note scored 1.0, clearly explaining missing context.\n- Wix Store customization grading note also scored 1.0, but with general guidance.\n- Wix Editor update question grading note scored 0.8, reflecting some uncertainty.",
+        "evidence_trace_gist": "Grading notes are highly accurate (0.96 avg) but limited in detail by retrieval context scarcity.",
+        "recommended_protocol": "### Leverage Improved Retrieval for Richer Grading Notes\n- As retrieval coverage improves, enable grading note generation to incorporate more granular workflow details.\n\n### Enhance Grading Note Prompts\n- Modify prompts to encourage inclusion of stepwise troubleshooting or procedural guidance when context permits.\n\n### Dynamic Context Retrieval for Grading\n- Implement on-demand retrieval expansions triggered by grading note generation to fetch additional relevant documents.\n\n> Note: These enhancements will further increase grading note utility without major architectural changes.",
+        "recommended_protocol_gist": "- Use richer retrieval context to generate detailed grading notes.\n- Refine prompts to elicit stepwise guidance.\n- Enable dynamic retrieval triggered by grading note generation."
+      }
+    ],
+    "strategic_conclusion": "The primary bottleneck in this RAG system is the retrieval component, whose poor precision and coverage critically undermine generation faithfulness and factuality. Prioritizing comprehensive knowledge base expansion, advanced semantic retrieval, and reranking will provide the generator with richer, relevant context, enabling more accurate and grounded answers. Complementing this with stricter generation grounding constraints and prompt refinements will reduce hallucinations and improve user trust. Together, these targeted improvements will elevate the system from a well-intentioned but unreliable assistant to a robust, expert-level workflow advisor.",
+    "configuration_targets": [
+      {
+        "diagnostic_area": "Retrieval quality",
+        "metrics": [
+          "Context Relevancy",
+          "Context Recall"
+        ],
+        "sections": [
+          "Knowledge Base",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "chunking_strategy",
+          "embedding_deployment_id",
+          "retrieval_mode",
+          "top_k",
+          "reranker_deployment_id"
+        ]
+      },
+      {
+        "diagnostic_area": "Faithfulness and grounding",
+        "metrics": [
+          "Context Adherence",
+          "Factuality"
+        ],
+        "sections": [
+          "Generator target & prompts",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "generator_deployment_id",
+          "system_prompt",
+          "predefined_prompt",
+          "citations_enabled"
+        ]
+      },
+      {
+        "diagnostic_area": "Relevance and intent",
+        "metrics": [
+          "Answer Relevancy"
+        ],
+        "sections": [
+          "Adaptive RAG",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "route_mode",
+          "classifier_deployment_id",
+          "planner_deployment_id",
+          "response_structure"
+        ]
+      },
+      {
+        "diagnostic_area": "Structure and style",
+        "metrics": [
+          "Grading Note"
+        ],
+        "sections": [
+          "General",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "response_structure",
+          "tone",
+          "humor_level",
+          "system_prompt",
+          "predefined_prompt"
+        ]
+      }
+    ]
+  },
+  "prompt": {
+    "insights": {
+      "context_relevancy": {
+        "analysis": "The overall Context Relevancy metric performance is very low (average score 0.2), indicating that the retrieved context is largely irrelevant to the user questions. Common issues include retrieval of unrelated topics (e.g., Wix Events pages instead of Wix Store product pages), empty or missing context, and content that does not address the specific user query. To improve, focus on enhancing the retriever’s precision by refining query formulation, expanding or better indexing the knowledge base to cover relevant topics, and implementing stronger semantic matching techniques. Additionally, incorporating feedback loops to filter out irrelevant documents before generation and improving retrieval diversity to capture more pertinent context can help raise relevancy and overall system effectiveness.",
+        "metric_name": "Context Relevancy",
+        "metric_description": "How relevant retrieved context is to the question.",
+        "avg_score": 0.2,
+        "min_score": 0.2,
+        "max_score": 0.2
+      },
+      "context_adherence": {
+        "analysis": "The overall Context Adherence metric shows low performance with an average score of 0.44, indicating frequent deviations from the retrieved context in generated answers. Common issues include the model introducing unsupported assumptions, providing detailed instructions without any supporting context, or discussing unrelated topics not present in the retrieved documents. To improve, the system should enhance context grounding by better filtering or weighting retrieved passages, incorporate stricter generation constraints to avoid hallucinations, and implement explicit checks to flag or abstain from answering when context is insufficient. These steps will help ensure answers remain faithful to the provided context and reduce unsupported content.",
+        "metric_name": "Context Adherence",
+        "metric_description": "How faithfully the answer uses only retrieved context.",
+        "avg_score": 0.44000000000000006,
+        "min_score": 0.2,
+        "max_score": 1.0
+      },
+      "answer_relevancy": {
+        "analysis": "The average Answer Relevancy score of 0.88 indicates strong overall performance, reflecting that most answers effectively address user questions. However, some moderate-scoring examples reveal a pattern where responses acknowledge missing specific information and direct users to external resources without providing concrete, detailed guidance, which limits full relevancy. To improve, the system should enhance retrieval coverage to include more precise policy or feature details and refine generation prompts to produce more actionable, step-by-step instructions rather than general advice. Strengthening integration between retrieval and generation components to fill knowledge gaps will help raise consistency and relevancy further.",
+        "metric_name": "Answer Relevancy",
+        "metric_description": "How well the answer addresses the question.",
+        "avg_score": 0.8800000000000001,
+        "min_score": 0.6,
+        "max_score": 1.0
+      },
+      "context_recall": {
+        "analysis": "The overall Context Recall metric performance is very low (average score 0.2), indicating that the retrieved context frequently lacks the necessary information to answer user queries accurately. Common issues include retrieval of irrelevant or empty contexts unrelated to the user's question, such as focusing on Wix Events when the question concerns Wix Stores, or missing key procedural details needed for customization, ordering, or policy questions. To improve, the retrieval component should be enhanced by expanding and better indexing the knowledge base to cover diverse Wix features comprehensively, refining query formulation to better capture user intent, and incorporating more effective relevance ranking or dense retrieval models to surface pertinent documents. Additionally, integrating feedback loops from failed retrievals and augmenting the retriever with domain-specific embeddings or metadata filtering can help increase context relevance and thus improve generation faithfulness and answer quality.",
+        "metric_name": "Context Recall",
+        "metric_description": "Whether retrieved context contains information needed for ground truth.",
+        "avg_score": 0.2,
+        "min_score": 0.2,
+        "max_score": 0.2
+      },
+      "factuality": {
+        "analysis": "The overall factuality performance is low (average score 0.4), indicating significant gaps in answer correctness compared to ground truth references. Common issues include providing overly general or incomplete information, missing key procedural details, and occasionally offering misleading or non-specific advice rather than directly addressing the user's query with precise facts. To improve, the system should enhance retrieval relevance to surface more specific, detailed workflows and incorporate stronger faithfulness constraints in generation to ensure critical factual points from retrieved documents are accurately reflected. Additionally, integrating domain-specific knowledge bases or fine-tuning on detailed procedural content could help reduce omissions and increase answer completeness.",
+        "metric_name": "Factuality",
+        "metric_description": "Answer correctness vs ground truth reference.",
+        "avg_score": 0.4,
+        "min_score": 0.2,
+        "max_score": 0.6
+      },
+      "grading_note": {
+        "analysis": "The metric \"Grading Note\" shows a high average score of 0.96, indicating strong overall performance in generating grading notes that accurately assess and explain candidate answers. The stratified examples reveal consistent strengths in clearly acknowledging when retrieved context is insufficient, providing practical guidance, and offering troubleshooting steps aligned with user queries. Minor gaps appear in cases lacking detailed step-by-step instructions due to limited context, suggesting an opportunity to enhance specificity when possible. To further improve, the system could integrate more granular workflow details or dynamically retrieve additional context to reduce reliance on general guidance. Overall, the system performs well with limited room for major improvements.",
+        "metric_name": "Grading Note",
+        "metric_description": "Two-stage grading note generation then scoring.",
+        "avg_score": 0.96,
+        "min_score": 0.8,
+        "max_score": 1.0
+      }
+    },
+    "examples": {
+      "example_0": {
+        "question": "Im inquiring about the refund policy for canceling my Premium Light account.",
+        "candidate_answer": "The retrieved workflow context does not include specific information about the refund policy for canceling a Premium Light account. \n\nFor accurate details on refund policies, please refer to your service provider’s official terms or customer support resources. If you have access to your account dashboard or billing section, refund policies are often outlined there.\n\nIf you need assistance with cancellation steps or related workflows, please provide more details or specify the platform.",
+        "gt_answer": "Wix offers a 14-day money-back guarantee for new Premium or Studio plans. If you cancel your Premium account within the first 14 days of purchase, you are eligible for a full refund. The refund will be processed automatically to your payment method, and it may take up to 20 business days to appear on your credit card statement. ",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.385964912280701,
+        "answer_overlap": 0.27083333333333304,
+        "token_f1": 0.28571428571428503,
+        "bleu": 0.041255907103947005,
+        "rouge_1": 0.28571428571428503,
+        "rouge_2": 0.045801526717557,
+        "context_relevancy_score": 0.2,
+        "context_adherence_score": 0.2,
+        "answer_relevancy_score": 0.6,
+        "context_recall_score": 0.2,
+        "factuality_score": 0.2,
+        "grading_note_score": 1.0
+      },
+      "example_2": {
+        "question": "My website displays correctly on PC and smartphone, but not on a tablet. The words on the page are off the screen.",
+        "candidate_answer": "To address the issue of words being off the screen on tablets, consider the following based on workflow context for page customization:\n\n- Check the responsive design settings in your site editor, especially for the Events Details and Registration Form pages, as customizations (colors, fonts, hiding elements) affect all devices and events [S2].\n- Verify if any fixed-width elements or large fonts are causing overflow on tablet screen sizes; adjust these settings to use relative sizing or flexible layouts.\n- Use the Settings icon in the Editor to review page display toggles and ensure elements are not positioned outside the visible area on medium-sized screens like tablets [S1].\n- Test and preview your site in tablet view within the editor to identify which elements cause the overflow and adjust accordingly.\n\nIf the problem persists, consider adding custom CSS or consulting device-specific layout options to improve tablet compatibility.\n\nReferences: [S1], [S2]",
+        "gt_answer": "On iPads and tablets Wix sites are cropped within the [vertical gridlines](https://support.wix.com/en/article/wix-editor-working-with-the-editor-gridlines) of the Editor.\n\nTo resolve this issue:\nMake sure to place your content within the vertical gridlines in your Editor. You can also [use columns] (https://support.wix.com/en/article/wix-editor-adding-and-setting-up-columns-on-your-strip) which are responsive to your screen's width to fit your content within most screens.",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.38383838383838303,
+        "answer_overlap": 0.39583333333333304,
+        "token_f1": 0.269565217391304,
+        "bleu": 0.029810458907405003,
+        "rouge_1": 0.269565217391304,
+        "rouge_2": 0.043859649122807,
+        "context_relevancy_score": 0.2,
+        "context_adherence_score": 0.6,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 0.2,
+        "factuality_score": 0.4,
+        "grading_note_score": 1.0
+      },
+      "example_3": {
+        "question": "I am trying to change the order of the items within a CMS collection on my Wix site, but the provided steps did not work for me.",
+        "candidate_answer": "To change the order of items within a CMS collection on your Wix site, please consider the following steps:\n\n- **Sort the Collection via Dataset Settings:**  \n  Go to the page with your dataset connected to the CMS collection. Click on the dataset, then open its settings. Under the \"Sort\" section, add sorting rules based on the fields you want (e.g., date, title, custom order number).\n\n- **Use a Custom Field for Manual Ordering:**  \n  If you want a specific custom order, add a number field (e.g., \"Order\") to your collection. Assign values to each item to represent their order, then sort the dataset by this field.\n\n- **Refresh and Publish:**  \n  After adjusting sorting, refresh your page preview and publish the site to see changes live.\n\n- **Check for Caching or Dataset Filters:**  \n  Ensure no filters or cached data are overriding your sorting settings.\n\nIf these steps did not work, please verify that you are editing the correct dataset connected to the page and that your dataset is set to \"Read & Write\" mode if you want to reorder items dynamically.\n\nIf issues persist, providing more details about your current setup or error messages will help diagnose the problem.",
+        "gt_answer": "To change the order of items within a CMS collection on your Wix site, you should follow these steps:\n\n1. Go to the CMS in your site's dashboard or editor.\n2. Click on the relevant collection.\n3. If you have multiple collection views, select the view you want to sort items in.\n4. Click 'Sort' at the top of your collection.\n5. Click '+ Add a Sort'.\n6. Choose the field you want to sort by from the 'Sort by' drop-down menu.\n7. Select the sorting order (e.g., A-Z, Low-High, Oldest-Newest).\n8. Click 'Add Sort'.\n9. To apply this order to your live site, enable the 'Mirror on Site' toggle at the top of the collection.\n\nIf these steps did not work, ensure that the 'Mirror on Site' feature is enabled, as this is necessary for the order in your collection view to be reflected on your live site. Additionally, check if there are any sort conditions added to datasets, as these can override the order set in your mirrored collection view. For more detailed guidance, you can refer to the [Wix support article on mirroring item order](https://support.wix.com/en/article/cms-mirroring-the-order-of-items-in-your-collection-to-your-sites-connected-elements).",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.0,
+        "answer_overlap": 0.411214953271028,
+        "token_f1": 0.47174447174447104,
+        "bleu": 0.153528613660528,
+        "rouge_1": 0.47174447174447104,
+        "rouge_2": 0.17283950617283902,
+        "context_relevancy_score": 0.2,
+        "context_adherence_score": 0.2,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 0.2,
+        "factuality_score": 0.6,
+        "grading_note_score": 1.0
+      },
+      "example_4": {
+        "question": "I'm attempting to redesign the product page of my Wix Store. I need guidance on customizing the layout, image display & button text.",
+        "candidate_answer": "The retrieved workflow context does not specifically cover Wix Store product page customization, focusing instead on Wix Events pages and registration forms [S1][S2]. Therefore, I cannot provide detailed guidance based on the current documents.\n\nFor customizing your Wix Store product page layout, image display, and button text, generally you can:\n\n- Use the Wix Editor to drag and arrange product page elements.\n- Customize image galleries or sliders for product images.\n- Edit button text directly in the editor or via the product page settings.\n\nFor precise steps, please refer to Wix’s dedicated documentation on Wix Stores product page customization or contact Wix support.\n\nIf you want, I can help retrieve relevant Wix Store customization workflows.",
+        "gt_answer": "To customize your store layout and image display:\nClick the Layout tab to select the best Product Page layout for your shop. Then, customize how images are displayed.\n1. Click the Layout tab and select a layout for the Product Page.\n2. Click the Stretch to full width toggle to enable it. \n3. Select how you want to display image thumbnails under Show thumbnails.\n4. Click the Image ratio drop-down and select a ratio.\n5. Select an option under How's image resized:\n  - Crop: Crops all images to the same size.\n  - Fit: Maintains the images' aspect ratios.\n6. Click the Zoom on image toggle to enable it (available for some layouts). \nNote: To preview the zoom, go to your live site.\n\nTip: Click Reset to original layout to reset your Product Page to its original layout settings. \n\nLearn more about [displaying images in your store](https://support.wix.com/en/article/wix-stores-setting-how-store-images-are-displayed).\n\n\nTo edit your product page button text: \n* Click the Text tab to edit any of the text options that can appear on the Product Page buttons. \n\nTo add the wishlist feature:\nGo to your Editor.\nGo to your Product Page:\nClick Pages & Menu on the left side of the editor.\nClick Store Pages.\nClick Product Page.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.346666666666666,
+        "answer_overlap": 0.27450980392156804,
+        "token_f1": 0.326283987915407,
+        "bleu": 0.025159057318239003,
+        "rouge_1": 0.326283987915407,
+        "rouge_2": 0.07902735562310001,
+        "context_relevancy_score": 0.2,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 0.8,
+        "context_recall_score": 0.2,
+        "factuality_score": 0.4,
+        "grading_note_score": 1.0
+      },
+      "example_1": {
+        "question": "I want to update the Wix Editor to the new Wix Studio Editor.",
+        "candidate_answer": "To update from the Wix Editor to the new Wix Studio Editor, follow these general steps:\n\n- Review Wix’s official documentation or announcements regarding the transition to Wix Studio Editor, as it may involve creating a new site or migrating content.\n- Backup your current Wix Editor site content and settings to prevent data loss.\n- Access Wix Studio Editor through your Wix account or via the Wix Studio platform if it requires a separate login.\n- Rebuild or import your site content into Wix Studio Editor, as direct in-place updates may not be supported.\n- Test your site thoroughly in Wix Studio Editor before publishing.\n\nSince no specific workflow context is available, please consult Wix’s official support or help center for detailed migration instructions tailored to your site.\n\nIf you provide more details about your current setup, I can assist further.",
+        "gt_answer": "If your site was originally created using the Wix Editor, it is not possible to migrate it to the Studio Editor. In order to take advantage of the new features and functionality, please rebuild your site in the Studio Editor. ",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.0,
+        "answer_overlap": 0.5714285714285711,
+        "token_f1": 0.311111111111111,
+        "bleu": 0.034265523165309,
+        "rouge_1": 0.311111111111111,
+        "rouge_2": 0.089887640449438,
+        "context_relevancy_score": 0.2,
+        "context_adherence_score": 0.2,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 0.2,
+        "factuality_score": 0.4,
+        "grading_note_score": 0.8
+      }
+    },
+    "configs": {
+      "rag_configs": {
+        "run_id": "eval-927eeb23ff5521ed21682565403b393b",
+        "name": "L2 GPT 4.1 mini - WixQA ExpertWritten",
+        "dataset_name": "WixQA ExpertWritten",
+        "knowledge_base_id": "kb-c0ed6736009d4d8c86b7961d992fccf4",
+        "knowledge_base_name": "Business Workflow Knowledge Base",
+        "chat_configuration_id": "cfg-d5eabad574f04c209ccd1c5a80c512a2",
+        "chat_configuration": {
+          "id": "cfg-d5eabad574f04c209ccd1c5a80c512a2",
+          "name": "L2 GPT 4.1 mini",
+          "tone": "Professional",
+          "metadata": {
+            "top_k": 2,
+            "runtime": "model-farm",
+            "classifier": "query_classifier_distilbert",
+            "route_mode": "simple_rag",
+            "retrieval_mode": "hybrid",
+            "route_strategy": "L2 Simple RAG",
+            "welcome_message": "Welcome to Adaptive RAG Studio. Workflow assistant 2 will assist you.",
+            "actual_generator": "deployment",
+            "configuration_id": "nUcjS2lW2ean",
+            "reranker_enabled": false,
+            "citations_enabled": true,
+            "agent_max_iterations": 5,
+            "agent_max_tool_calls": 8,
+            "retrieval_mode_label": "Hybrid",
+            "agent_timeout_seconds": 90,
+            "conversation_starters": [
+              "What are the main steps in this workflow?",
+              "Summarize the selected knowledge base."
+            ],
+            "generation_parameters": {},
+            "planner_deployment_id": "",
+            "reranker_deployment_id": "",
+            "fallback_deployment_ids": [],
+            "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+            "agent_public_web_enabled": false,
+            "classifier_deployment_id": "model-local-distilbert",
+            "classifier_margin_threshold": 0,
+            "conversation_awareness_enabled": false,
+            "conversation_history_exchanges": 3,
+            "classifier_confidence_threshold": 0,
+            "conversation_history_characters": 4000
+          },
+          "description": "Default configuration for concise business workflow answers.",
+          "humor_level": 0,
+          "system_prompt": "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
+          "generator_model": "gpt-4.1-mini",
+          "citations_enabled": true,
+          "predefined_prompt": "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.",
+          "generator_provider": "openai",
+          "response_structure": "Concise answer with bullets and cited workflow context",
+          "generation_parameters": {},
+          "planner_deployment_id": "",
+          "reranker_deployment_id": "",
+          "fallback_deployment_ids": [],
+          "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+          "agent_public_web_enabled": false,
+          "conversation_awareness_enabled": false
+        },
+        "retrieval_mode": "hybrid",
+        "top_k": 2,
+        "route_distribution": {
+          "l1_direct": 2,
+          "l2_simple_rag": 3
+        },
+        "wixqa_metrics": {
+          "mrr": 0.0,
+          "bleu": 0.07387096034355842,
+          "rouge_1": 0.33288381477531614,
+          "rouge_2": 0.08628313561714845,
+          "hit_at_k": 0.0,
+          "token_f1": 0.33288381477531614,
+          "ndcg_at_k": 0.0,
+          "factuality": 0.27999999999999997,
+          "recall_at_k": 0.0,
+          "context_recall": 0.0,
+          "judge_coverage": 1.0,
+          "precision_at_k": 0.0,
+          "retrieval_coverage": 1.0
+        }
+      }
+    },
+    "rag_traditional_metrics": {
+      "routing_match": 0.4,
+      "context_relevance_proxy": 0.0,
+      "faithfulness_proxy": 0.22329399255715005,
+      "answer_overlap": 0.3847639990575667,
+      "token_f1": 0.33288381477531565,
+      "bleu": 0.05680391203108559,
+      "rouge_1": 0.33288381477531565,
+      "rouge_2": 0.08628313561714822
+    }
+  }
+}

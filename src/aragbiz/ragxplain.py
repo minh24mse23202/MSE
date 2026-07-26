@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import csv
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -198,6 +201,11 @@ class RagxplainRunner:
         if missing:
             raise RagxplainError("RAGXplain did not create required artifacts: " + ", ".join(missing))
         insights = self._read_and_validate_insights(artifacts["overall_insights.json"])
+        semantic_metrics = _validate_semantic_metric_artifacts(
+            artifacts["results.csv"],
+            insights,
+            runner.ragxplain_metrics,
+        )
         _attach_configuration_targets(insights)
         artifacts["overall_insights.json"].write_text(
             json.dumps(insights, indent=2, ensure_ascii=False),
@@ -213,6 +221,7 @@ class RagxplainRunner:
             "judge": judge_deployment_id,
             "case_count": len(cases),
             "random_state": int(random_state),
+            "semantic_metrics": semantic_metrics,
             "error": None,
         }
 
@@ -350,7 +359,7 @@ class _ModelGatewayJudge:
         if isinstance(response_schema, dict) and response_schema:
             parameters["response_format"] = {
                 "type": "json_schema",
-                "json_schema": response_schema,
+                "json_schema": _normalize_response_schema(response_schema),
             }
         result = await self.gateway.generate(
             messages,
@@ -427,6 +436,55 @@ def _canonical_json_object(raw: str) -> str:
             return json.dumps(value, ensure_ascii=False)
     preview = text[:300].replace("\n", " ")
     raise RagxplainError(f"Judge response is not a complete JSON object: {preview}")
+
+
+def _normalize_response_schema(response_schema: Mapping[str, Any]) -> Dict[str, Any]:
+    normalized = copy.deepcopy(dict(response_schema))
+    raw_name = str(normalized.get("name") or "")
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", raw_name)
+    safe_name = re.sub(r"[_-]+", "_", safe_name).strip("_-")
+    safe_name = safe_name[:64].rstrip("_-") or "ragxplain_response"
+    normalized["name"] = safe_name
+    return normalized
+
+
+def _validate_semantic_metric_artifacts(
+    results_path: Path,
+    overall_insights: Mapping[str, Any],
+    expected_metrics: Sequence[str],
+) -> Dict[str, Any]:
+    expected = list(dict.fromkeys(str(metric) for metric in expected_metrics if str(metric)))
+    try:
+        with results_path.open("r", encoding="utf-8-sig", newline="") as stream:
+            columns = set(csv.DictReader(stream).fieldnames or [])
+    except OSError as exc:
+        raise RagxplainError(f"Unable to validate RAGXplain semantic metrics: {exc}") from exc
+
+    prompt = overall_insights.get("prompt")
+    insight_payload = prompt.get("insights") if isinstance(prompt, Mapping) else {}
+    insight_names = set(insight_payload) if isinstance(insight_payload, Mapping) else set()
+    scored = {metric for metric in expected if f"{metric}_score" in columns}
+    summarized = {metric for metric in expected if metric in insight_names}
+    completed = [metric for metric in expected if metric in scored and metric in summarized]
+    missing_score_columns = [metric for metric in expected if metric not in scored]
+    missing_insight_summaries = [metric for metric in expected if metric not in summarized]
+    missing = [metric for metric in expected if metric not in completed]
+
+    if expected and not completed:
+        raise RagxplainError(
+            "RAGXplain produced no semantic metrics. Failed metrics: "
+            + ", ".join(expected)
+            + ". Check Model Farm usage errors for ragxplain_* calls."
+        )
+
+    return {
+        "status": "completed" if not missing else "partial",
+        "expected": expected,
+        "completed": completed,
+        "missing": missing,
+        "missing_score_columns": missing_score_columns,
+        "missing_insight_summaries": missing_insight_summaries,
+    }
 
 
 def _attach_configuration_targets(payload: Dict[str, Any]) -> None:

@@ -5457,10 +5457,12 @@ function RagxplainInsightsScreen({ run, onBack }) {
           </a>
         </div>
       </header>
-      <div className={`evaluation-ragxplain-summary is-${ragxplain.status || "not_requested"}`}>
-        <div><strong>RAGXplain {String(ragxplain.status || "not_requested").replace("_", " ")}</strong><span>{ragxplain.judge || "Judge unavailable"}</span></div>
-        {ragxplain.error && <p>{ragxplain.error}</p>}
-      </div>
+      {ragxplain.status !== "completed" && (
+        <div className={`evaluation-ragxplain-summary is-${ragxplain.status || "not_requested"}`}>
+          <div><strong>RAGXplain {String(ragxplain.status || "not_requested").replace("_", " ")}</strong><span>{ragxplain.judge || "Judge unavailable"}</span></div>
+          {ragxplain.error && <p>{ragxplain.error}</p>}
+        </div>
+      )}
       {ragxplain.status === "completed" ? (
         <div className="ragxplain-viewer-frame">
           <iframe

@@ -19,7 +19,13 @@ from aragbiz.knowledge import HashEmbeddingModel, KnowledgeService, OverlapChunk
 from aragbiz.knowledge_store import JsonKnowledgeRepository
 from aragbiz.model_farm import ModelGenerationResult
 from aragbiz.routing import AdaptiveRouter
-from aragbiz.ragxplain import RagxplainError, RagxplainRunner, _ModelGatewayJudge
+from aragbiz.ragxplain import (
+    RagxplainError,
+    RagxplainRunner,
+    _ModelGatewayJudge,
+    _normalize_response_schema,
+    _validate_semantic_metric_artifacts,
+)
 from aragbiz.schemas import AnswerResult, Document, QACRecord, RetrievedContext
 
 
@@ -418,7 +424,7 @@ def test_model_gateway_judge_normalizes_fenced_schema_json():
         metadata={
             "prompt_key": "overall_insight",
             "response_schema": {
-                "name": "ragxplain_overall_insight",
+                "name": "prompts/overall_insight.md",
                 "schema": {
                     "type": "object",
                     "properties": {"analysis": {"type": "object"}},
@@ -435,6 +441,7 @@ def test_model_gateway_judge_normalizes_fenced_schema_json():
     parameters = gateway.calls[0][2]["parameters"]
     assert parameters["max_tokens"] == 6000
     assert parameters["response_format"]["type"] == "json_schema"
+    assert parameters["response_format"]["json_schema"]["name"] == "prompts_overall_insight_md"
 
 
 def test_model_gateway_judge_retries_incomplete_schema_json():
@@ -481,3 +488,95 @@ def test_model_gateway_judge_retries_incomplete_schema_json():
     assert len(gateway.calls) == 2
     assert gateway.calls[1][2]["parameters"]["max_tokens"] == 7000
     assert gateway.calls[1][2]["context"].purpose == "ragxplain_overall_insight_json_retry"
+
+
+def test_ragxplain_response_schema_name_is_normalized_without_mutation():
+    original = {
+        "name": "prompts/context_relevancy.md",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {"context_relevancy_score": {"type": "string"}},
+        },
+    }
+
+    normalized = _normalize_response_schema(original)
+
+    assert normalized["name"] == "prompts_context_relevancy_md"
+    assert normalized["schema"] == original["schema"]
+    assert normalized["schema"] is not original["schema"]
+    assert original["name"] == "prompts/context_relevancy.md"
+    assert _normalize_response_schema({"name": "overall_insight_response"})["name"] == "overall_insight_response"
+    assert _normalize_response_schema({"name": ".../"})["name"] == "ragxplain_response"
+
+
+def test_ragxplain_semantic_metric_validation_accepts_all_six_metrics(tmp_path):
+    expected = [
+        "context_relevancy",
+        "context_adherence",
+        "answer_relevancy",
+        "context_recall",
+        "factuality",
+        "grading_note",
+    ]
+    results_path = tmp_path / "results.csv"
+    results_path.write_text(
+        ",".join(["question", *[f"{metric}_score" for metric in expected]])
+        + "\n"
+        + ",".join(["Question", *(["0.8"] * len(expected))])
+        + "\n",
+        encoding="utf-8",
+    )
+    overall_insights = {
+        "analysis": {"executive_summary": "Healthy"},
+        "prompt": {
+            "insights": {
+                metric: {"metric_name": metric, "avg_score": 0.8}
+                for metric in expected
+            }
+        },
+    }
+
+    coverage = _validate_semantic_metric_artifacts(results_path, overall_insights, expected)
+
+    assert coverage["status"] == "completed"
+    assert coverage["completed"] == expected
+    assert coverage["missing"] == []
+
+
+def test_ragxplain_semantic_metric_validation_reports_partial_coverage(tmp_path):
+    expected = ["context_relevancy", "context_adherence", "answer_relevancy"]
+    results_path = tmp_path / "results.csv"
+    results_path.write_text(
+        "question,context_relevancy_score,context_adherence_score\nQuestion,0.8,0.7\n",
+        encoding="utf-8",
+    )
+    overall_insights = {
+        "analysis": {},
+        "prompt": {
+            "insights": {
+                "context_relevancy": {"avg_score": 0.8},
+                "context_adherence": {"avg_score": 0.7},
+            }
+        },
+    }
+
+    coverage = _validate_semantic_metric_artifacts(results_path, overall_insights, expected)
+
+    assert coverage["status"] == "partial"
+    assert coverage["completed"] == ["context_relevancy", "context_adherence"]
+    assert coverage["missing"] == ["answer_relevancy"]
+    assert coverage["missing_score_columns"] == ["answer_relevancy"]
+    assert coverage["missing_insight_summaries"] == ["answer_relevancy"]
+
+
+def test_ragxplain_semantic_metric_validation_rejects_empty_coverage(tmp_path):
+    results_path = tmp_path / "results.csv"
+    results_path.write_text("question,candidate_answer\nQuestion,Answer\n", encoding="utf-8")
+
+    with pytest.raises(RagxplainError, match="produced no semantic metrics"):
+        _validate_semantic_metric_artifacts(
+            results_path,
+            {"analysis": {}, "prompt": {"insights": {}}},
+            ["context_relevancy", "context_adherence"],
+        )
