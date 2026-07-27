@@ -81,6 +81,7 @@ class ChatConversationRecord:
     id: str
     title: str
     pinned: bool = False
+    owner_user_id: str = ""
     knowledge_base_id: Optional[str] = None
     chat_configuration_id: Optional[str] = None
     route_mode: str = "adaptive"
@@ -97,6 +98,7 @@ class ChatMessageRecord:
     conversation_id: str
     role: ChatRole
     content: str
+    user_id: str = ""
     contexts: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     status: ChatMessageStatus = "completed"
@@ -127,6 +129,7 @@ class ChatRepository(Protocol):
         self,
         title: str,
         *,
+        owner_user_id: str = "",
         knowledge_base_id: Optional[str] = None,
         chat_configuration_id: Optional[str] = None,
         route_mode: str = "adaptive",
@@ -148,6 +151,7 @@ class ChatRepository(Protocol):
         *,
         title: Optional[str] = None,
         pinned: Optional[bool] = None,
+        owner_user_id: Optional[str] = None,
         knowledge_base_id: Optional[str] = None,
         chat_configuration_id: Optional[str] = None,
         route_mode: Optional[str] = None,
@@ -166,6 +170,7 @@ class ChatRepository(Protocol):
         role: ChatRole,
         content: str,
         *,
+        user_id: str = "",
         contexts: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         status: ChatMessageStatus = "completed",
@@ -284,6 +289,7 @@ class ChatService:
         self,
         title: str = "New chat",
         *,
+        owner_user_id: str = "",
         knowledge_base_id: Optional[str] = None,
         chat_configuration_id: Optional[str] = None,
         route_mode: str = "adaptive",
@@ -294,6 +300,7 @@ class ChatService:
         self.repository.initialize()
         return self.repository.create_conversation(
             _clean_title(title),
+            owner_user_id=owner_user_id,
             knowledge_base_id=knowledge_base_id,
             chat_configuration_id=chat_configuration_id,
             route_mode=route_mode,
@@ -316,6 +323,7 @@ class ChatService:
         *,
         title: Optional[str] = None,
         pinned: Optional[bool] = None,
+        owner_user_id: Optional[str] = None,
         knowledge_base_id: Optional[str] = None,
         chat_configuration_id: Optional[str] = None,
         route_mode: Optional[str] = None,
@@ -328,6 +336,7 @@ class ChatService:
             conversation_id,
             title=_clean_title(title) if title is not None else None,
             pinned=pinned,
+            owner_user_id=owner_user_id,
             knowledge_base_id=knowledge_base_id,
             chat_configuration_id=chat_configuration_id,
             route_mode=route_mode,
@@ -491,6 +500,7 @@ class ChatService:
         role: ChatRole,
         content: str,
         *,
+        user_id: str = "",
         contexts: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         status: ChatMessageStatus = "completed",
@@ -501,6 +511,7 @@ class ChatService:
             conversation_id,
             role,
             content,
+            user_id=user_id,
             contexts=contexts,
             metadata=metadata,
             status=_clean_message_status(status),
@@ -540,6 +551,7 @@ class ChatService:
         conversation_id: Optional[str],
         question: str,
         *,
+        owner_user_id: str = "",
         knowledge_base_id: Optional[str],
         route_mode: str,
         retrieval_mode: str,
@@ -558,6 +570,7 @@ class ChatService:
             merged_metadata = {**conversation.metadata, **metadata}
             return self.repository.update_conversation(
                 conversation.id,
+                owner_user_id=owner_user_id if not conversation.owner_user_id else None,
                 knowledge_base_id=knowledge_base_id,
                 chat_configuration_id=chat_configuration_id,
                 route_mode=route_mode,
@@ -567,6 +580,7 @@ class ChatService:
             )
         return self.repository.create_conversation(
             title_from_question(question),
+            owner_user_id=owner_user_id,
             knowledge_base_id=knowledge_base_id,
             chat_configuration_id=chat_configuration_id,
             route_mode=route_mode,
@@ -584,9 +598,18 @@ class ChatService:
         contexts: List[Dict[str, Any]],
         metadata: Dict[str, Any],
         request_id: str = "",
+        user_id: str = "",
     ) -> ChatMessageRecord:
         self.repository.initialize()
-        self.repository.append_message(conversation_id, "user", question, contexts=[], metadata={}, status="completed")
+        self.repository.append_message(
+            conversation_id,
+            "user",
+            question,
+            user_id=user_id,
+            contexts=[],
+            metadata={},
+            status="completed",
+        )
         assistant = self.repository.append_message(
             conversation_id,
             "assistant",
@@ -722,6 +745,7 @@ class JsonChatRepository:
         self,
         title: str,
         *,
+        owner_user_id: str = "",
         knowledge_base_id: Optional[str] = None,
         chat_configuration_id: Optional[str] = None,
         route_mode: str = "adaptive",
@@ -735,6 +759,7 @@ class JsonChatRepository:
             id=f"chat-{uuid.uuid4().hex}",
             title=_clean_title(title),
             pinned=False,
+            owner_user_id=owner_user_id,
             knowledge_base_id=knowledge_base_id,
             chat_configuration_id=chat_configuration_id,
             route_mode=route_mode,
@@ -774,6 +799,7 @@ class JsonChatRepository:
         *,
         title: Optional[str] = None,
         pinned: Optional[bool] = None,
+        owner_user_id: Optional[str] = None,
         knowledge_base_id: Optional[str] = None,
         chat_configuration_id: Optional[str] = None,
         route_mode: Optional[str] = None,
@@ -789,6 +815,8 @@ class JsonChatRepository:
             payload["title"] = _clean_title(title)
         if pinned is not None:
             payload["pinned"] = pinned
+        if owner_user_id is not None:
+            payload["owner_user_id"] = owner_user_id
         if knowledge_base_id is not None:
             payload["knowledge_base_id"] = knowledge_base_id
         if chat_configuration_id is not None:
@@ -832,6 +860,7 @@ class JsonChatRepository:
         role: ChatRole,
         content: str,
         *,
+        user_id: str = "",
         contexts: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         status: ChatMessageStatus = "completed",
@@ -846,6 +875,7 @@ class JsonChatRepository:
             conversation_id=conversation_id,
             role=role,
             content=content,
+            user_id=user_id,
             contexts=list(contexts or []),
             metadata=dict(metadata or {}),
             status=_clean_message_status(status),
@@ -1163,6 +1193,7 @@ class PostgresChatRepository:
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
             pinned BOOLEAN NOT NULL DEFAULT FALSE,
+            owner_user_id TEXT,
             knowledge_base_id TEXT,
             chat_configuration_id TEXT REFERENCES chat_configurations(id) ON DELETE SET NULL,
             route_mode TEXT NOT NULL DEFAULT 'adaptive',
@@ -1173,6 +1204,7 @@ class PostgresChatRepository:
             updated_at TEXT NOT NULL
         );
         ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS chat_configuration_id TEXT;
+        ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
         CREATE TABLE IF NOT EXISTS chat_messages (
             id TEXT PRIMARY KEY,
             conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
@@ -1182,6 +1214,7 @@ class PostgresChatRepository:
             metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
             status TEXT NOT NULL DEFAULT 'completed',
             request_id TEXT NOT NULL DEFAULT '',
+            user_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -1201,11 +1234,14 @@ class PostgresChatRepository:
         ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed';
         ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS request_id TEXT NOT NULL DEFAULT '';
         ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS user_id TEXT;
         UPDATE chat_messages SET updated_at = created_at WHERE updated_at = '';
         CREATE INDEX IF NOT EXISTS idx_chat_configurations_updated_at ON chat_configurations(updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_chat_conversations_updated_at ON chat_conversations(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_chat_conversations_owner ON chat_conversations(owner_user_id, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_id ON chat_messages(conversation_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_chat_messages_request_id ON chat_messages(request_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_user ON chat_messages(user_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_chat_message_versions_message ON chat_message_versions(message_id, version_number);
         CREATE INDEX IF NOT EXISTS idx_chat_message_versions_request ON chat_message_versions(request_id);
         """
@@ -1258,6 +1294,7 @@ class PostgresChatRepository:
         self,
         title: str,
         *,
+        owner_user_id: str = "",
         knowledge_base_id: Optional[str] = None,
         chat_configuration_id: Optional[str] = None,
         route_mode: str = "adaptive",
@@ -1272,6 +1309,7 @@ class PostgresChatRepository:
             id=f"chat-{uuid.uuid4().hex}",
             title=_clean_title(title),
             pinned=False,
+            owner_user_id=owner_user_id,
             knowledge_base_id=knowledge_base_id,
             chat_configuration_id=chat_configuration_id,
             route_mode=route_mode,
@@ -1286,9 +1324,9 @@ class PostgresChatRepository:
                 text(
                     """
                     INSERT INTO chat_conversations
-                        (id, title, pinned, knowledge_base_id, chat_configuration_id, route_mode, retrieval_mode, top_k, metadata_json, created_at, updated_at)
+                        (id, title, pinned, owner_user_id, knowledge_base_id, chat_configuration_id, route_mode, retrieval_mode, top_k, metadata_json, created_at, updated_at)
                     VALUES
-                        (:id, :title, :pinned, :knowledge_base_id, :chat_configuration_id, :route_mode, :retrieval_mode, :top_k, CAST(:metadata AS JSONB), :created_at, :updated_at)
+                        (:id, :title, :pinned, :owner_user_id, :knowledge_base_id, :chat_configuration_id, :route_mode, :retrieval_mode, :top_k, CAST(:metadata AS JSONB), :created_at, :updated_at)
                     """
                 ),
                 {**_conversation_to_dict(record), "metadata": json.dumps(record.metadata)},
@@ -1333,6 +1371,7 @@ class PostgresChatRepository:
         *,
         title: Optional[str] = None,
         pinned: Optional[bool] = None,
+        owner_user_id: Optional[str] = None,
         knowledge_base_id: Optional[str] = None,
         chat_configuration_id: Optional[str] = None,
         route_mode: Optional[str] = None,
@@ -1351,6 +1390,7 @@ class PostgresChatRepository:
                         UPDATE chat_conversations
                         SET title = :title,
                             pinned = :pinned,
+                            owner_user_id = :owner_user_id,
                             knowledge_base_id = :knowledge_base_id,
                             chat_configuration_id = :chat_configuration_id,
                             route_mode = :route_mode,
@@ -1365,6 +1405,7 @@ class PostgresChatRepository:
                         "id": conversation_id,
                         "title": title if title is not None else current.title,
                         "pinned": pinned if pinned is not None else current.pinned,
+                        "owner_user_id": owner_user_id if owner_user_id is not None else current.owner_user_id,
                         "knowledge_base_id": knowledge_base_id if knowledge_base_id is not None else current.knowledge_base_id,
                         "chat_configuration_id": chat_configuration_id if chat_configuration_id is not None else current.chat_configuration_id,
                         "route_mode": route_mode if route_mode is not None else current.route_mode,
@@ -1392,6 +1433,7 @@ class PostgresChatRepository:
         role: ChatRole,
         content: str,
         *,
+        user_id: str = "",
         contexts: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         status: ChatMessageStatus = "completed",
@@ -1406,6 +1448,7 @@ class PostgresChatRepository:
             conversation_id=conversation_id,
             role=role,
             content=content,
+            user_id=user_id,
             contexts=list(contexts or []),
             metadata=dict(metadata or {}),
             status=_clean_message_status(status),
@@ -1420,9 +1463,9 @@ class PostgresChatRepository:
                     text(
                         """
                         INSERT INTO chat_messages
-                            (id, conversation_id, role, content, contexts_json, metadata_json, status, request_id, created_at, updated_at)
+                            (id, conversation_id, role, content, contexts_json, metadata_json, status, request_id, user_id, created_at, updated_at)
                         VALUES
-                            (:id, :conversation_id, :role, :content, CAST(:contexts AS JSONB), CAST(:metadata AS JSONB), :status, :request_id, :created_at, :updated_at)
+                            (:id, :conversation_id, :role, :content, CAST(:contexts AS JSONB), CAST(:metadata AS JSONB), :status, :request_id, :user_id, :created_at, :updated_at)
                         """
                     ),
                     {
@@ -1922,6 +1965,7 @@ def _conversation_to_dict(record: ChatConversationRecord) -> Dict[str, Any]:
         "id": record.id,
         "title": record.title,
         "pinned": record.pinned,
+        "owner_user_id": record.owner_user_id,
         "knowledge_base_id": record.knowledge_base_id,
         "chat_configuration_id": record.chat_configuration_id,
         "route_mode": record.route_mode,
@@ -2014,6 +2058,7 @@ def _message_to_dict(record: ChatMessageRecord) -> Dict[str, Any]:
         "conversation_id": record.conversation_id,
         "role": record.role,
         "content": record.content,
+        "user_id": record.user_id,
         "contexts": record.contexts,
         "metadata": record.metadata,
         "status": record.status,
@@ -2059,6 +2104,7 @@ def _conversation_from_dict(payload: Dict[str, Any]) -> ChatConversationRecord:
         id=payload["id"],
         title=payload.get("title") or "New chat",
         pinned=bool(payload.get("pinned", False)),
+        owner_user_id=payload.get("owner_user_id") or "",
         knowledge_base_id=payload.get("knowledge_base_id"),
         chat_configuration_id=payload.get("chat_configuration_id"),
         route_mode=payload.get("route_mode", "adaptive"),
@@ -2076,6 +2122,7 @@ def _message_from_dict(payload: Dict[str, Any]) -> ChatMessageRecord:
         conversation_id=payload["conversation_id"],
         role=payload["role"],
         content=payload["content"],
+        user_id=payload.get("user_id") or "",
         contexts=list(payload.get("contexts") or []),
         metadata=dict(payload.get("metadata") or {}),
         status=_clean_message_status(payload.get("status")),
@@ -2105,6 +2152,7 @@ def _conversation_from_row(row: Any) -> ChatConversationRecord:
         id=row["id"],
         title=row["title"],
         pinned=bool(row.get("pinned")),
+        owner_user_id=row.get("owner_user_id") or "",
         knowledge_base_id=row.get("knowledge_base_id"),
         chat_configuration_id=row.get("chat_configuration_id"),
         route_mode=row.get("route_mode") or "adaptive",
@@ -2122,6 +2170,7 @@ def _message_from_row(row: Any) -> ChatMessageRecord:
         conversation_id=row["conversation_id"],
         role=row["role"],
         content=row["content"],
+        user_id=row.get("user_id") or "",
         contexts=list(row.get("contexts_json") or []),
         metadata=dict(row.get("metadata_json") or {}),
         status=_clean_message_status(row.get("status")),

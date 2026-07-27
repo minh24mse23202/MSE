@@ -58,6 +58,8 @@ class AnswerOptions:
     request_id: str = ""
     user_id: str = ""
     conversation_id: str = ""
+    evaluation_run_id: str = ""
+    chat_configuration_id: str = ""
     conversation_history: List[Dict[str, str]] = field(default_factory=list)
     conversation_history_max_exchanges: int = DEFAULT_HISTORY_MAX_EXCHANGES
     conversation_history_max_characters: int = DEFAULT_HISTORY_MAX_CHARACTERS
@@ -357,6 +359,8 @@ class AdaptiveRAGAnswerService:
                 user_id=options.user_id,
                 conversation_id=options.conversation_id,
                 knowledge_base_id=knowledge_base.id if knowledge_base else "",
+                evaluation_run_id=options.evaluation_run_id,
+                chat_configuration_id=options.chat_configuration_id,
             ),
             external_processing_allowed=external_processing_allowed,
             history_max_exchanges=conversation_history_max_exchanges,
@@ -619,6 +623,8 @@ class AdaptiveRAGAnswerService:
                     user_id=options.user_id,
                     conversation_id=options.conversation_id,
                     knowledge_base_id=knowledge_base.id,
+                    evaluation_run_id=options.evaluation_run_id,
+                    chat_configuration_id=options.chat_configuration_id,
                 ),
                 external_processing_allowed=external_processing_allowed,
             )
@@ -799,6 +805,8 @@ class AdaptiveRAGAnswerService:
                         user_id=options.user_id,
                         conversation_id=options.conversation_id,
                         knowledge_base_id=knowledge_base.id if knowledge_base else "",
+                        evaluation_run_id=options.evaluation_run_id,
+                        chat_configuration_id=options.chat_configuration_id,
                     ),
                     external_processing_allowed=external_processing_allowed,
                 )
@@ -1024,6 +1032,8 @@ class AdaptiveRAGAnswerService:
                     user_id=options.user_id,
                     conversation_id=options.conversation_id,
                     knowledge_base_id=knowledge_base.id if knowledge_base else "",
+                    evaluation_run_id=options.evaluation_run_id,
+                    chat_configuration_id=options.chat_configuration_id,
                 ),
                 external_processing_allowed=external_processing_allowed,
             )
@@ -1068,6 +1078,8 @@ class AdaptiveRAGAnswerService:
             user_id=prepared.options.user_id,
             conversation_id=prepared.options.conversation_id,
             knowledge_base_id=prepared.knowledge_base.id if prepared.knowledge_base else "",
+            evaluation_run_id=prepared.options.evaluation_run_id,
+            chat_configuration_id=prepared.options.chat_configuration_id,
         )
 
     def _generate_answer(self, prepared: PreparedAnswer) -> GeneratorResult:
@@ -1651,6 +1663,8 @@ class AdaptiveRAGAnswerService:
                         user_id=options.user_id,
                         conversation_id=options.conversation_id,
                         knowledge_base_id=knowledge_base.id,
+                        evaluation_run_id=options.evaluation_run_id,
+                        chat_configuration_id=options.chat_configuration_id,
                     ),
                     external_processing_allowed=external_processing_allowed,
                     capability="planner",
@@ -1899,6 +1913,8 @@ class AdaptiveRAGAnswerService:
                     user_id=options.user_id,
                     conversation_id=options.conversation_id,
                     knowledge_base_id=knowledge_base.id,
+                    evaluation_run_id=options.evaluation_run_id,
+                    chat_configuration_id=options.chat_configuration_id,
                 ),
                 external_processing_allowed=external_processing_allowed,
             )
@@ -2713,7 +2729,11 @@ def _validate_citations(
     enabled: bool = True,
 ) -> Dict[str, Any]:
     valid_labels = {str(context.document.metadata.get("source_label") or f"S{context.rank}") for context in contexts}
-    cited = set(re.findall(r"\[(S\d+)\]", answer or ""))
+    cited = {
+        label
+        for group in re.findall(r"\[((?:\s*S\d+\s*)(?:,\s*S\d+\s*)*)\]", answer or "")
+        for label in re.findall(r"S\d+", group)
+    }
     invalid = sorted(cited - valid_labels)
     if not enabled:
         return {

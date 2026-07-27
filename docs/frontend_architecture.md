@@ -21,7 +21,8 @@ The React frontend implements the screen transition diagram as a studio-style si
 - Evaluation has Dataset and Evaluation panels.
 - Analytics has Token statistics and Detailed Statistics & Feedbacks tabs.
 - Chat calls FastAPI `POST /answer`.
-- Feedback-ready UI calls FastAPI `POST /feedback`.
+- Answer-version feedback calls FastAPI `PUT /feedback/messages/{assistant_message_id}`.
+- Analytics is admin-only and reads paginated PostgreSQL usage, engagement, and feedback aggregates.
 - Knowledge Bases calls FastAPI knowledge endpoints for live ingestion status, upload, website ingestion and re-indexing.
 
 ## Architecture Alignment

@@ -2,6 +2,19 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ComposedChart,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from "recharts";
+import {
   Activity,
   AlertTriangle,
   BarChart3,
@@ -15,6 +28,7 @@ import {
   ClipboardList,
   Copy,
   Cpu,
+  DollarSign,
   Database,
   Eye,
   EyeOff,
@@ -30,6 +44,7 @@ import {
   LogIn,
   LogOut,
   MessageSquarePlus,
+  MessagesSquare,
   Paperclip,
   Pencil,
   Pin,
@@ -45,6 +60,7 @@ import {
   ThumbsUp,
   Trash2,
   UserPlus,
+  Users,
   X
 } from "lucide-react";
 import {
@@ -65,6 +81,10 @@ import {
   deleteModelDeployment,
   getChatConfigurationLimits,
   getChatMessageTrace,
+  getAnalyticsFilterOptions,
+  getAnalyticsOverview,
+  getAnalyticsUsageBreakdowns,
+  getAnalyticsUsageTrend,
   getJob,
   getTrace,
   getModelUsageSummary,
@@ -80,6 +100,8 @@ import {
   listChatConversations,
   listChatMessageVersions,
   listChatMessages,
+  listAnalyticsFeedback,
+  listAnalyticsUsageEvents,
   listEvaluationCases,
   listEvaluationDatasets,
   listEvaluationExperiments,
@@ -118,9 +140,7 @@ import {
   uploadKnowledgeSource
 } from "./api.js";
 import {
-  architectureLayers,
-  feedbackRows,
-  tokenStats
+  architectureLayers
 } from "./data.js";
 
 const navItems = [
@@ -137,6 +157,28 @@ const routes = [
   { value: "L2 Simple RAG", label: "L2 Simple RAG" },
   { value: "L3 Complex RAG", label: "L3 Complex RAG" },
   { value: "L4 Advanced RAG", label: "L4 Advanced RAG" }
+];
+const ANALYTICS_USAGE_COLUMNS = [
+  { key: "time", label: "Time", width: 180, minWidth: 130 },
+  { key: "scope", label: "Scope", width: 120, minWidth: 90 },
+  { key: "purpose", label: "Purpose", width: 180, minWidth: 110 },
+  { key: "model", label: "Model", width: 240, minWidth: 150 },
+  { key: "knowledge_base", label: "Knowledge base", width: 220, minWidth: 140 },
+  { key: "configuration", label: "Configuration", width: 260, minWidth: 160 },
+  { key: "status", label: "Status", width: 130, minWidth: 90 },
+  { key: "tokens", label: "Tokens", width: 130, minWidth: 90 },
+  { key: "cost", label: "Cost", width: 130, minWidth: 90 }
+];
+const ANALYTICS_FEEDBACK_COLUMNS = [
+  { key: "knowledge_base", label: "Knowledge base", width: 220, minWidth: 140 },
+  { key: "configuration", label: "Configuration", width: 270, minWidth: 160 },
+  { key: "user", label: "User", width: 220, minWidth: 140 },
+  { key: "user_message", label: "User message", width: 320, minWidth: 180 },
+  { key: "ai_message", label: "AI message", width: 400, minWidth: 200 },
+  { key: "rating", label: "Rating", width: 130, minWidth: 100 },
+  { key: "feedback", label: "Feedback", width: 300, minWidth: 180 },
+  { key: "updated", label: "Updated", width: 180, minWidth: 130 },
+  { key: "trace", label: "Trace", width: 120, minWidth: 90 }
 ];
 const responseStructures = [
   "Concise answer with bullets and cited workflow context",
@@ -331,6 +373,10 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [authReady, screen, signedIn]);
 
+  useEffect(() => {
+    if (screen === "analytics" && currentUser?.role !== "admin") setScreen("main");
+  }, [currentUser?.role, screen]);
+
   async function enterStudio(mode, payload) {
     const result = mode === "signup" ? await signupUser(payload) : await loginUser(payload);
     setCurrentUser(result.user);
@@ -426,7 +472,7 @@ export default function App() {
           onBack={() => setScreen("evaluation")}
         />
       )}
-      {screen === "analytics" && <AnalyticsScreen />}
+      {screen === "analytics" && currentUser?.role === "admin" && <AnalyticsScreen />}
       {isProfileOpen && (
         <UserProfileModal
           user={currentUser}
@@ -622,7 +668,7 @@ function Shell({ activeScreen, onNavigate, user, onOpenProfile, onSignOut, child
           </div>
         </div>
         <nav>
-          {navItems.map((item) => (
+          {navItems.filter((item) => item.id !== "analytics" || user?.role === "admin").map((item) => (
             <button
               key={item.id}
               className={activeScreen === item.id ? "active" : ""}
@@ -901,6 +947,7 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
   const [isLoading, setIsLoading] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [feedbackStatus, setFeedbackStatus] = useState("");
+  const [feedbackDraft, setFeedbackDraft] = useState(null);
   const [popup, setPopup] = useState(null);
   const [knowledgeBaseOptions, setKnowledgeBaseOptions] = useState([]);
   const [selectedFilterDocumentIds, setSelectedFilterDocumentIds] = useState([]);
@@ -1506,17 +1553,65 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
 
   async function recordFeedback(message, rating) {
     setFeedbackStatus("Recording feedback...");
+    const assistantMessageId = message.metadata?.assistant_message_id || message.id;
+    const versionNumber = Number(
+      message.viewingVersionNumber
+      || message.metadata?.message_version_number
+      || message.latestVersionNumber
+      || 1
+    );
     try {
-      await submitFeedback({
-        question: message.question || "Seed assistant message",
-        answer: message.content,
+      const savedFeedback = await submitFeedback(assistantMessageId, {
         rating,
-        metadata: message.metadata || {}
+        version_number: versionNumber
       });
+      applyFeedbackToMessage(savedFeedback);
       setFeedbackStatus("Feedback recorded");
+      setFeedbackDraft({
+        assistantMessageId,
+        versionNumber,
+        rating,
+        comment: savedFeedback.comment || ""
+      });
     } catch (error) {
       setFeedbackStatus(`Feedback failed: ${error.message}`);
     }
+  }
+
+  async function saveFeedbackComment() {
+    if (!feedbackDraft) return;
+    try {
+      const savedFeedback = await submitFeedback(feedbackDraft.assistantMessageId, {
+        rating: feedbackDraft.rating,
+        comment: feedbackDraft.comment,
+        version_number: feedbackDraft.versionNumber
+      });
+      applyFeedbackToMessage(savedFeedback);
+      setFeedbackStatus("Feedback comment saved");
+      setFeedbackDraft(null);
+    } catch (error) {
+      setFeedbackStatus(`Feedback failed: ${error.message}`);
+    }
+  }
+
+  function applyFeedbackToMessage(feedback) {
+    if (!feedback?.assistant_message_id) return;
+    setMessages((current) => current.map((message) => {
+      const assistantMessageId = message.metadata?.assistant_message_id || message.id;
+      const viewingVersionNumber = Number(
+        message.viewingVersionNumber
+        || message.metadata?.message_version_number
+        || message.latestVersionNumber
+        || 1
+      );
+      if (
+        assistantMessageId !== feedback.assistant_message_id
+        || viewingVersionNumber !== Number(feedback.version_number || 1)
+      ) {
+        return message;
+      }
+      return { ...message, feedback };
+    }));
   }
 
   async function copyAssistantMessage(message) {
@@ -1553,7 +1648,8 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
         answerVersions: versions,
         versionCount: versions.length,
         latestVersionNumber: Math.max(...versions.map((version) => Number(version.version_number || 0))),
-        viewingVersionNumber: selected.version_number
+        viewingVersionNumber: selected.version_number,
+        feedback: selected.current_user_feedback || null
       }));
     } catch (error) {
       setFeedbackStatus(`Answer versions unavailable: ${error.message}`);
@@ -1902,6 +1998,14 @@ function MainScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, confirmAct
           selectedSourceId: sourceId
         });
       }} />}
+      {feedbackDraft && (
+        <FeedbackCommentDialog
+          draft={feedbackDraft}
+          onChange={(comment) => setFeedbackDraft((current) => ({ ...current, comment }))}
+          onClose={() => setFeedbackDraft(null)}
+          onSave={saveFeedbackComment}
+        />
+      )}
     </section>
   );
 }
@@ -1929,7 +2033,7 @@ function ConversationHistory({
     return (
       <aside className="history-panel panel-rail history-rail">
         <button className="panel-rail-button" type="button" onClick={onToggle} aria-label="Expand chat history">
-          <span>History</span>
+          <span>Chat History</span>
         </button>
       </aside>
     );
@@ -1938,8 +2042,8 @@ function ConversationHistory({
     <aside className="history-panel">
       <header className="panel-titlebar">
         <div>
-          <p className="eyebrow">Chat history</p>
-          <h2>Conversations</h2>
+          <p className="eyebrow">Conversations</p>
+          <h2>Chat history</h2>
         </div>
         <button className="panel-collapse-button" type="button" onClick={onToggle} aria-label="Collapse chat history"><IconOnly icon={ChevronLeft} /></button>
       </header>
@@ -2231,7 +2335,7 @@ function ChatPanel({
                 message.role === "assistant" ? (
                   <AssistantMessageContent
                     content={message.content}
-                    citationSources={message.metadata?.citation_sources || {}}
+                    citationSources={citationSourcesForMessage(message)}
                     onCitationClick={(label, source) => onOpenPopup({
                       type: "source",
                       message,
@@ -2283,8 +2387,24 @@ function ChatPanel({
                     <IconLabel icon={RefreshCw}>Retry</IconLabel>
                   </button>
                 )}
-                <button onClick={() => onFeedback(message, "up")}><IconLabel icon={ThumbsUp}>Useful</IconLabel></button>
-                <button onClick={() => onFeedback(message, "down")}><IconLabel icon={ThumbsDown}>Needs work</IconLabel></button>
+                <button
+                  className={`feedback-action feedback-action-up ${message.feedback?.rating === "up" ? "is-selected" : ""}`}
+                  type="button"
+                  aria-pressed={message.feedback?.rating === "up"}
+                  title={message.feedback?.rating === "up" ? "Rated useful. Click to edit feedback." : "Rate this answer useful"}
+                  onClick={() => onFeedback(message, "up")}
+                >
+                  <IconLabel icon={ThumbsUp}>Useful</IconLabel>
+                </button>
+                <button
+                  className={`feedback-action feedback-action-down ${message.feedback?.rating === "down" ? "is-selected" : ""}`}
+                  type="button"
+                  aria-pressed={message.feedback?.rating === "down"}
+                  title={message.feedback?.rating === "down" ? "Rated needs work. Click to edit feedback." : "Rate this answer as needing work"}
+                  onClick={() => onFeedback(message, "down")}
+                >
+                  <IconLabel icon={ThumbsDown}>Needs work</IconLabel>
+                </button>
                 {message.metadata?.query_rewritten && (
                   <button
                     className="follow-up-resolved-chip"
@@ -2581,7 +2701,7 @@ function RagConfiguration({
     return (
       <aside className="config-panel panel-rail config-rail">
         <button className="panel-rail-button" type="button" onClick={onToggle} aria-label="Expand RAG Customizer">
-          <span>RAG</span>
+          <span>RAG Customizer</span>
         </button>
       </aside>
     );
@@ -3124,6 +3244,49 @@ function KnowledgeBaseSummary({ selectedKnowledgeBase, collapsed = false, onTogg
     </section>
   );
 }
+function FeedbackCommentDialog({ draft, onChange, onClose, onSave }) {
+  return (
+    <div className="modal-backdrop feedback-comment-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="modal feedback-comment-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="feedback-comment-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="modal-header">
+          <div>
+            <h2 id="feedback-comment-title">
+              <IconLabel icon={draft.rating === "up" ? ThumbsUp : ThumbsDown}>Add feedback details</IconLabel>
+            </h2>
+            <p>Your rating is saved. The comment is optional.</p>
+          </div>
+          <button className="icon-button modal-close" type="button" aria-label="Close feedback" onClick={onClose}>
+            <IconOnly icon={X} />
+          </button>
+        </header>
+        <label className="feedback-comment-field">
+          Feedback
+          <textarea
+            value={draft.comment}
+            maxLength={2000}
+            rows={5}
+            placeholder="What was useful, incorrect, or missing?"
+            onChange={(event) => onChange(event.target.value)}
+          />
+          <small>{draft.comment.length}/2,000</small>
+        </label>
+        <footer className="modal-actions">
+          <button className="secondary-action" type="button" onClick={onClose}>Skip</button>
+          <button className="primary-action" type="button" onClick={onSave} disabled={!draft.comment.trim()}>
+            <IconLabel icon={Save}>Save comment</IconLabel>
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
 function TraceModal({ popup, onClose, onOpenSource }) {
   const { type, message, focusStep = "", selectedSourceId = "", sourceLabel = "" } = popup;
   const contexts = message.contexts || [];
@@ -3535,6 +3698,7 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, 
   const [embeddingDeployments, setEmbeddingDeployments] = useState([]);
   const [preparedSources, setPreparedSources] = useState([]);
   const [knowledgeJobs, setKnowledgeJobs] = useState([]);
+  const [recentTerminalKnowledgeJobs, setRecentTerminalKnowledgeJobs] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingDocuments, setIsLoadingDocuments] = useState(false);
   const [error, setError] = useState("");
@@ -3555,7 +3719,10 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, 
       ]).then(([deployments, sources, jobs]) => {
         setEmbeddingDeployments(deployments);
         setPreparedSources(sources);
-        setKnowledgeJobs(jobs.filter((job) => job.resource_type === "knowledge_base"));
+        setKnowledgeJobs(jobs.filter(
+          (job) => job.resource_type === "knowledge_base"
+            && ["queued", "running", "cancel_requested"].includes(job.status)
+        ));
       });
       if (!selectedKnowledgeBaseId && nextItems.length > 0) {
         onSelectKnowledgeBase(nextItems[0].id);
@@ -3620,15 +3787,43 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, 
       const refreshed = await Promise.all(activeJobs.map((job) => getJob(job.id).catch(() => job)));
       setKnowledgeJobs((current) => {
         const updates = new Map(refreshed.map((job) => [job.id, job]));
-        return current.map((job) => updates.get(job.id) || job);
+        return current
+          .map((job) => updates.get(job.id) || job)
+          .filter((job) => ["queued", "running", "cancel_requested"].includes(job.status));
       });
-      if (refreshed.some((job) => ["completed", "failed", "cancelled"].includes(job.status))) {
+      const terminalJobs = refreshed.filter((job) => ["completed", "failed", "cancelled"].includes(job.status));
+      if (terminalJobs.length) {
+        setRecentTerminalKnowledgeJobs((current) => [
+          ...terminalJobs,
+          ...current.filter((job) => !terminalJobs.some((item) => item.id === job.id))
+        ].slice(0, 3));
+        const completedCount = terminalJobs.filter((job) => job.status === "completed").length;
+        if (completedCount) {
+          setActionStatus(
+            completedCount === 1
+              ? "WixQA corpus import completed."
+              : `${completedCount} WixQA corpus imports completed.`
+          );
+        }
         await refreshKnowledgeBases();
         if (selectedKnowledgeBaseId) await refreshDocuments(selectedKnowledgeBaseId);
       }
     }, 1500);
     return () => window.clearInterval(timer);
   }, [knowledgeJobs, selectedKnowledgeBaseId]);
+
+  useEffect(() => {
+    if (!recentTerminalKnowledgeJobs.length) return undefined;
+    const timeout = window.setTimeout(() => {
+      setRecentTerminalKnowledgeJobs([]);
+      setActionStatus((current) => (
+        current.includes("WixQA corpus import") && current.endsWith("completed.")
+          ? ""
+          : current
+      ));
+    }, 8000);
+    return () => window.clearTimeout(timeout);
+  }, [recentTerminalKnowledgeJobs]);
 
   async function loadDocumentChunks(documentId) {
     if (!selectedKnowledgeBaseId || documentChunks[documentId] || loadingDocumentChunks.includes(documentId)) return;
@@ -3701,8 +3896,9 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, 
   }
 
   const selectedKnowledgeBase = items.find((item) => item.id === selectedKnowledgeBaseId);
-  const visibleKnowledgeJobs = knowledgeJobs
+  const visibleKnowledgeJobs = [...recentTerminalKnowledgeJobs, ...knowledgeJobs]
     .filter((job) => job.job_type === "knowledge_wixqa_corpus")
+    .filter((job, index, jobs) => jobs.findIndex((item) => item.id === job.id) === index)
     .slice(0, 3);
 
   return (
@@ -3731,6 +3927,17 @@ function KnowledgeBasesScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, 
               }}
             />
           </div>
+          <button
+            className="icon-button knowledge-job-dismiss"
+            type="button"
+            aria-label="Dismiss job status"
+            onClick={() => {
+              setKnowledgeJobs((current) => current.filter((item) => item.id !== job.id));
+              setRecentTerminalKnowledgeJobs((current) => current.filter((item) => item.id !== job.id));
+            }}
+          >
+            <IconOnly icon={X} size={14} />
+          </button>
         </div>
       ))}
       <div className="table-panel">
@@ -5157,10 +5364,10 @@ function AIModelsScreen({ confirmAction }) {
       </header>
 
       <div className="model-farm-summary ai-models-summary">
-        <Metric label="Deployments" value={String(visibleDeployments.length)} />
-        <Metric label="Monthly cost" value={`$${Number(usageSummary?.estimated_cost_usd || 0).toFixed(4)}`} />
-        <Metric label="Attempts" value={String(usageSummary?.calls || 0)} />
-        <Metric label="Failures" value={String(usageSummary?.failed_calls || 0)} />
+        <Metric label="Deployments" value={formatNumber(visibleDeployments.length, 0)} />
+        <Metric label="Monthly cost" value={`$${formatNumber(usageSummary?.estimated_cost_usd || 0, 4)}`} />
+        <Metric label="Attempts" value={formatNumber(usageSummary?.calls || 0, 0)} />
+        <Metric label="Failures" value={formatNumber(usageSummary?.failed_calls || 0, 0)} />
       </div>
 
       <div className="ai-models-toolbar">
@@ -6155,45 +6362,172 @@ function RagxplainInsightsScreen({ run, onBack }) {
 
 function AnalyticsScreen() {
   const [tab, setTab] = useState("tokens");
-  const [usage, setUsage] = useState([]);
-  const [summary, setSummary] = useState({});
+  const [dateRange, setDateRange] = useState(() => analyticsDateRange(30));
+  const [filters, setFilters] = useState({
+    scope: "",
+    deploymentId: "",
+    knowledgeBaseId: "",
+    chatConfigurationId: "",
+    purpose: "",
+    status: "",
+    userId: "",
+    rating: "",
+    query: ""
+  });
+  const [metric, setMetric] = useState("tokens");
+  const [overview, setOverview] = useState({ usage: {}, engagement: {} });
+  const [trend, setTrend] = useState([]);
+  const [breakdowns, setBreakdowns] = useState({ models: [], knowledge_bases: [], configurations: [] });
+  const [filterOptions, setFilterOptions] = useState({
+    models: [], knowledge_bases: [], configurations: [], purposes: [], statuses: [], scopes: [], users: []
+  });
+  const [usagePage, setUsagePage] = useState({ items: [], total: 0, page: 1, page_size: 25, pages: 1 });
+  const [feedbackPage, setFeedbackPage] = useState({ items: [], total: 0, page: 1, page_size: 25, pages: 1 });
+  const [usagePageNumber, setUsagePageNumber] = useState(1);
+  const [feedbackPageNumber, setFeedbackPageNumber] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [tracePopup, setTracePopup] = useState(null);
+  const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
+  const usageColumnLayout = useResizableAnalyticsColumns(ANALYTICS_USAGE_COLUMNS);
+  const feedbackColumnLayout = useResizableAnalyticsColumns(ANALYTICS_FEEDBACK_COLUMNS);
 
   useEffect(() => {
+    let active = true;
     async function loadAnalytics() {
+      setLoading(true);
       try {
-        const [nextUsage, nextSummary] = await Promise.all([
-          listModelUsage({ limit: 200 }),
-          getModelUsageSummary()
+        const common = analyticsApiFilters(dateRange, filters);
+        const [nextOverview, nextOptions] = await Promise.all([
+          getAnalyticsOverview(common),
+          getAnalyticsFilterOptions(common)
         ]);
-        setUsage(nextUsage);
-        setSummary(nextSummary);
-        setStatus("");
+        if (!active) return;
+        setOverview(nextOverview);
+        setFilterOptions(nextOptions);
+        if (tab === "tokens") {
+          const [nextTrend, nextBreakdowns, nextUsage] = await Promise.all([
+            getAnalyticsUsageTrend(common),
+            getAnalyticsUsageBreakdowns({ ...common, metric }),
+            listAnalyticsUsageEvents({ ...common, page: usagePageNumber, pageSize })
+          ]);
+          if (!active) return;
+          setTrend(nextTrend);
+          setBreakdowns(nextBreakdowns);
+          setUsagePage(nextUsage);
+        } else {
+          const nextFeedback = await listAnalyticsFeedback({
+            ...common,
+            rating: filters.rating,
+            page: feedbackPageNumber,
+            pageSize
+          });
+          if (!active) return;
+          setFeedbackPage(nextFeedback);
+        }
+        if (active) setStatus("");
       } catch (error) {
-        setStatus(`Analytics unavailable: ${error.message}`);
+        if (active) setStatus(`Analytics unavailable: ${error.message}`);
+      } finally {
+        if (active) setLoading(false);
       }
     }
     loadAnalytics();
-  }, []);
+    return () => {
+      active = false;
+    };
+  }, [
+    tab, dateRange.from, dateRange.to, filters.scope, filters.deploymentId,
+    filters.knowledgeBaseId, filters.chatConfigurationId, filters.purpose,
+    filters.status, filters.userId, filters.rating, filters.query, metric,
+    usagePageNumber, feedbackPageNumber, pageSize, refreshKey
+  ]);
 
-  const realTokenStats = [
-    { label: "Total attempts", value: summary.calls || usage.length, delta: "AI Models recorded calls" },
-    { label: "Tokens", value: summary.total_tokens || usage.reduce((sum, event) => sum + Number(event.total_tokens || 0), 0), delta: "input + output" },
-    { label: "Estimated cost", value: `$${formatNumber(summary.estimated_cost_usd || usage.reduce((sum, event) => sum + Number(event.estimated_cost_usd || 0), 0), 4)}`, delta: "current month" },
-    { label: "Failures", value: summary.failed_calls || usage.filter((event) => event.status !== "completed").length, delta: "provider/runtime errors" }
+  const usageSummary = overview.usage || {};
+  const engagement = overview.engagement || {};
+  const tokenStats = [
+    { label: "Calls", value: formatNumber(usageSummary.calls || 0), delta: `${formatNumber(usageSummary.failed_calls || 0)} failed` },
+    { label: "Input tokens", value: formatNumber(usageSummary.input_tokens || 0), delta: "prompt and context" },
+    { label: "Output tokens", value: formatNumber(usageSummary.output_tokens || 0), delta: "generated responses" },
+    { label: "Total tokens", value: formatNumber(usageSummary.total_tokens || 0), delta: "all recorded statuses" },
+    { label: "Estimated cost", value: `$${formatNumber(usageSummary.estimated_cost_usd || 0, 4)}`, delta: "includes partial calls" },
+    { label: "Average latency", value: `${formatNumber(usageSummary.average_latency_ms || 0, 0)} ms`, delta: "all model attempts" }
   ];
+  const engagementStats = [
+    { label: "Active chats", value: formatNumber(engagement.active_chats || 0), delta: "with a user message", icon: MessagesSquare },
+    {
+      label: "Chat messages",
+      value: formatNumber(engagement.total_messages || 0),
+      delta: `${formatNumber(engagement.user_messages || 0)} user / ${formatNumber(engagement.assistant_messages || 0)} AI`,
+      icon: MessageSquarePlus
+    },
+    {
+      label: "Active users",
+      value: formatNumber(engagement.active_users || 0),
+      delta: `${formatNumber(engagement.unknown_user_messages || 0)} unattributed messages`,
+      icon: Users
+    },
+    { label: "Thumbs up", value: formatNumber(engagement.thumbs_up || 0), delta: "current ratings", icon: ThumbsUp },
+    { label: "Thumbs down", value: formatNumber(engagement.thumbs_down || 0), delta: "current ratings", icon: ThumbsDown }
+  ];
+
+  function updateFilter(key, value) {
+    setFilters((current) => ({ ...current, [key]: value }));
+    setUsagePageNumber(1);
+    setFeedbackPageNumber(1);
+  }
+
+  function applyDatePreset(days) {
+    setDateRange(analyticsDateRange(days));
+    setUsagePageNumber(1);
+    setFeedbackPageNumber(1);
+  }
+
+  function openFeedbackTrace(row) {
+    if (!row.trace_id) return;
+    setTracePopup({
+      type: "trace",
+      versionNumber: row.version_number,
+      message: {
+        id: row.assistant_message_id,
+        content: row.answer_snapshot,
+        contexts: [],
+        metadata: {
+          trace_id: row.trace_id,
+          assistant_message_id: row.assistant_message_id,
+          message_version_number: row.version_number
+        }
+      }
+    });
+  }
+
   return (
-    <section className="page-stack">
-      <PanelHeader eyebrow="Usage Analytics" title="Analytics" />
+    <section className="page-stack analytics-screen">
+      <PanelHeader
+        eyebrow="Operational intelligence"
+        title="Analytics"
+        action={(
+          <button className="secondary-action" type="button" onClick={() => setRefreshKey((value) => value + 1)} disabled={loading}>
+            <IconLabel icon={RefreshCw}>{loading ? "Refreshing..." : "Refresh"}</IconLabel>
+          </button>
+        )}
+      />
       {status && <div className="inline-status">{status}</div>}
       <div className="tabs">
         <button className={tab === "tokens" ? "active" : ""} onClick={() => setTab("tokens")}><IconLabel icon={BarChart3}>Token statistics</IconLabel></button>
         <button className={tab === "feedback" ? "active" : ""} onClick={() => setTab("feedback")}><IconLabel icon={ThumbsUp}>Detailed Statistics & Feedbacks</IconLabel></button>
       </div>
+      <AnalyticsDateToolbar
+        dateRange={dateRange}
+        onChange={setDateRange}
+        onPreset={applyDatePreset}
+      />
       {tab === "tokens" ? (
         <>
-          <div className="metrics-grid">
-            {realTokenStats.map((stat) => (
+          <AnalyticsUsageFilters filters={filters} options={filterOptions} onChange={updateFilter} />
+          <div className="metrics-grid analytics-metrics-grid">
+            {tokenStats.map((stat) => (
               <article className="metric-card" key={stat.label}>
                 <small>{stat.label}</small>
                 <strong>{stat.value}</strong>
@@ -6201,62 +6535,461 @@ function AnalyticsScreen() {
               </article>
             ))}
           </div>
-          <div className="table-panel">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Purpose</th>
-                  <th>Provider</th>
-                  <th>Model</th>
-                  <th>Status</th>
-                  <th>Tokens</th>
-                  <th>Cost</th>
-                </tr>
-              </thead>
-              <tbody>
-                {usage.slice(0, 50).map((event) => (
-                  <tr key={event.id}>
-                    <td>{formatDateTime(event.created_at)}</td>
-                    <td>{event.purpose}</td>
-                    <td>{event.provider}</td>
-                    <td>{event.model}</td>
-                    <td>{event.status}</td>
-                    <td>{event.total_tokens}</td>
-                    <td>${formatNumber(event.estimated_cost_usd, 5)}</td>
+          <section className="analytics-chart-panel analytics-trend-panel">
+            <div className="analytics-section-title">
+              <div>
+                <h2>Usage over time</h2>
+                <p>Daily token volume and estimated provider cost.</p>
+              </div>
+            </div>
+            <div className="analytics-chart">
+              {trend.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={trend} margin={{ top: 8, right: 10, left: 10, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="day" tickFormatter={shortChartDate} minTickGap={24} />
+                    <YAxis yAxisId="tokens" tickFormatter={(value) => formatNumber(value, 0)} />
+                    <YAxis yAxisId="cost" orientation="right" tickFormatter={(value) => `$${formatNumber(value, 3)}`} />
+                    <Tooltip content={<AnalyticsTooltip />} />
+                    <Legend />
+                    <Bar yAxisId="tokens" dataKey="input_tokens" stackId="tokens" name="Input tokens" fill="#7ba6b5" radius={[0, 0, 3, 3]} />
+                    <Bar yAxisId="tokens" dataKey="output_tokens" stackId="tokens" name="Output tokens" fill="#bf7773" radius={[3, 3, 0, 0]} />
+                    <Line yAxisId="cost" type="monotone" dataKey="cost_usd" name="Cost (USD)" stroke="#5046e5" strokeWidth={2} dot={false} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              ) : <AnalyticsEmpty message="No model usage in this date range." />}
+            </div>
+          </section>
+          <div className="analytics-section-title analytics-breakdown-title">
+            <div>
+              <h2>Consumption breakdown</h2>
+              <p>Top ten entries plus Other, stacked by runtime purpose.</p>
+            </div>
+            <div className="segmented-control analytics-metric-toggle">
+              <button className={metric === "tokens" ? "active" : ""} type="button" onClick={() => setMetric("tokens")}>Tokens</button>
+              <button className={metric === "cost" ? "active" : ""} type="button" onClick={() => setMetric("cost")}>Cost</button>
+            </div>
+          </div>
+          <div className="analytics-breakdown-grid">
+            <AnalyticsBreakdownChart title="By AI model" data={breakdowns.models || []} metric={metric} />
+            <AnalyticsBreakdownChart title="By knowledge base" data={breakdowns.knowledge_bases || []} metric={metric} />
+            <AnalyticsBreakdownChart title="By RAG configuration" data={breakdowns.configurations || []} metric={metric} />
+          </div>
+          <div className="table-panel analytics-table-panel">
+            <div className="analytics-section-title">
+              <div>
+                <h2>Model usage events</h2>
+                <p>{formatNumber(usagePage.total || 0)} matching attempts, newest first.</p>
+              </div>
+            </div>
+            <div className="analytics-table-scroll">
+              <table
+                className="resizable-analytics-table"
+                style={{ width: usageColumnLayout.totalWidth, minWidth: usageColumnLayout.totalWidth }}
+              >
+                <AnalyticsTableColumns columns={ANALYTICS_USAGE_COLUMNS} widths={usageColumnLayout.widths} />
+                <thead>
+                  <tr>
+                    {ANALYTICS_USAGE_COLUMNS.map((column) => (
+                      <ResizableAnalyticsHeader
+                        key={column.key}
+                        column={column}
+                        width={usageColumnLayout.widths[column.key]}
+                        onResize={usageColumnLayout.resize}
+                        onReset={usageColumnLayout.reset}
+                      />
+                    ))}
                   </tr>
-                ))}
-                {usage.length === 0 && <tr><td colSpan="7">No model usage recorded yet.</td></tr>}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {usagePage.items.map((event) => (
+                    <tr key={event.id}>
+                      <td>{formatDateTime(event.created_at)}</td>
+                      <td><span className={`analytics-scope analytics-scope-${event.activity_scope}`}>{event.activity_scope}</span></td>
+                      <td>{event.purpose}</td>
+                      <td><strong>{event.deployment_name}</strong><small>{event.provider} / {event.model}</small></td>
+                      <td>{event.knowledge_base_name || "Unknown"}</td>
+                      <td>{event.configuration_label || "Unknown"}</td>
+                      <td>{event.status}</td>
+                      <td>{formatNumber(event.total_tokens)}</td>
+                      <td>${formatNumber(event.estimated_cost_usd, 5)}</td>
+                    </tr>
+                  ))}
+                  {usagePage.items.length === 0 && <tr><td colSpan="9">No model usage matches these filters.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            <AnalyticsPagination page={usagePage} pageSize={pageSize} onPage={setUsagePageNumber} onPageSize={(value) => {
+              setPageSize(value);
+              setUsagePageNumber(1);
+              setFeedbackPageNumber(1);
+            }} />
           </div>
         </>
       ) : (
-        <div className="table-panel">
-          <table>
-            <thead>
-              <tr>
-                <th>User</th>
-                <th>Rating</th>
-                <th>Topic</th>
-                <th>Feedback</th>
-              </tr>
-            </thead>
-            <tbody>
-              {feedbackRows.map((row) => (
-                <tr key={`${row.user}-${row.topic}`}>
-                  <td>{row.user}</td>
-                  <td>{row.rating}</td>
-                  <td>{row.topic}</td>
-                  <td>{row.note}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <AnalyticsFeedbackFilters filters={filters} options={filterOptions} onChange={updateFilter} />
+          <div className="metrics-grid analytics-engagement-grid">
+            {engagementStats.map((stat) => (
+              <article className="metric-card engagement-card" key={stat.label}>
+                <span className="metric-icon"><IconOnly icon={stat.icon} size={18} /></span>
+                <small>{stat.label}</small>
+                <strong>{stat.value}</strong>
+                <span>{stat.delta}</span>
+              </article>
+            ))}
+          </div>
+          <div className="analytics-message-status">
+            <span>Completed <strong>{formatNumber(engagement.completed_messages || 0)}</strong></span>
+            <span>Failed <strong>{formatNumber(engagement.failed_messages || 0)}</strong></span>
+            <span>Cancelled <strong>{formatNumber(engagement.cancelled_messages || 0)}</strong></span>
+          </div>
+          <div className="table-panel analytics-table-panel feedback-analytics-table">
+            <div className="analytics-section-title">
+              <div>
+                <h2>User feedback</h2>
+                <p>{formatNumber(feedbackPage.total || 0)} current answer-version ratings.</p>
+              </div>
+            </div>
+            <div className="analytics-table-scroll">
+              <table
+                className="resizable-analytics-table"
+                style={{ width: feedbackColumnLayout.totalWidth, minWidth: feedbackColumnLayout.totalWidth }}
+              >
+                <AnalyticsTableColumns columns={ANALYTICS_FEEDBACK_COLUMNS} widths={feedbackColumnLayout.widths} />
+                <thead>
+                  <tr>
+                    {ANALYTICS_FEEDBACK_COLUMNS.map((column) => (
+                      <ResizableAnalyticsHeader
+                        key={column.key}
+                        column={column}
+                        width={feedbackColumnLayout.widths[column.key]}
+                        onResize={feedbackColumnLayout.resize}
+                        onReset={feedbackColumnLayout.reset}
+                      />
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {feedbackPage.items.map((row) => (
+                    <tr key={row.id}>
+                      <td>{row.knowledge_base_name_snapshot || "Unknown"}</td>
+                      <td>
+                        {row.configuration_code_snapshot
+                          ? `${row.configuration_code_snapshot} | ${row.configuration_name_snapshot || "Unknown"}`
+                          : row.configuration_name_snapshot || "Unknown"}
+                      </td>
+                      <td>
+                        <strong>{row.user_name_snapshot || row.user_email_snapshot || "Unknown"}</strong>
+                        {row.user_name_snapshot && <small>{row.user_email_snapshot}</small>}
+                      </td>
+                      <td><ExpandableTableText text={row.question_snapshot} /></td>
+                      <td><ExpandableTableText text={row.answer_snapshot} /></td>
+                      <td>
+                        <span className={`feedback-rating feedback-rating-${row.rating}`}>
+                          <IconLabel icon={row.rating === "up" ? ThumbsUp : ThumbsDown}>{row.rating === "up" ? "Up" : "Down"}</IconLabel>
+                        </span>
+                      </td>
+                      <td><ExpandableTableText text={row.comment || "No comment"} /></td>
+                      <td>{formatDateTime(row.updated_at)}</td>
+                      <td>
+                        <button
+                          className="table-icon-action"
+                          type="button"
+                          disabled={!row.trace_id}
+                          title={row.trace_id ? "Open Trace report" : "Trace unavailable"}
+                          onClick={() => openFeedbackTrace(row)}
+                        >
+                          <IconLabel icon={GitBranch}>Trace</IconLabel>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {feedbackPage.items.length === 0 && <tr><td colSpan="9">No feedback matches these filters.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            <AnalyticsPagination page={feedbackPage} pageSize={pageSize} onPage={setFeedbackPageNumber} onPageSize={(value) => {
+              setPageSize(value);
+              setUsagePageNumber(1);
+              setFeedbackPageNumber(1);
+            }} />
+          </div>
+        </>
       )}
+      {tracePopup && <TraceModal popup={tracePopup} onClose={() => setTracePopup(null)} onOpenSource={() => {}} />}
     </section>
   );
+}
+
+function AnalyticsDateToolbar({ dateRange, onChange, onPreset }) {
+  return (
+    <section className="analytics-date-toolbar" aria-label="Analytics date range">
+      <div className="analytics-presets">
+        <button type="button" onClick={() => onPreset(1)}>Today</button>
+        <button type="button" onClick={() => onPreset(7)}>7 days</button>
+        <button type="button" onClick={() => onPreset(30)}>30 days</button>
+        <button type="button" onClick={() => onPreset(90)}>90 days</button>
+      </div>
+      <label>From<input type="date" value={dateRange.from} onChange={(event) => onChange({ ...dateRange, from: event.target.value })} /></label>
+      <label>To<input type="date" value={dateRange.to} onChange={(event) => onChange({ ...dateRange, to: event.target.value })} /></label>
+    </section>
+  );
+}
+
+function AnalyticsUsageFilters({ filters, options, onChange }) {
+  return (
+    <section className="analytics-filters">
+      <label>Scope<select value={filters.scope} onChange={(event) => onChange("scope", event.target.value)}>
+        <option value="">All scopes</option>
+        {(options.scopes || []).map((value) => <option key={value} value={value}>{titleCase(value)}</option>)}
+      </select></label>
+      <AnalyticsOptionFilter label="AI model" value={filters.deploymentId} options={options.models} onChange={(value) => onChange("deploymentId", value)} />
+      <AnalyticsOptionFilter label="Knowledge base" value={filters.knowledgeBaseId} options={options.knowledge_bases} onChange={(value) => onChange("knowledgeBaseId", value)} />
+      <AnalyticsOptionFilter label="Configuration" value={filters.chatConfigurationId} options={options.configurations} onChange={(value) => onChange("chatConfigurationId", value)} />
+      <label>Purpose<select value={filters.purpose} onChange={(event) => onChange("purpose", event.target.value)}>
+        <option value="">All purposes</option>
+        {(options.purposes || []).map((value) => <option key={value} value={value}>{value}</option>)}
+      </select></label>
+      <label>Status<select value={filters.status} onChange={(event) => onChange("status", event.target.value)}>
+        <option value="">All statuses</option>
+        {(options.statuses || []).map((value) => <option key={value} value={value}>{titleCase(value)}</option>)}
+      </select></label>
+      <label className="analytics-search-filter">Search<input value={filters.query} onChange={(event) => onChange("query", event.target.value)} placeholder="Model, purpose, KB, configuration..." /></label>
+    </section>
+  );
+}
+
+function AnalyticsFeedbackFilters({ filters, options, onChange }) {
+  return (
+    <section className="analytics-filters analytics-feedback-filters">
+      <AnalyticsOptionFilter label="Knowledge base" value={filters.knowledgeBaseId} options={options.knowledge_bases} onChange={(value) => onChange("knowledgeBaseId", value)} />
+      <AnalyticsOptionFilter label="Configuration" value={filters.chatConfigurationId} options={options.configurations} onChange={(value) => onChange("chatConfigurationId", value)} />
+      <AnalyticsOptionFilter label="User" value={filters.userId} options={options.users} onChange={(value) => onChange("userId", value)} />
+      <label>Rating<select value={filters.rating} onChange={(event) => onChange("rating", event.target.value)}>
+        <option value="">All ratings</option>
+        <option value="up">Thumbs up</option>
+        <option value="down">Thumbs down</option>
+      </select></label>
+      <label className="analytics-search-filter">Search<input value={filters.query} onChange={(event) => onChange("query", event.target.value)} placeholder="User, message, or feedback..." /></label>
+    </section>
+  );
+}
+
+function AnalyticsOptionFilter({ label, value, options = [], onChange }) {
+  return (
+    <label>{label}<select value={value} onChange={(event) => onChange(event.target.value)}>
+      <option value="">All {label.toLowerCase()}s</option>
+      {options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+    </select></label>
+  );
+}
+
+function AnalyticsBreakdownChart({ title, data, metric }) {
+  const chartHeight = Math.max(250, Math.min(420, data.length * 34 + 70));
+  return (
+    <section className="analytics-chart-panel analytics-breakdown-card">
+      <h3>{title}</h3>
+      <div className="analytics-chart" style={{ height: chartHeight }}>
+        {data.length ? (
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data} layout="vertical" margin={{ top: 6, right: 12, left: 8, bottom: 6 }}>
+              <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+              <XAxis type="number" tickFormatter={metric === "tokens" ? (value) => formatNumber(value, 0) : (value) => `$${formatNumber(value, 3)}`} />
+              <YAxis dataKey="label" type="category" width={125} tick={{ fontSize: 11 }} tickFormatter={(value) => truncateText(value, 20)} />
+              <Tooltip content={<AnalyticsTooltip metric={metric} />} />
+              <Legend />
+              <Bar dataKey="chat" stackId="scope" name="Chat" fill="#6f9eaf" />
+              <Bar dataKey="evaluation" stackId="scope" name="Evaluation" fill="#b77f91" />
+              <Bar dataKey="knowledge" stackId="scope" name="Knowledge" fill="#7d9d79" />
+              <Bar dataKey="system" stackId="scope" name="System" fill="#9b91ad" radius={[0, 4, 4, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        ) : <AnalyticsEmpty message={`No ${title.toLowerCase()} data.`} />}
+      </div>
+    </section>
+  );
+}
+
+function AnalyticsTooltip({ active, payload, label, metric = "" }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="analytics-tooltip">
+      <strong>{label}</strong>
+      {payload.map((item) => (
+        <span key={`${item.name}-${item.dataKey}`} style={{ color: item.color }}>
+          {item.name}: {metric === "cost" || item.dataKey === "cost_usd"
+            ? `$${formatNumber(item.value, 5)}`
+            : formatNumber(item.value)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function useResizableAnalyticsColumns(columns) {
+  const [widths, setWidths] = useState(() => Object.fromEntries(
+    columns.map((column) => [column.key, column.width])
+  ));
+
+  function resize(key, nextWidth) {
+    const column = columns.find((item) => item.key === key);
+    if (!column) return;
+    setWidths((current) => ({
+      ...current,
+      [key]: Math.max(column.minWidth, Math.round(Number(nextWidth) || column.width))
+    }));
+  }
+
+  function reset(key) {
+    const column = columns.find((item) => item.key === key);
+    if (column) resize(key, column.width);
+  }
+
+  return {
+    widths,
+    resize,
+    reset,
+    totalWidth: columns.reduce((total, column) => total + (widths[column.key] || column.width), 0)
+  };
+}
+
+function AnalyticsTableColumns({ columns, widths }) {
+  return (
+    <colgroup>
+      {columns.map((column) => (
+        <col key={column.key} style={{ width: widths[column.key] || column.width }} />
+      ))}
+    </colgroup>
+  );
+}
+
+function ResizableAnalyticsHeader({ column, width, onResize, onReset }) {
+  function startResize(event) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = width;
+    document.body.classList.add("is-resizing-analytics-column");
+
+    function move(moveEvent) {
+      onResize(column.key, startWidth + moveEvent.clientX - startX);
+    }
+
+    function stop() {
+      document.body.classList.remove("is-resizing-analytics-column");
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    }
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+  }
+
+  function handleKeyboardResize(event) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    onResize(column.key, width + (event.key === "ArrowRight" ? 20 : -20));
+  }
+
+  return (
+    <th className="resizable-analytics-header" scope="col">
+      <span>{column.label}</span>
+      <span
+        className="analytics-column-resize-handle"
+        role="separator"
+        aria-label={`Resize ${column.label} column`}
+        aria-orientation="vertical"
+        aria-valuemin={column.minWidth}
+        aria-valuenow={width}
+        tabIndex="0"
+        title="Drag to resize. Double-click to reset."
+        onPointerDown={startResize}
+        onDoubleClick={() => onReset(column.key)}
+        onKeyDown={handleKeyboardResize}
+      />
+    </th>
+  );
+}
+
+function AnalyticsPagination({ page, pageSize, onPage, onPageSize }) {
+  const firstRow = (page.page - 1) * page.page_size + 1;
+  const lastRow = Math.min(page.page * page.page_size, page.total);
+  return (
+    <footer className="analytics-pagination">
+      <span>
+        {page.total
+          ? `${formatNumber(firstRow, 0)}-${formatNumber(lastRow, 0)} of ${formatNumber(page.total, 0)}`
+          : "0 items"}
+      </span>
+      <label>Rows<select value={pageSize} onChange={(event) => onPageSize(Number(event.target.value))}>
+        {[25, 50, 100].map((value) => <option key={value} value={value}>{formatNumber(value, 0)}</option>)}
+      </select></label>
+      <button type="button" aria-label="Previous page" disabled={page.page <= 1} onClick={() => onPage(page.page - 1)}><IconOnly icon={ChevronLeft} /></button>
+      <strong>{formatNumber(page.page, 0)} / {formatNumber(page.pages || 1, 0)}</strong>
+      <button type="button" aria-label="Next page" disabled={page.page >= page.pages} onClick={() => onPage(page.page + 1)}><IconOnly icon={ChevronRight} /></button>
+    </footer>
+  );
+}
+
+function ExpandableTableText({ text = "" }) {
+  const normalized = String(text || "");
+  if (normalized.length <= 120) return <span className="analytics-cell-text">{normalized}</span>;
+  return (
+    <details className="analytics-expandable-text">
+      <summary>{normalized}</summary>
+      <p>{normalized}</p>
+    </details>
+  );
+}
+
+function AnalyticsEmpty({ message }) {
+  return <div className="analytics-empty"><BarChart3 size={22} aria-hidden="true" /><span>{message}</span></div>;
+}
+
+function analyticsDateRange(days) {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - Math.max(0, days - 1));
+  return { from: localDateValue(from), to: localDateValue(to) };
+}
+
+function analyticsApiFilters(dateRange, filters) {
+  const from = new Date(`${dateRange.from}T00:00:00`);
+  const inclusiveTo = new Date(`${dateRange.to}T00:00:00`);
+  inclusiveTo.setDate(inclusiveTo.getDate() + 1);
+  return {
+    from: from.toISOString(),
+    to: inclusiveTo.toISOString(),
+    scope: filters.scope,
+    deploymentId: filters.deploymentId,
+    knowledgeBaseId: filters.knowledgeBaseId,
+    chatConfigurationId: filters.chatConfigurationId,
+    purpose: filters.purpose,
+    status: filters.status,
+    userId: filters.userId,
+    query: filters.query
+  };
+}
+
+function localDateValue(date) {
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
+}
+
+function shortChartDate(value) {
+  const date = new Date(`${value}T00:00:00`);
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function titleCase(value) {
+  return String(value || "").replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function truncateText(value, length) {
+  const normalized = String(value || "");
+  return normalized.length > length ? `${normalized.slice(0, Math.max(0, length - 1))}…` : normalized;
 }
 
 function IconLabel({ icon: Icon, children, size = 16 }) {
@@ -6282,6 +7015,20 @@ function AssistantMessageContent({
         skipHtml
         components={{
           a: ({ children, href, title }) => {
+            const displayedCitationLabel = citationLabelFromChildren(children);
+            if (displayedCitationLabel && citationSources[displayedCitationLabel]) {
+              const source = citationSources[displayedCitationLabel];
+              return (
+                <button
+                  className="inline-citation"
+                  type="button"
+                  title={source?.title ? `${displayedCitationLabel}: ${source.title}` : `Open source ${displayedCitationLabel}`}
+                  onClick={() => onCitationClick(displayedCitationLabel, source)}
+                >
+                  [{displayedCitationLabel}]
+                </button>
+              );
+            }
             if (href?.startsWith("aragbiz-source:")) {
               const label = decodeURIComponent(href.slice("aragbiz-source:".length));
               const source = citationSources[label];
@@ -6341,7 +7088,7 @@ function transformCitationTextNodes(node, validLabels) {
       return;
     }
     const value = String(child.value || "");
-    const pattern = /\[(S\d+)\]/g;
+    const pattern = /\[((?:\s*S\d+\s*)(?:,\s*S\d+\s*)*)\]/g;
     let cursor = 0;
     let match = pattern.exec(value);
     if (!match) {
@@ -6352,11 +7099,14 @@ function transformCitationTextNodes(node, validLabels) {
       if (match.index > cursor) {
         nextChildren.push({ type: "text", value: value.slice(cursor, match.index) });
       }
-      const label = match[1];
-      nextChildren.push({
-        type: "link",
-        url: `${validLabels.has(label) ? "aragbiz-source:" : "aragbiz-invalid:"}${encodeURIComponent(label)}`,
-        children: [{ type: "text", value: `[${label}]` }]
+      const labels = match[1].match(/S\d+/g) || [];
+      labels.forEach((label, index) => {
+        if (index > 0) nextChildren.push({ type: "text", value: " " });
+        nextChildren.push({
+          type: "link",
+          url: `${validLabels.has(label) ? "aragbiz-source:" : "aragbiz-invalid:"}${encodeURIComponent(label)}`,
+          children: [{ type: "text", value: `[${label}]` }]
+        });
       });
       cursor = match.index + match[0].length;
       match = pattern.exec(value);
@@ -6368,15 +7118,47 @@ function transformCitationTextNodes(node, validLabels) {
   node.children = nextChildren;
 }
 
+function citationSourcesForMessage(message = {}) {
+  const persisted = message.metadata?.citation_sources || {};
+  const contexts = Array.isArray(message.contexts) ? message.contexts : [];
+  const derived = {};
+  contexts.forEach((context, index) => {
+    const rank = Number(context.rank || index + 1);
+    const metadata = context.metadata || {};
+    const label = String(metadata.source_label || `S${rank}`);
+    derived[label] = {
+      context_id: context.id,
+      chunk_id: metadata.chunk_id || context.id,
+      document_id: metadata.document_id || "",
+      title: metadata.title || metadata.filename || `Source ${rank}`,
+      chunk_index: metadata.chunk_index,
+      rank
+    };
+  });
+  return { ...persisted, ...derived };
+}
+
+function citationLabelFromChildren(children) {
+  const values = Array.isArray(children) ? children : [children];
+  const text = values
+    .map((value) => (typeof value === "string" || typeof value === "number" ? String(value) : ""))
+    .join("")
+    .trim();
+  return text.match(/^\[?(S\d+)\]?$/)?.[1] || "";
+}
+
 function IconOnly({ icon: Icon, size = 18 }) {
   return <Icon className="button-icon" size={size} aria-hidden="true" strokeWidth={2} />;
 }
 
-function PanelHeader({ eyebrow, title }) {
+function PanelHeader({ eyebrow, title, action = null }) {
   return (
     <header className="panel-header">
-      <p className="eyebrow">{eyebrow}</p>
-      <h1>{title}</h1>
+      <div>
+        <p className="eyebrow">{eyebrow}</p>
+        <h1>{title}</h1>
+      </div>
+      {action}
     </header>
   );
 }
@@ -6509,7 +7291,11 @@ function formatPercentMetric(value) {
 function formatNumber(value, digits = 1) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
-  return number.toFixed(digits).replace(/\.0$/, "");
+  return new Intl.NumberFormat(undefined, {
+    useGrouping: true,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: Math.max(0, digits)
+  }).format(number);
 }
 
 function formatDistribution(distribution = {}) {
@@ -6587,7 +7373,8 @@ function messagesFromChatRecords(records = []) {
       versionCount: Number(record.version_count || 1),
       latestVersionNumber: Number(record.latest_version_number || record.metadata?.message_version_number || 1),
       latestVersionStatus: record.latest_version_status || record.status || "completed",
-      viewingVersionNumber: Number(record.metadata?.message_version_number || 1)
+      viewingVersionNumber: Number(record.metadata?.message_version_number || 1),
+      feedback: record.current_user_feedback || null
     };
   });
 }

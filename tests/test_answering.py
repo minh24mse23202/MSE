@@ -2,7 +2,12 @@ import asyncio
 
 import pytest
 
-from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions, KnowledgeBaseRetriever
+from aragbiz.answering import (
+    AdaptiveRAGAnswerService,
+    AnswerOptions,
+    KnowledgeBaseRetriever,
+    _validate_citations,
+)
 from aragbiz.classifier import ClassificationPrediction
 from aragbiz.cancellation import AnswerCancelled, CancellationToken
 from aragbiz.generation import ExtractiveGenerator
@@ -513,6 +518,25 @@ def test_citation_validation_is_advisory_and_can_be_disabled(tmp_path):
     assert first_source["context_id"]
     assert first_source["document_id"]
     assert disabled.metadata["citation_validation"]["status"] == "disabled"
+
+
+def test_citation_validation_accepts_grouped_source_labels(tmp_path):
+    service, kb = build_service(tmp_path, label="moderate")
+    result = service.answer(
+        "How should the invoice mismatch be handled?",
+        AnswerOptions(
+            mode="simple_rag",
+            knowledge_base_id=kb.id,
+            retrieval_mode="bm25",
+            top_k=2,
+            chat_configuration={"citations_enabled": False},
+        ),
+    )
+
+    validation = _validate_citations("Use both workflow sources [S1, S2].", result.contexts, enabled=True)
+
+    assert validation["status"] == "completed"
+    assert validation["cited"] == ["S1", "S2"]
 
 
 def test_follow_up_uses_standalone_query_for_classifier_and_retrieval(tmp_path):

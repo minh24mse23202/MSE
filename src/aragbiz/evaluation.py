@@ -153,6 +153,8 @@ class EvaluationService:
                     retrieval_mode=config.retrieval_mode,
                     top_k=top_k,
                     chat_configuration=evaluation_chat_configuration,
+                    evaluation_run_id=run_id,
+                    chat_configuration_id=config.chat_configuration_id or "",
                     conversation_history=[],
                 ),
             )
@@ -249,6 +251,7 @@ class EvaluationService:
             request_id=f"{run_id}:{record.id}",
             knowledge_base_id=str(result.metadata.get("knowledge_base_id") or ""),
             evaluation_run_id=run_id,
+            chat_configuration_id=str(result.metadata.get("chat_configuration_id") or ""),
         )
         recall = self._judge_score(
             deployment_id,

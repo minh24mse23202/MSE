@@ -171,6 +171,7 @@ class RagxplainRunner:
             run_id,
             knowledge_base_id,
             external_processing_allowed,
+            str(run_config.get("chat_configuration_id") or ""),
         )
         calculator = MetricsCalculator(
             judge=judge,
@@ -339,11 +340,13 @@ class _ModelGatewayJudge:
         evaluation_run_id: str,
         knowledge_base_id: str,
         external_processing_allowed: bool,
+        chat_configuration_id: str = "",
     ):
         self.gateway = gateway
         self.deployment_id = deployment_id
         self.evaluation_run_id = evaluation_run_id
         self.knowledge_base_id = knowledge_base_id
+        self.chat_configuration_id = chat_configuration_id
         self.external_processing_allowed = external_processing_allowed
 
     async def run(self, request: Any) -> str:
@@ -405,6 +408,7 @@ class _ModelGatewayJudge:
             request_id=f"ragxplain:{self.evaluation_run_id}:{prompt_key}",
             knowledge_base_id=self.knowledge_base_id,
             evaluation_run_id=self.evaluation_run_id,
+            chat_configuration_id=self.chat_configuration_id,
         )
 
     async def aclose(self) -> None:

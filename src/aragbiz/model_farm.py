@@ -108,6 +108,7 @@ class ModelCallContext:
     conversation_id: str = ""
     knowledge_base_id: str = ""
     evaluation_run_id: str = ""
+    chat_configuration_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,7 @@ class ModelUsageEvent:
     conversation_id: str = ""
     knowledge_base_id: str = ""
     evaluation_run_id: str = ""
+    chat_configuration_id: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
@@ -392,6 +394,7 @@ class PostgresModelFarmRepository:
             conversation_id TEXT NOT NULL DEFAULT '',
             knowledge_base_id TEXT NOT NULL DEFAULT '',
             evaluation_run_id TEXT NOT NULL DEFAULT '',
+            chat_configuration_id TEXT NOT NULL DEFAULT '',
             input_tokens INTEGER NOT NULL DEFAULT 0,
             output_tokens INTEGER NOT NULL DEFAULT 0,
             total_tokens INTEGER NOT NULL DEFAULT 0,
@@ -416,6 +419,10 @@ class PostgresModelFarmRepository:
             ADD COLUMN IF NOT EXISTS access_path TEXT NOT NULL DEFAULT '';
         ALTER TABLE model_usage_events
             ADD COLUMN IF NOT EXISTS gateway_model TEXT NOT NULL DEFAULT '';
+        ALTER TABLE model_usage_events
+            ADD COLUMN IF NOT EXISTS chat_configuration_id TEXT NOT NULL DEFAULT '';
+        CREATE INDEX IF NOT EXISTS idx_model_usage_configuration
+            ON model_usage_events(chat_configuration_id, created_at DESC);
         """
         with self.engine.begin() as connection:
             for statement in [part.strip() for part in ddl.split(";") if part.strip()]:
@@ -565,13 +572,13 @@ class PostgresModelFarmRepository:
                     INSERT INTO model_usage_events (
                         id, deployment_id, provider, model, connection_id, access_path, gateway_model,
                         capability, purpose, status,
-                        request_id, user_id, conversation_id, knowledge_base_id, evaluation_run_id,
+                        request_id, user_id, conversation_id, knowledge_base_id, evaluation_run_id, chat_configuration_id,
                         input_tokens, output_tokens, total_tokens, latency_ms, estimated_cost_usd,
                         fallback_index, error_code, error, metadata_json, created_at
                     ) VALUES (
                         :id, :deployment_id, :provider, :model, :connection_id, :access_path, :gateway_model,
                         :capability, :purpose, :status,
-                        :request_id, :user_id, :conversation_id, :knowledge_base_id, :evaluation_run_id,
+                        :request_id, :user_id, :conversation_id, :knowledge_base_id, :evaluation_run_id, :chat_configuration_id,
                         :input_tokens, :output_tokens, :total_tokens, :latency_ms, :estimated_cost_usd,
                         :fallback_index, :error_code, :error, CAST(:metadata AS JSONB), :created_at
                     )
@@ -2886,6 +2893,7 @@ def _usage_from_row(row: Any) -> ModelUsageEvent:
         gateway_model=row.get("gateway_model") or "", request_id=row.get("request_id") or "",
         user_id=row.get("user_id") or "", conversation_id=row.get("conversation_id") or "",
         knowledge_base_id=row.get("knowledge_base_id") or "", evaluation_run_id=row.get("evaluation_run_id") or "",
+        chat_configuration_id=row.get("chat_configuration_id") or "",
         input_tokens=int(row.get("input_tokens") or 0), output_tokens=int(row.get("output_tokens") or 0),
         total_tokens=int(row.get("total_tokens") or 0), latency_ms=float(row.get("latency_ms") or 0),
         estimated_cost_usd=float(row.get("estimated_cost_usd") or 0), fallback_index=int(row.get("fallback_index") or 0),
@@ -3050,7 +3058,8 @@ def _usage_event(
         capability=capability, purpose=context.purpose or capability, status=status, request_id=context.request_id,
         connection_id=connection_id, access_path=access_path, gateway_model=gateway_model,
         user_id=context.user_id, conversation_id=context.conversation_id, knowledge_base_id=context.knowledge_base_id,
-        evaluation_run_id=context.evaluation_run_id, input_tokens=input_tokens, output_tokens=output_tokens,
+        evaluation_run_id=context.evaluation_run_id, chat_configuration_id=context.chat_configuration_id,
+        input_tokens=input_tokens, output_tokens=output_tokens,
         total_tokens=input_tokens + output_tokens, latency_ms=round(latency_ms, 3), estimated_cost_usd=round(cost, 10),
         fallback_index=fallback_index, error_code=type(error).__name__ if error else "", error=_safe_error(error) if error else "",
         metadata={"error_category": _error_category(error)} if error else {},

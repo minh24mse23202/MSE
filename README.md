@@ -93,6 +93,8 @@ The React app calls the FastAPI backend at `http://127.0.0.1:8000`.
 
 Each synchronous or streaming Main-screen answer now creates a durable full-fidelity trace. PostgreSQL stores searchable trace metadata while strict UTF-8 JSON artifacts are gzip-compressed under `data/traces` by default. Apply `alembic upgrade head` before starting the updated API.
 
+The Analytics screen is admin-only and aggregates model tokens, cost, latency, failures, chat activity, active users, and answer-version feedback directly in PostgreSQL. Feedback submitted from an assistant answer is linked to its Knowledge Base, RAG configuration, answer version, and Trace report. Apply `alembic upgrade head` after pulling the analytics migration.
+
 Trace retention and payload limits are configured through:
 
 - `ARAGBIZ_TRACE_STORE=data/traces`

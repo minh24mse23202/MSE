@@ -4,6 +4,9 @@ fallback_sample_dataset = "data/sample/business_workflows.jsonl"
 kb_corpus = "data/processed/wix_kb_corpus_documents.jsonl"
 feedback_store = "feedback.jsonl"
 
+[analytics]
+json_store = "data/knowledge/analytics_store.json"
+
 [wixqa]
 dataset_name = "Wix/WixQA"
 qa_subset = "wixqa_expertwritten"

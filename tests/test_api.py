@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 
 import api.main as api_main
 from aragbiz.answering import AdaptiveRAGAnswerService
+from aragbiz.analytics import AnalyticsService, JsonAnalyticsRepository
+from aragbiz.auth import AuthService, JsonAuthRepository
 from aragbiz.chat import ChatService, JsonChatRepository
 from aragbiz.evaluation import EvaluationRunRecord, EvaluationService, JsonEvaluationRepository
 from aragbiz.evaluation_experiments import EvaluationExperimentRecord
@@ -28,8 +30,28 @@ app = api_main.app
 
 @pytest.fixture(autouse=True)
 def isolated_chat_service(monkeypatch, tmp_path):
-    service = ChatService(JsonChatRepository(str(tmp_path / "chat.json")))
+    chat_path = tmp_path / "chat.json"
+    service = ChatService(JsonChatRepository(str(chat_path)))
     monkeypatch.setattr(api_main, "chat_service", service)
+    model_path = tmp_path / "models.json"
+    knowledge_path = tmp_path / "knowledge.json"
+    evaluation_path = tmp_path / "evaluation.json"
+    auth_path = tmp_path / "auth.json"
+    model_path.write_text(json.dumps({"connections": {}, "deployments": {}, "usage": []}), encoding="utf-8")
+    knowledge_path.write_text(json.dumps({"knowledge_bases": {}}), encoding="utf-8")
+    evaluation_path.write_text(json.dumps({"evaluation_runs": {}}), encoding="utf-8")
+    auth_path.write_text(json.dumps({"users": {}}), encoding="utf-8")
+    analytics = AnalyticsService(
+        JsonAnalyticsRepository(
+            model_farm_path=str(model_path),
+            chat_path=str(chat_path),
+            knowledge_path=str(knowledge_path),
+            evaluation_path=str(evaluation_path),
+            auth_path=str(auth_path),
+            feedback_path=str(tmp_path / "analytics.json"),
+        )
+    )
+    monkeypatch.setattr(api_main, "analytics_service", analytics)
     trace_service = TraceService(
         FileTraceRepository(str(tmp_path / "traces")),
         TraceArtifactStore(str(tmp_path / "traces")),
@@ -58,6 +80,79 @@ def test_answer_endpoint_returns_direct_route_metadata():
     messages = client.get(f"/chat/conversations/{payload['conversation_id']}/messages").json()
     assert [message["role"] for message in messages] == ["user", "assistant"]
     assert messages[1]["metadata"]["question"] == payload["question"]
+
+
+def test_feedback_and_admin_analytics_are_attributed_to_answer_version(monkeypatch, tmp_path):
+    monkeypatch.delenv("ARAGBIZ_BOOTSTRAP_ADMIN_EMAIL", raising=False)
+    monkeypatch.delenv("ARAGBIZ_BOOTSTRAP_ADMIN_PASSWORD", raising=False)
+    auth = AuthService(
+        JsonAuthRepository(str(tmp_path / "analytics-auth.json")),
+        jwt_secret="analytics-api-test-secret",
+        auth_required=True,
+    )
+    admin = auth.signup("admin@example.com", "admin-password", "Admin", "User")
+    normal_user = auth.signup("user@example.com", "user-password", "Normal", "User")
+    monkeypatch.setattr(api_main, "auth_service", auth)
+    client = TestClient(app)
+    admin_headers = {"Authorization": f"Bearer {auth.issue_token(admin)}"}
+    user_headers = {"Authorization": f"Bearer {auth.issue_token(normal_user)}"}
+
+    answer_response = client.post(
+        "/answer",
+        headers=admin_headers,
+        json={"question": "How do I approve this workflow?", "mode": "direct"},
+    )
+    assert answer_response.status_code == 200
+    answer = answer_response.json()
+    assistant_message_id = answer["metadata"]["assistant_message_id"]
+    trace_id = answer["metadata"]["trace_id"]
+
+    feedback_response = client.put(
+        f"/feedback/messages/{assistant_message_id}",
+        headers=admin_headers,
+        json={"rating": "down", "comment": "The answer needs a concrete approval step.", "version_number": 1},
+    )
+    assert feedback_response.status_code == 200
+    feedback = feedback_response.json()
+    assert feedback["assistant_message_id"] == assistant_message_id
+    assert feedback["version_number"] == 1
+    assert feedback["trace_id"] == trace_id
+    assert feedback["user_id"] == admin.id
+
+    messages = client.get(
+        f"/chat/conversations/{answer['conversation_id']}/messages",
+        headers=admin_headers,
+    )
+    assert messages.status_code == 200
+    assistant = messages.json()[-1]
+    assert assistant["current_user_feedback"]["rating"] == "down"
+    assert assistant["current_user_feedback"]["comment"] == "The answer needs a concrete approval step."
+
+    versions = client.get(f"/chat/messages/{assistant_message_id}/versions", headers=admin_headers)
+    assert versions.status_code == 200
+    assert versions.json()[0]["current_user_feedback"]["version_number"] == 1
+
+    rating_only = client.put(
+        f"/feedback/messages/{assistant_message_id}",
+        headers=admin_headers,
+        json={"rating": "up", "version_number": 1},
+    )
+    assert rating_only.status_code == 200
+    assert rating_only.json()["comment"] == "The answer needs a concrete approval step."
+
+    analytics_feedback = client.get("/analytics/feedback", headers=admin_headers)
+    assert analytics_feedback.status_code == 200
+    assert analytics_feedback.json()["total"] == 1
+    assert analytics_feedback.json()["items"][0]["question_snapshot"] == "How do I approve this workflow?"
+
+    overview = client.get("/analytics/overview", headers=admin_headers)
+    assert overview.status_code == 200
+    assert overview.json()["engagement"]["active_chats"] == 1
+    assert overview.json()["engagement"]["active_users"] == 1
+    assert overview.json()["engagement"]["thumbs_up"] == 1
+
+    forbidden = client.get("/analytics/overview", headers=user_headers)
+    assert forbidden.status_code == 403
 
 
 def test_answer_trace_can_be_loaded_by_id_message_and_downloaded():

@@ -21,6 +21,7 @@ from aragbiz.evaluation_experiments import (
     JsonEvaluationExperimentRepository,
     PostgresEvaluationExperimentRepository,
 )
+from aragbiz.analytics import AnalyticsService, JsonAnalyticsRepository, PostgresAnalyticsRepository
 from aragbiz.generation import ExtractiveGenerator
 from aragbiz.knowledge import KnowledgeService, OverlapChunker, build_embedder
 from aragbiz.knowledge_store import JsonKnowledgeRepository, PostgresKnowledgeRepository
@@ -214,6 +215,22 @@ def build_chat_service(config: Optional[AppConfig] = None) -> ChatService:
         except Exception:
             repository = JsonChatRepository(config.chat_json_store)
     return ChatService(repository=repository)
+
+
+def build_analytics_service(config: Optional[AppConfig] = None) -> AnalyticsService:
+    config = config or load_config()
+    if config.knowledge_backend.lower() == "json":
+        repository = JsonAnalyticsRepository(
+            model_farm_path=config.model_farm_json_store,
+            chat_path=config.chat_json_store,
+            knowledge_path=config.knowledge_json_store,
+            evaluation_path=config.evaluation_json_store,
+            auth_path=config.auth_json_store,
+            feedback_path=config.structured_feedback_store,
+        )
+    else:
+        repository = PostgresAnalyticsRepository(config.knowledge_database_url)
+    return AnalyticsService(repository)
 
 
 def build_evaluation_service(

@@ -12,6 +12,7 @@ class AppConfig:
     fallback_sample_dataset: str = "data/sample/business_workflows.jsonl"
     kb_corpus: str = "data/processed/wix_kb_corpus_documents.jsonl"
     feedback_store: str = "feedback.jsonl"
+    structured_feedback_store: str = "data/knowledge/analytics_store.json"
     simple_top_k: int = 2
     moderate_top_k: int = 4
     complex_top_k: int = 6
@@ -99,6 +100,10 @@ def load_config(path: Union[str, Path] = "config/default.toml") -> AppConfig:
             raw.get("paths", {}).get("kb_corpus", AppConfig.kb_corpus),
         ),
         feedback_store=raw.get("paths", {}).get("feedback_store", AppConfig.feedback_store),
+        structured_feedback_store=os.getenv(
+            "ARAGBIZ_ANALYTICS_STORE",
+            raw.get("analytics", {}).get("json_store", AppConfig.structured_feedback_store),
+        ),
         simple_top_k=int(raw.get("classifier", {}).get("simple_top_k", AppConfig.simple_top_k)),
         moderate_top_k=int(raw.get("classifier", {}).get("moderate_top_k", AppConfig.moderate_top_k)),
         complex_top_k=int(raw.get("classifier", {}).get("complex_top_k", AppConfig.complex_top_k)),

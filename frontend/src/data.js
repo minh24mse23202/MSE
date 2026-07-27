@@ -91,19 +91,6 @@ export const evaluationRuns = [
   }
 ];
 
-export const tokenStats = [
-  { label: "Input tokens", value: "128.4k", delta: "+8.2%" },
-  { label: "Output tokens", value: "42.7k", delta: "+4.1%" },
-  { label: "Retrieval calls", value: "1,284", delta: "+12.5%" },
-  { label: "Avg. cost proxy", value: "0.003", delta: "-2.0%" }
-];
-
-export const feedbackRows = [
-  { user: "analyst@demo", rating: "up", topic: "Payments verification", note: "Citations were useful." },
-  { user: "qa@demo", rating: "down", topic: "Invoice mismatch", note: "Needs clearer escalation step." },
-  { user: "admin@demo", rating: "up", topic: "Knowledge base", note: "Trace view explains retrieval well." }
-];
-
 export const architectureLayers = [
   "Application layer: React RAG Studio, chatbot, analytics and evaluation",
   "Adaptive RAG: classifier, route decision, retriever, reranker, prompt assembly, generator",

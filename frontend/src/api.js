@@ -496,6 +496,66 @@ export async function getModelUsageSummary() {
   return response.json();
 }
 
+export async function getAnalyticsOverview(filters = {}) {
+  return getAnalyticsResource("/analytics/overview", filters, "Analytics overview request failed");
+}
+
+export async function getAnalyticsUsageTrend(filters = {}) {
+  return getAnalyticsResource("/analytics/usage/trend", filters, "Analytics trend request failed");
+}
+
+export async function getAnalyticsUsageBreakdowns(filters = {}) {
+  return getAnalyticsResource("/analytics/usage/breakdowns", filters, "Analytics breakdown request failed");
+}
+
+export async function listAnalyticsUsageEvents(filters = {}) {
+  return getAnalyticsResource("/analytics/usage/events", filters, "Analytics usage request failed");
+}
+
+export async function listAnalyticsFeedback(filters = {}) {
+  return getAnalyticsResource("/analytics/feedback", filters, "Analytics feedback request failed");
+}
+
+export async function getAnalyticsFilterOptions(filters = {}) {
+  return getAnalyticsResource("/analytics/filter-options", filters, "Analytics filter request failed");
+}
+
+async function getAnalyticsResource(path, filters, errorLabel) {
+  const params = analyticsSearchParams(filters);
+  const response = await fetch(`${API_BASE_URL}${path}?${params.toString()}`, {
+    headers: authHeaders()
+  });
+  await assertOk(response, errorLabel);
+  return response.json();
+}
+
+function analyticsSearchParams(filters = {}) {
+  const params = new URLSearchParams();
+  const mapping = {
+    from: "from",
+    to: "to",
+    scope: "scope",
+    deploymentId: "deployment_id",
+    knowledgeBaseId: "knowledge_base_id",
+    chatConfigurationId: "chat_configuration_id",
+    purpose: "purpose",
+    status: "status",
+    userId: "user_id",
+    rating: "rating",
+    query: "query",
+    page: "page",
+    pageSize: "page_size",
+    metric: "metric"
+  };
+  Object.entries(mapping).forEach(([key, parameter]) => {
+    const value = filters[key];
+    if (value !== undefined && value !== null && value !== "") {
+      params.set(parameter, String(value));
+    }
+  });
+  return params;
+}
+
 export async function listJobs({ status = "", limit = 100 } = {}) {
   const params = new URLSearchParams({ limit: String(limit) });
   if (status) params.set("status", status);
@@ -644,9 +704,9 @@ export function getRagxplainViewerUrl(runId) {
   const insightsPath = `/evaluation/runs/${encodedRunId}/ragxplain/overall-insights`;
   return `${API_BASE_URL}/evaluation/ragxplain/viewer?insights=${encodeURIComponent(insightsPath)}`;
 }
-export async function submitFeedback(payload) {
-  const response = await fetch(`${API_BASE_URL}/feedback`, {
-    method: "POST",
+export async function submitFeedback(assistantMessageId, payload) {
+  const response = await fetch(`${API_BASE_URL}/feedback/messages/${encodeURIComponent(assistantMessageId)}`, {
+    method: "PUT",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload)
   });

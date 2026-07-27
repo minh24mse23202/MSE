@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
@@ -12,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions, AnsweringError
+from aragbiz.analytics import AnalyticsError, AnalyticsFilters
 from aragbiz.agent import AgentToolRegistry
 from aragbiz.auth import AuthenticationError, UserRecord
 from aragbiz.cancellation import AnswerCancelled, CancellationCoordinator
@@ -29,6 +31,7 @@ from aragbiz.evaluation_experiments import EvaluationExperimentRecord
 from aragbiz.evaluation_metrics import DEFAULT_QUALITY_WEIGHTS
 from aragbiz.factory import (
     build_auth_service,
+    build_analytics_service,
     build_blob_store,
     build_chat_service,
     build_evaluation_service,
@@ -40,7 +43,6 @@ from aragbiz.factory import (
     build_sample_pipeline,
     build_trace_service,
 )
-from aragbiz.feedback import append_feedback
 from aragbiz.schemas import RetrievalMode
 from aragbiz.knowledge import (
     IngestionSummary,
@@ -66,6 +68,7 @@ knowledge_service = build_knowledge_service(
 )
 chat_service = build_chat_service(config)
 auth_service = build_auth_service(config)
+analytics_service = build_analytics_service(config)
 job_service = build_job_service(config)
 blob_store = build_blob_store(config)
 trace_service = build_trace_service(config)
@@ -180,11 +183,9 @@ class AnswerResponse(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    question: str
-    answer: str
     rating: str
     comment: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    version_number: int = Field(1, ge=1)
 
 
 class ChatConversationCreateRequest(BaseModel):
@@ -229,6 +230,7 @@ class ChatConversationResponse(BaseModel):
     id: str
     title: str
     pinned: bool
+    owner_user_id: str = ""
     knowledge_base_id: Optional[str]
     chat_configuration_id: Optional[str]
     route_mode: str
@@ -244,6 +246,7 @@ class ChatMessageResponse(BaseModel):
     conversation_id: str
     role: str
     content: str
+    user_id: str = ""
     contexts: List[Dict[str, Any]]
     metadata: Dict[str, Any]
     status: str
@@ -251,6 +254,7 @@ class ChatMessageResponse(BaseModel):
     version_count: int = 0
     latest_version_number: int = 0
     latest_version_status: str = ""
+    current_user_feedback: Optional[Dict[str, Any]] = None
     created_at: str
     updated_at: str
 
@@ -264,6 +268,7 @@ class ChatMessageVersionResponse(BaseModel):
     metadata: Dict[str, Any]
     status: str
     request_id: str
+    current_user_feedback: Optional[Dict[str, Any]] = None
     created_at: str
     updated_at: str
 
@@ -660,6 +665,12 @@ class ModelUsageResponse(BaseModel):
     error_code: str
     error_category: str
     error: str
+    request_id: str = ""
+    user_id: str = ""
+    conversation_id: str = ""
+    knowledge_base_id: str = ""
+    evaluation_run_id: str = ""
+    chat_configuration_id: str = ""
     created_at: str
 
 
@@ -958,6 +969,155 @@ def model_usage_summary(authorization: str = Header(default="")) -> Dict[str, An
     return model_farm_service.usage_summary()
 
 
+@app.get("/analytics/overview", response_model=Dict[str, Any])
+def analytics_overview(
+    from_at: str = Query("", alias="from"),
+    to_at: str = Query("", alias="to"),
+    scope: str = "",
+    deployment_id: str = "",
+    knowledge_base_id: str = "",
+    chat_configuration_id: str = "",
+    purpose: str = "",
+    status: str = "",
+    user_id: str = "",
+    authorization: str = Header(default=""),
+) -> Dict[str, Any]:
+    _require_admin(authorization)
+    try:
+        return analytics_service.overview(
+            _analytics_filters(
+                from_at, to_at, scope=scope, deployment_id=deployment_id,
+                knowledge_base_id=knowledge_base_id, chat_configuration_id=chat_configuration_id,
+                purpose=purpose, status=status, user_id=user_id,
+            )
+        )
+    except AnalyticsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/analytics/usage/trend", response_model=List[Dict[str, Any]])
+def analytics_usage_trend(
+    from_at: str = Query("", alias="from"),
+    to_at: str = Query("", alias="to"),
+    scope: str = "",
+    deployment_id: str = "",
+    knowledge_base_id: str = "",
+    chat_configuration_id: str = "",
+    purpose: str = "",
+    status: str = "",
+    user_id: str = "",
+    authorization: str = Header(default=""),
+) -> List[Dict[str, Any]]:
+    _require_admin(authorization)
+    try:
+        return analytics_service.usage_trend(
+            _analytics_filters(
+                from_at, to_at, scope=scope, deployment_id=deployment_id,
+                knowledge_base_id=knowledge_base_id, chat_configuration_id=chat_configuration_id,
+                purpose=purpose, status=status, user_id=user_id,
+            )
+        )
+    except AnalyticsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/analytics/usage/breakdowns", response_model=Dict[str, List[Dict[str, Any]]])
+def analytics_usage_breakdowns(
+    from_at: str = Query("", alias="from"),
+    to_at: str = Query("", alias="to"),
+    metric: str = "tokens",
+    scope: str = "",
+    deployment_id: str = "",
+    knowledge_base_id: str = "",
+    chat_configuration_id: str = "",
+    purpose: str = "",
+    status: str = "",
+    user_id: str = "",
+    authorization: str = Header(default=""),
+) -> Dict[str, List[Dict[str, Any]]]:
+    _require_admin(authorization)
+    try:
+        return analytics_service.usage_breakdowns(
+            _analytics_filters(
+                from_at, to_at, scope=scope, deployment_id=deployment_id,
+                knowledge_base_id=knowledge_base_id, chat_configuration_id=chat_configuration_id,
+                purpose=purpose, status=status, user_id=user_id,
+            ),
+            metric=metric,
+        )
+    except AnalyticsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/analytics/usage/events", response_model=Dict[str, Any])
+def analytics_usage_events(
+    from_at: str = Query("", alias="from"),
+    to_at: str = Query("", alias="to"),
+    scope: str = "",
+    deployment_id: str = "",
+    knowledge_base_id: str = "",
+    chat_configuration_id: str = "",
+    purpose: str = "",
+    status: str = "",
+    user_id: str = "",
+    query: str = "",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    authorization: str = Header(default=""),
+) -> Dict[str, Any]:
+    _require_admin(authorization)
+    try:
+        return analytics_service.usage_events(
+            _analytics_filters(
+                from_at, to_at, scope=scope, deployment_id=deployment_id,
+                knowledge_base_id=knowledge_base_id, chat_configuration_id=chat_configuration_id,
+                purpose=purpose, status=status, user_id=user_id, query=query,
+                page=page, page_size=page_size,
+            )
+        )
+    except AnalyticsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/analytics/feedback", response_model=Dict[str, Any])
+def analytics_feedback(
+    from_at: str = Query("", alias="from"),
+    to_at: str = Query("", alias="to"),
+    knowledge_base_id: str = "",
+    chat_configuration_id: str = "",
+    user_id: str = "",
+    rating: str = "",
+    query: str = "",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    authorization: str = Header(default=""),
+) -> Dict[str, Any]:
+    _require_admin(authorization)
+    try:
+        return analytics_service.feedback(
+            _analytics_filters(
+                from_at, to_at, knowledge_base_id=knowledge_base_id,
+                chat_configuration_id=chat_configuration_id, user_id=user_id,
+                rating=rating, query=query, page=page, page_size=page_size,
+            )
+        )
+    except AnalyticsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/analytics/filter-options", response_model=Dict[str, Any])
+def analytics_filter_options(
+    from_at: str = Query("", alias="from"),
+    to_at: str = Query("", alias="to"),
+    authorization: str = Header(default=""),
+) -> Dict[str, Any]:
+    _require_admin(authorization)
+    try:
+        return analytics_service.filter_options(_analytics_filters(from_at, to_at))
+    except AnalyticsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/jobs", response_model=List[JobResponse])
 def list_jobs(status: str = "", limit: int = Query(100, ge=1, le=1000), authorization: str = Header(default="")) -> List[JobResponse]:
     _require_user(authorization)
@@ -1024,6 +1184,18 @@ def answer(request: AnswerRequest, authorization: str = Header(default="")) -> A
                 max_exchanges=history_max_exchanges,
                 max_characters=history_max_characters,
             )
+        conversation = chat_service.ensure_conversation_for_question(
+            request.conversation_id,
+            request.question,
+            owner_user_id=user.id,
+            knowledge_base_id=request.knowledge_base_id,
+            route_mode=request.mode,
+            retrieval_mode=request.retrieval_mode,
+            top_k=request.top_k,
+            chat_configuration_id=chat_configuration_id,
+            chat_configuration=chat_configuration,
+        )
+        recorder.update_links(conversation_id=conversation.id)
         result = service.answer(
             request.question,
             AnswerOptions(
@@ -1035,7 +1207,8 @@ def answer(request: AnswerRequest, authorization: str = Header(default="")) -> A
                 chat_configuration=chat_configuration,
                 request_id=request_id,
                 user_id=user.id,
-                conversation_id=request.conversation_id or "",
+                conversation_id=conversation.id,
+                chat_configuration_id=chat_configuration_id,
                 conversation_history=conversation_history,
                 conversation_history_max_exchanges=history_max_exchanges,
                 conversation_history_max_characters=history_max_characters,
@@ -1044,16 +1217,6 @@ def answer(request: AnswerRequest, authorization: str = Header(default="")) -> A
         )
         result.metadata["chat_configuration_id"] = chat_configuration_id
         result.metadata["chat_configuration"] = chat_configuration
-        conversation = chat_service.ensure_conversation_for_question(
-            request.conversation_id,
-            request.question,
-            knowledge_base_id=request.knowledge_base_id,
-            route_mode=request.mode,
-            retrieval_mode=request.retrieval_mode,
-            top_k=request.top_k,
-            chat_configuration_id=chat_configuration_id,
-            chat_configuration=chat_configuration,
-        )
     except KeyError as exc:
         recorder.finalize("failed", error=str(exc))
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1082,6 +1245,7 @@ def answer(request: AnswerRequest, authorization: str = Header(default="")) -> A
         contexts=context_payloads,
         metadata=result.metadata,
         request_id=str(result.metadata.get("request_id") or ""),
+        user_id=user.id,
     )
     version = chat_service.list_message_versions(assistant_message.id)[-1]
     recorder.update_links(
@@ -1198,6 +1362,7 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                 chat_service.ensure_conversation_for_question,
                 request.conversation_id,
                 request.question,
+                owner_user_id=user.id,
                 knowledge_base_id=request.knowledge_base_id,
                 route_mode=request.mode,
                 retrieval_mode=request.retrieval_mode,
@@ -1210,6 +1375,7 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                 conversation.id,
                 "user",
                 request.question,
+                user_id=user.id,
                 contexts=[],
                 metadata={},
                 status="completed",
@@ -1290,6 +1456,7 @@ async def answer_stream(request: AnswerRequest, authorization: str = Header(defa
                     request_id=request_id,
                     user_id=user.id,
                     conversation_id=conversation.id,
+                    chat_configuration_id=chat_configuration_id,
                     conversation_history=conversation_history,
                     conversation_history_max_exchanges=history_max_exchanges,
                     conversation_history_max_characters=history_max_characters,
@@ -1713,6 +1880,7 @@ async def _stream_existing_answer(
                     request_id=request_id,
                     user_id=user.id,
                     conversation_id=conversation.id,
+                    chat_configuration_id=chat_configuration_id,
                     conversation_history=conversation_history,
                     conversation_history_max_exchanges=history_max_exchanges,
                     conversation_history_max_characters=history_max_characters,
@@ -1923,11 +2091,28 @@ async def retry_answer_stream(
     )
 
 
-@app.post("/feedback")
-def feedback(request: FeedbackRequest) -> Dict[str, str]:
-    payload = request.model_dump() if hasattr(request, "model_dump") else request.dict()
-    append_feedback(config.feedback_store, payload)
-    return {"status": "recorded"}
+@app.put("/feedback/messages/{assistant_message_id}", response_model=Dict[str, Any])
+def feedback(
+    assistant_message_id: str,
+    request: FeedbackRequest,
+    authorization: str = Header(default=""),
+) -> Dict[str, Any]:
+    user = _require_user(authorization)
+    user_name = " ".join(part for part in (user.first_name, user.last_name) if part).strip()
+    try:
+        return analytics_service.upsert_feedback(
+            assistant_message_id=assistant_message_id,
+            version_number=request.version_number,
+            user_id=user.id,
+            user_name=user_name,
+            user_email=user.email,
+            rating=request.rating,
+            comment=request.comment,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AnalyticsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/traces/{trace_id}/download")
@@ -2029,16 +2214,27 @@ def delete_chat_configuration(configuration_id: str) -> Dict[str, str]:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 @app.get("/chat/conversations", response_model=List[ChatConversationResponse])
-def list_chat_conversations(query: str = "", section: Optional[ChatSection] = None) -> List[ChatConversationResponse]:
+def list_chat_conversations(
+    query: str = "",
+    section: Optional[ChatSection] = None,
+    authorization: str = Header(default=""),
+) -> List[ChatConversationResponse]:
+    _require_user(authorization)
     return [_chat_conversation_response(record) for record in chat_service.list_conversations(query=query, section=section)]
 
 
 @app.post("/chat/conversations", response_model=ChatConversationResponse)
-def create_chat_conversation(request: ChatConversationCreateRequest) -> ChatConversationResponse:
+def create_chat_conversation(
+    request: ChatConversationCreateRequest,
+    authorization: str = Header(default=""),
+) -> ChatConversationResponse:
+    user = _require_user(authorization)
     return _chat_conversation_response(
         chat_service.create_conversation(
             request.title,
+            owner_user_id=user.id,
             knowledge_base_id=request.knowledge_base_id,
+            chat_configuration_id=request.chat_configuration_id,
             route_mode=request.route_mode,
             retrieval_mode=request.retrieval_mode,
             top_k=request.top_k,
@@ -2048,7 +2244,8 @@ def create_chat_conversation(request: ChatConversationCreateRequest) -> ChatConv
 
 
 @app.get("/chat/conversations/{conversation_id}", response_model=ChatConversationResponse)
-def get_chat_conversation(conversation_id: str) -> ChatConversationResponse:
+def get_chat_conversation(conversation_id: str, authorization: str = Header(default="")) -> ChatConversationResponse:
+    _require_user(authorization)
     try:
         return _chat_conversation_response(chat_service.get_conversation(conversation_id))
     except KeyError as exc:
@@ -2056,7 +2253,12 @@ def get_chat_conversation(conversation_id: str) -> ChatConversationResponse:
 
 
 @app.patch("/chat/conversations/{conversation_id}", response_model=ChatConversationResponse)
-def update_chat_conversation(conversation_id: str, request: ChatConversationPatchRequest) -> ChatConversationResponse:
+def update_chat_conversation(
+    conversation_id: str,
+    request: ChatConversationPatchRequest,
+    authorization: str = Header(default=""),
+) -> ChatConversationResponse:
+    _require_user(authorization)
     try:
         return _chat_conversation_response(
             chat_service.update_conversation(
@@ -2071,7 +2273,8 @@ def update_chat_conversation(conversation_id: str, request: ChatConversationPatc
 
 
 @app.delete("/chat/conversations/{conversation_id}")
-def delete_chat_conversation(conversation_id: str) -> Dict[str, str]:
+def delete_chat_conversation(conversation_id: str, authorization: str = Header(default="")) -> Dict[str, str]:
+    _require_user(authorization)
     try:
         chat_service.delete_conversation(conversation_id)
         return {"status": "deleted"}
@@ -2080,9 +2283,27 @@ def delete_chat_conversation(conversation_id: str) -> Dict[str, str]:
 
 
 @app.get("/chat/conversations/{conversation_id}/messages", response_model=List[ChatMessageResponse])
-def list_chat_messages(conversation_id: str) -> List[ChatMessageResponse]:
+def list_chat_messages(conversation_id: str, authorization: str = Header(default="")) -> List[ChatMessageResponse]:
+    user = _require_user(authorization)
     try:
-        return [_chat_message_response(record) for record in chat_service.list_messages(conversation_id)]
+        records = chat_service.list_messages(conversation_id)
+        assistant_ids = [record.id for record in records if record.role == "assistant"]
+        feedback_by_version = {
+            (str(item.get("assistant_message_id") or ""), int(item.get("version_number") or 1)): item
+            for item in analytics_service.list_message_feedback(assistant_ids, user.id)
+        }
+        responses: List[ChatMessageResponse] = []
+        for record in records:
+            response = _chat_message_response(record)
+            if record.role == "assistant":
+                version_number = int(
+                    response.metadata.get("message_version_number")
+                    or response.latest_version_number
+                    or 1
+                )
+                response.current_user_feedback = feedback_by_version.get((record.id, version_number))
+            responses.append(response)
+        return responses
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -2092,11 +2313,19 @@ def list_chat_message_versions(
     message_id: str,
     authorization: str = Header(default=""),
 ) -> List[ChatMessageVersionResponse]:
-    _require_user(authorization)
+    user = _require_user(authorization)
     try:
+        records = chat_service.list_message_versions(message_id)
+        feedback_by_version = {
+            int(item.get("version_number") or 1): item
+            for item in analytics_service.list_message_feedback([message_id], user.id)
+        }
         return [
-            _chat_message_version_response(record)
-            for record in chat_service.list_message_versions(message_id)
+            _chat_message_version_response(
+                record,
+                current_user_feedback=feedback_by_version.get(record.version_number),
+            )
+            for record in records
         ]
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -2840,6 +3069,7 @@ def _chat_conversation_response(record: ChatConversationRecord) -> ChatConversat
         id=record.id,
         title=record.title,
         pinned=record.pinned,
+        owner_user_id=record.owner_user_id,
         knowledge_base_id=record.knowledge_base_id,
         chat_configuration_id=record.chat_configuration_id,
         route_mode=record.route_mode,
@@ -2861,6 +3091,7 @@ def _chat_message_response(record: ChatMessageRecord) -> ChatMessageResponse:
         conversation_id=record.conversation_id,
         role=record.role,
         content=record.content,
+        user_id=record.user_id,
         contexts=record.contexts,
         metadata=record.metadata,
         status=record.status,
@@ -2873,7 +3104,10 @@ def _chat_message_response(record: ChatMessageRecord) -> ChatMessageResponse:
     )
 
 
-def _chat_message_version_response(record: ChatMessageVersionRecord) -> ChatMessageVersionResponse:
+def _chat_message_version_response(
+    record: ChatMessageVersionRecord,
+    current_user_feedback: Optional[Dict[str, Any]] = None,
+) -> ChatMessageVersionResponse:
     return ChatMessageVersionResponse(
         id=record.id,
         message_id=record.message_id,
@@ -2883,6 +3117,7 @@ def _chat_message_version_response(record: ChatMessageVersionRecord) -> ChatMess
         metadata=record.metadata,
         status=record.status,
         request_id=record.request_id,
+        current_user_feedback=current_user_feedback,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -3096,6 +3331,41 @@ def _validate_conversation_history_setting(
         raise ValueError(f"{label} must be between 1 and {maximum}.")
 
 
+def _analytics_filters(
+    from_at: str,
+    to_at: str,
+    *,
+    scope: str = "",
+    deployment_id: str = "",
+    knowledge_base_id: str = "",
+    chat_configuration_id: str = "",
+    purpose: str = "",
+    status: str = "",
+    user_id: str = "",
+    rating: str = "",
+    query: str = "",
+    page: int = 1,
+    page_size: int = 25,
+) -> AnalyticsFilters:
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=30)
+    return AnalyticsFilters(
+        from_at=from_at or start.isoformat(),
+        to_at=to_at or end.isoformat(),
+        scope=scope,
+        deployment_id=deployment_id,
+        knowledge_base_id=knowledge_base_id,
+        chat_configuration_id=chat_configuration_id,
+        purpose=purpose,
+        status=status,
+        user_id=user_id,
+        rating=rating,
+        query=query,
+        page=page,
+        page_size=page_size,
+    )
+
+
 def _require_user(authorization: str) -> UserRecord:
     try:
         return auth_service.current_user(authorization)
@@ -3168,7 +3438,10 @@ def _model_usage_response(event: ModelUsageEvent) -> ModelUsageResponse:
         input_tokens=event.input_tokens, output_tokens=event.output_tokens, total_tokens=event.total_tokens,
         latency_ms=event.latency_ms, estimated_cost_usd=event.estimated_cost_usd,
         error_code=event.error_code, error_category=str(event.metadata.get("error_category") or ""),
-        error=event.error, created_at=event.created_at,
+        error=event.error, request_id=event.request_id, user_id=event.user_id,
+        conversation_id=event.conversation_id, knowledge_base_id=event.knowledge_base_id,
+        evaluation_run_id=event.evaluation_run_id, chat_configuration_id=event.chat_configuration_id,
+        created_at=event.created_at,
     )
 
 
