@@ -24,3 +24,5 @@ data/traces/*
 !data/artifacts/.gitkeep
 !data/knowledge/.gitkeep
 feedback.jsonl
+project_proposal/*
+project_report/*

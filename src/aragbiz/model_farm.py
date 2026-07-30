@@ -231,6 +231,7 @@ class ModelFarmRepository(Protocol):
         *,
         deployment_id: str = "",
         purpose: str = "",
+        evaluation_run_id: str = "",
         limit: int = 500,
     ) -> List[ModelUsageEvent]: ...
 
@@ -302,15 +303,25 @@ class JsonModelFarmRepository:
         state["usage"].append(asdict(event))
         self._write(state)
 
-    def list_usage(self, *, deployment_id: str = "", purpose: str = "", limit: int = 500) -> List[ModelUsageEvent]:
+    def list_usage(
+        self,
+        *,
+        deployment_id: str = "",
+        purpose: str = "",
+        evaluation_run_id: str = "",
+        limit: int = 500,
+    ) -> List[ModelUsageEvent]:
         state = self._read()
         items = [_usage_from_dict(item) for item in state["usage"]]
         if deployment_id:
             items = [item for item in items if item.deployment_id == deployment_id]
         if purpose:
             items = [item for item in items if item.purpose == purpose]
+        if evaluation_run_id:
+            items = [item for item in items if item.evaluation_run_id == evaluation_run_id]
         items.sort(key=lambda item: item.created_at, reverse=True)
-        return items[: max(1, min(limit, 5000))]
+        maximum = 50000 if evaluation_run_id else 5000
+        return items[: max(1, min(limit, maximum))]
 
     def _read(self) -> Dict[str, Any]:
         self.initialize()
@@ -587,17 +598,28 @@ class PostgresModelFarmRepository:
                 payload,
             )
 
-    def list_usage(self, *, deployment_id: str = "", purpose: str = "", limit: int = 500) -> List[ModelUsageEvent]:
+    def list_usage(
+        self,
+        *,
+        deployment_id: str = "",
+        purpose: str = "",
+        evaluation_run_id: str = "",
+        limit: int = 500,
+    ) -> List[ModelUsageEvent]:
         from sqlalchemy import text
 
         filters: List[str] = []
-        params: Dict[str, Any] = {"limit": max(1, min(limit, 5000))}
+        maximum = 50000 if evaluation_run_id else 5000
+        params: Dict[str, Any] = {"limit": max(1, min(limit, maximum))}
         if deployment_id:
             filters.append("deployment_id = :deployment_id")
             params["deployment_id"] = deployment_id
         if purpose:
             filters.append("purpose = :purpose")
             params["purpose"] = purpose
+        if evaluation_run_id:
+            filters.append("evaluation_run_id = :evaluation_run_id")
+            params["evaluation_run_id"] = evaluation_run_id
         where = f"WHERE {' AND '.join(filters)}" if filters else ""
         with self.engine.begin() as connection:
             rows = connection.execute(
@@ -1142,8 +1164,20 @@ class ModelFarmService:
         self.repository.append_usage(event)
         return event
 
-    def list_usage(self, *, deployment_id: str = "", purpose: str = "", limit: int = 500) -> List[ModelUsageEvent]:
-        return self.repository.list_usage(deployment_id=deployment_id, purpose=purpose, limit=limit)
+    def list_usage(
+        self,
+        *,
+        deployment_id: str = "",
+        purpose: str = "",
+        evaluation_run_id: str = "",
+        limit: int = 500,
+    ) -> List[ModelUsageEvent]:
+        return self.repository.list_usage(
+            deployment_id=deployment_id,
+            purpose=purpose,
+            evaluation_run_id=evaluation_run_id,
+            limit=limit,
+        )
 
     def usage_summary(self) -> Dict[str, Any]:
         events = self.repository.list_usage(limit=5000)

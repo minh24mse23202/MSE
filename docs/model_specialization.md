@@ -1,5 +1,10 @@
 # Phase 2: Model Specialization
 
+For the complete Colab/GPU workflow, including dataset transfer, checksum
+verification, training, artifact download, local installation, and AI Models
+activation, see
+[`docs/classifier_training/README.md`](classifier_training/README.md).
+
 Use Python 3.11 for Phase 2 local training commands. The specialized model is a lightweight supervised query complexity classifier. It predicts one of:
 
 - `simple`

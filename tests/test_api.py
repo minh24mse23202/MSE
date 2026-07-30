@@ -1361,16 +1361,29 @@ def test_ragxplain_diagnosis_accepts_limit_and_seed(monkeypatch):
             },
         }
     )
+    captured = {}
     monkeypatch.setattr(api_main.evaluation_service, "get_run", lambda _run_id: run)
-    monkeypatch.setattr(api_main.evaluation_service, "queue_ragxplain", lambda *_args, **_kwargs: queued)
+    monkeypatch.setattr(
+        api_main.evaluation_service,
+        "queue_ragxplain",
+        lambda *_args, **kwargs: captured.update({"queue": kwargs}) or queued,
+    )
+    monkeypatch.setattr(
+        api_main.model_farm_service,
+        "resolve",
+        lambda deployment_id, capability: captured.update(
+            {"resolved": (deployment_id, capability)}
+        ),
+    )
     monkeypatch.setattr(
         api_main.job_service,
         "enqueue",
-        lambda *_args, **_kwargs: BackgroundJob(
+        lambda job_type, payload, **_kwargs: captured.update({"payload": payload})
+        or BackgroundJob(
             id="job-ragxplain",
-            job_type="evaluation_ragxplain",
+            job_type=job_type,
             status="queued",
-            payload={"run_id": "eval-1", "limit": 25, "seed": 7},
+            payload=payload,
             created_at="2026-07-25T00:00:00+00:00",
             updated_at="2026-07-25T00:00:00+00:00",
         ),
@@ -1378,12 +1391,15 @@ def test_ragxplain_diagnosis_accepts_limit_and_seed(monkeypatch):
 
     response = TestClient(app).post(
         "/evaluation/runs/eval-1/ragxplain",
-        json={"limit": 25, "seed": 7},
+        json={"limit": 25, "seed": 7, "judge_deployment_id": "judge-2"},
     )
 
     assert response.status_code == 202
     assert response.json()["ragxplain"]["status"] == "queued"
     assert response.json()["ragxplain"]["case_count"] == 25
+    assert captured["resolved"] == ("judge-2", "judge")
+    assert captured["queue"]["judge_deployment_id"] == "judge-2"
+    assert captured["payload"]["judge_deployment_id"] == "judge-2"
 
 
 def test_knowledge_base_update_and_delete_endpoints(monkeypatch, tmp_path):

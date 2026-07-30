@@ -1,0 +1,81 @@
+{
+  "artifact_version": 2,
+  "complexity_labels": [
+    "simple",
+    "moderate",
+    "complex",
+    "advanced"
+  ],
+  "dataset": "data/processed/four_class_qac.jsonl",
+  "extra_datasets": [],
+  "metrics": {
+    "accuracy": 0.9875259875259875,
+    "advanced_f1": 1.0,
+    "advanced_precision": 1.0,
+    "advanced_recall": 1.0,
+    "average_latency_ms": 80.69670270270268,
+    "confusion_matrix": {
+      "advanced": {
+        "advanced": 123,
+        "complex": 0,
+        "moderate": 0,
+        "simple": 0
+      },
+      "complex": {
+        "advanced": 0,
+        "complex": 113,
+        "moderate": 6,
+        "simple": 0
+      },
+      "moderate": {
+        "advanced": 0,
+        "complex": 0,
+        "moderate": 119,
+        "simple": 0
+      },
+      "simple": {
+        "advanced": 0,
+        "complex": 0,
+        "moderate": 0,
+        "simple": 120
+      }
+    },
+    "expected_calibration_error": 0.01185370122661059,
+    "macro_f1": 0.9873869417750141,
+    "over_routing_rate": 0.0,
+    "per_label_recall": {
+      "advanced": 1.0,
+      "complex": 0.9495798319327731,
+      "moderate": 1.0,
+      "simple": 1.0
+    },
+    "route_cost_regret": 0.012474012474012475,
+    "total": 481,
+    "under_routing_rate": 0.012474012474012475
+  },
+  "model_name": "t5-small",
+  "model_path": "data/artifacts/query_classifier_t5_v2",
+  "split": {
+    "group_count": 1956,
+    "seed": 42,
+    "strategy": "source-grouped-stratified",
+    "train_class_counts": {
+      "advanced": 477,
+      "complex": 481,
+      "moderate": 481,
+      "simple": 480
+    },
+    "train_records": 1919,
+    "validation_class_counts": {
+      "advanced": 123,
+      "complex": 119,
+      "moderate": 119,
+      "simple": 120
+    },
+    "validation_ratio": 0.2,
+    "validation_records": 481,
+    "warnings": []
+  },
+  "train_records": 1919,
+  "validation_records": 481
+}

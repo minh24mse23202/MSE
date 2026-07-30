@@ -605,6 +605,7 @@ class EvaluationExperimentCreatedResponse(BaseModel):
 class RagxplainDiagnosisRequest(BaseModel):
     limit: int = Field(100, ge=1, le=6221)
     seed: int = 42
+    judge_deployment_id: str = ""
 
 
 class ModelConnectionCreateRequest(BaseModel):
@@ -2554,20 +2555,33 @@ def start_ragxplain_diagnosis(
     _require_admin(authorization)
     try:
         run = evaluation_service.get_run(run_id)
-        if not run.metadata.get("judge_deployment_id"):
+        judge_deployment_id = str(
+            request.judge_deployment_id
+            or run.metadata.get("judge_deployment_id")
+            or ""
+        )
+        if not judge_deployment_id:
             raise ValueError("The selected run has no registered judge deployment.")
-        payload = {"run_id": run_id, "limit": request.limit, "seed": request.seed}
+        if request.judge_deployment_id:
+            model_farm_service.resolve(judge_deployment_id, "judge")
+        payload = {
+            "run_id": run_id,
+            "limit": request.limit,
+            "seed": request.seed,
+            "judge_deployment_id": judge_deployment_id,
+        }
         queued_run = evaluation_service.queue_ragxplain(
             run_id,
             limit=request.limit,
             seed=request.seed,
+            judge_deployment_id=judge_deployment_id,
         )
         job = job_service.enqueue(
             "evaluation_ragxplain",
             payload,
             idempotency_key=(
                 f"evaluation-ragxplain:{run_id}:"
-                f"{run.metadata.get('judge_deployment_id')}:{uuid.uuid4().hex}"
+                f"{judge_deployment_id}:{uuid.uuid4().hex}"
             ),
             max_attempts=1,
         )

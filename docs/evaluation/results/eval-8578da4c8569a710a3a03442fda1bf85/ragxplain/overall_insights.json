@@ -1,0 +1,464 @@
+{
+  "analysis": {
+    "executive_summary": "The RAG system demonstrates outstanding retrieval quality with perfect scores in context relevancy and recall, ensuring the generator has comprehensive and highly relevant information. The generation stage excels in grounding answers strictly in retrieved context, maintaining perfect context adherence, and delivering highly relevant responses with an average answer relevancy of 0.96. The primary weakness lies in occasional gaps in answer completeness and factual detail, particularly in multi-step procedural instructions, which slightly lowers factuality and grading note scores. Targeted improvements in answer completeness and stepwise detail will enhance overall factual accuracy and user satisfaction without compromising the system's strong grounding and relevancy.",
+    "executive_summary_gist": "The system achieves perfect retrieval and grounding metrics, ensuring relevant and faithful answers. Minor weaknesses in answer completeness and procedural detail reduce factuality and grading note scores, suggesting focused improvements in stepwise guidance.",
+    "insights": [
+      {
+        "title": "Maintain Perfect Retrieval Quality While Monitoring for Coverage Drift",
+        "priority": "medium",
+        "problem_detection": "Although retrieval metrics are perfect with average scores of 1.0 for both context relevancy and recall, continuous monitoring is necessary to prevent future degradation as the knowledge base evolves.",
+        "problem_detection_gist": "Retrieval is currently perfect but requires ongoing vigilance to maintain coverage and relevancy.",
+        "root_cause_analysis": "The current hybrid retrieval setup with top_k=2 and a simple routing strategy effectively retrieves all necessary context, but as the knowledge base grows or user queries diversify, the fixed top_k and routing may limit coverage or relevancy in edge cases.",
+        "root_cause_analysis_gist": "Fixed retrieval parameters and routing may limit adaptability as data and queries evolve.",
+        "evidence_trace": "Metrics show perfect average scores of 1.0 for both `context_relevancy` and `context_recall`, indicating the retrieval stage consistently provides comprehensive and relevant context. Stratified examples such as the question on redeeming free business cards and creating albums in the Shared Gallery app demonstrate fully relevant and complete context retrieval supporting accurate answers. No examples show missing or irrelevant context.",
+        "evidence_trace_gist": "Perfect retrieval metrics and examples confirm comprehensive, relevant context retrieval, e.g., for redeeming free business cards.",
+        "recommended_protocol": "### 1. Implement Continuous Retrieval Monitoring\nSet up automated periodic evaluation of retrieval metrics on new queries and updated knowledge base content to detect any drop in `context_relevancy` or `context_recall`.\n\n### 2. Adapt Retrieval Parameters Dynamically\nConsider adaptive `top_k` tuning or dynamic reranking strategies to maintain coverage as the knowledge base scales or query complexity increases.\n\n### 3. Expand Retrieval Diversity\nExperiment with adding semantic reranking or query expansion to capture edge cases without sacrificing precision.\n\n> These steps ensure sustained retrieval excellence without increasing latency or cost unnecessarily.",
+        "recommended_protocol_gist": "- Monitor retrieval metrics regularly\n- Tune `top_k` and reranking dynamically\n- Add semantic reranking or query expansion"
+      },
+      {
+        "title": "Enhance Answer Completeness and Procedural Detail to Improve Factuality",
+        "priority": "critical",
+        "problem_detection": "Factuality scores average 0.92 with some examples showing omissions of critical procedural steps or details, leading to partial credit losses despite overall correctness.",
+        "problem_detection_gist": "Answer factuality is high but suffers from missing key procedural details in complex instructions.",
+        "root_cause_analysis": "The generation model, while strictly grounded in retrieved context (perfect `context_adherence`), sometimes produces incomplete or less detailed answers, especially for multi-step or procedural queries. This likely stems from prompt design or generation parameter settings that do not sufficiently encourage exhaustive stepwise elaboration.",
+        "root_cause_analysis_gist": "Generation prompts or parameters do not fully encourage detailed, stepwise procedural answers, causing factuality gaps.",
+        "evidence_trace": "The `factuality` metric averages 0.92 with minimum scores around 0.6, indicating occasional incomplete answers. Examples include the question on transferring Google Workspace email, where the candidate answer lacks detailed stepwise instructions and scored 0.4 on grading note. Another example about support for removed apps shows missing developer links, reducing factuality to 0.6. These cases highlight the need for more comprehensive procedural detail and explicit step enumeration.",
+        "evidence_trace_gist": "Factuality dips due to incomplete procedural details, e.g., missing steps in Google Workspace email transfer instructions.",
+        "recommended_protocol": "### 1. Refine Generation Prompts for Stepwise Detail\nUpdate prompts to explicitly request detailed, numbered step-by-step instructions for procedural queries, emphasizing completeness and clarity.\n\n### 2. Adjust Generation Parameters\nIncrease `max_tokens` and consider lowering temperature to encourage more exhaustive and precise answers without hallucination.\n\n### 3. Incorporate Post-Generation Completeness Checks\nImplement a lightweight post-processing step or secondary model to verify presence of all critical procedural steps and prompt regeneration or augmentation if gaps are detected.\n\n> These measures will improve factual completeness while maintaining perfect grounding and relevancy.",
+        "recommended_protocol_gist": "- Update prompts to request detailed steps\n- Increase `max_tokens` and lower temperature\n- Add post-generation completeness verification"
+      },
+      {
+        "title": "Improve Grading Note Quality by Enriching Actionable Steps and Alternative Options",
+        "priority": "high",
+        "problem_detection": "Grading note scores average 0.92 but show occasional low scores (down to 0.4) due to missing explicit stepwise instructions or lack of alternative options in answers.",
+        "problem_detection_gist": "Grading note quality suffers from insufficient detail and lack of comprehensive alternatives in some responses.",
+        "root_cause_analysis": "The generation stage does not consistently produce fully comprehensive grading notes that include explicit, actionable steps and broader alternative or prerequisite information. This may be due to prompt instructions or insufficient conditioning on the grading note generation task.",
+        "root_cause_analysis_gist": "Prompt and generation conditioning do not consistently enforce comprehensive, actionable grading notes with alternatives.",
+        "evidence_trace": "Examples with lower grading note scores include the Google Workspace email transfer question, where the grading note scored 0.4 due to missing detailed procedural steps and alternative options. High-scoring examples show clear, detailed instructions and comprehensive coverage, indicating that prompt or generation conditioning improvements can close this gap.",
+        "evidence_trace_gist": "Lower grading note scores correlate with missing detailed steps and alternatives, e.g., in email transfer instructions.",
+        "recommended_protocol": "### 1. Enhance Grading Note Prompts\nExplicitly instruct the model to include detailed, numbered steps and mention alternative methods or prerequisites when relevant.\n\n### 2. Use Multi-Pass Generation\nGenerate initial answers, then separately generate or augment grading notes focusing on completeness and alternative coverage.\n\n### 3. Integrate Human-in-the-Loop Feedback\nPeriodically review low-scoring grading notes and fine-tune prompt templates or generation parameters accordingly.\n\n> These steps will raise grading note quality, improving user clarity and satisfaction.",
+        "recommended_protocol_gist": "- Strengthen grading note prompt instructions\n- Use multi-pass generation for completeness\n- Incorporate human feedback for prompt tuning"
+      },
+      {
+        "title": "Address Minor Answer Relevancy Gaps in Complex or Multifaceted Queries",
+        "priority": "high",
+        "problem_detection": "Answer relevancy averages 0.96 but includes occasional moderate scores (as low as 0.6) where answers lack thoroughness or stepwise guidance, especially in complex transfer or setup questions.",
+        "problem_detection_gist": "Some complex queries receive answers that are relevant but insufficiently thorough or detailed.",
+        "root_cause_analysis": "While retrieval provides perfect context, the generation model sometimes prioritizes brevity or generality over exhaustive coverage, possibly due to prompt design or generation constraints. This leads to answers that address the question but omit nuanced or multi-step instructions needed for full user satisfaction.",
+        "root_cause_analysis_gist": "Generation prompts or parameters favor concise answers, reducing thoroughness in complex queries.",
+        "evidence_trace": "Examples such as the Google Workspace email transfer question show an answer relevancy score of 0.6 due to lack of detailed procedural steps. Other examples with high relevancy scores provide clear, comprehensive instructions, indicating that prompt tuning to encourage thoroughness can improve this metric.",
+        "evidence_trace_gist": "Answer relevancy dips in complex queries lacking detailed stepwise guidance, e.g., email transfer instructions.",
+        "recommended_protocol": "### 1. Modify Prompts to Emphasize Thoroughness\nInstruct the model to fully address all facets of complex questions with detailed explanations and stepwise guidance.\n\n### 2. Increase Generation Length Limits\nAllow longer answers by increasing `max_tokens` to accommodate detailed responses without truncation.\n\n### 3. Implement Context-Aware Answer Expansion\nUse retrieval metadata or query complexity signals to trigger expanded answer generation for multifaceted queries.\n\n> These improvements will enhance answer relevancy and user satisfaction for complex questions.",
+        "recommended_protocol_gist": "- Update prompts to emphasize thoroughness\n- Increase `max_tokens` for longer answers\n- Use query complexity to trigger expanded answers"
+      }
+    ],
+    "strategic_conclusion": "The RAG system exhibits exemplary retrieval and grounding performance, providing a solid foundation for trustworthy and relevant answers. The key to further elevating system effectiveness lies in refining generation prompts and parameters to enhance answer completeness, procedural detail, and grading note quality, especially for complex, multi-step queries. By focusing on these targeted improvements, the system can achieve near-perfect factuality and user satisfaction without compromising its current strengths in retrieval precision and answer faithfulness.",
+    "configuration_targets": [
+      {
+        "diagnostic_area": "Retrieval quality",
+        "metrics": [
+          "Context Relevancy",
+          "Context Recall"
+        ],
+        "sections": [
+          "Knowledge Base",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "chunking_strategy",
+          "embedding_deployment_id",
+          "retrieval_mode",
+          "top_k",
+          "reranker_deployment_id"
+        ]
+      },
+      {
+        "diagnostic_area": "Faithfulness and grounding",
+        "metrics": [
+          "Context Adherence",
+          "Factuality"
+        ],
+        "sections": [
+          "Generator target & prompts",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "generator_deployment_id",
+          "system_prompt",
+          "predefined_prompt",
+          "citations_enabled"
+        ]
+      },
+      {
+        "diagnostic_area": "Relevance and intent",
+        "metrics": [
+          "Answer Relevancy"
+        ],
+        "sections": [
+          "Adaptive RAG",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "route_mode",
+          "classifier_deployment_id",
+          "planner_deployment_id",
+          "response_structure"
+        ]
+      },
+      {
+        "diagnostic_area": "Structure and style",
+        "metrics": [
+          "Grading Note"
+        ],
+        "sections": [
+          "General",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "response_structure",
+          "tone",
+          "humor_level",
+          "system_prompt",
+          "predefined_prompt"
+        ]
+      }
+    ]
+  },
+  "prompt": {
+    "insights": {
+      "context_relevancy": {
+        "analysis": "The Context Relevancy metric shows perfect performance with an average score of 1.0, indicating that the retrieved context is consistently highly relevant and directly addresses user queries without missing or split information. All stratified examples demonstrate clear, complete, and focused context that fully supports the candidate answers, reflecting strong retrieval quality and effective alignment with user intent. Given this high level of performance, there is minimal room for improvement in context relevancy, and efforts can instead focus on maintaining this standard while optimizing other aspects of the RAG system.",
+        "metric_name": "Context Relevancy",
+        "metric_description": "How relevant retrieved context is to the question.",
+        "avg_score": 1.0,
+        "min_score": 1.0,
+        "max_score": 1.0
+      },
+      "context_adherence": {
+        "analysis": "The Context Adherence metric shows perfect performance with an average score of 1.0, indicating that the model consistently generates answers strictly based on the retrieved context without introducing external or unsupported information. All stratified examples demonstrate precise alignment with source content, reflecting strong retrieval and generation integration. Given this high level of fidelity, there is minimal room for improvement in context adherence, and efforts can focus on maintaining this standard while optimizing other aspects such as answer completeness or fluency.",
+        "metric_name": "Context Adherence",
+        "metric_description": "How faithfully the answer uses only retrieved context.",
+        "avg_score": 1.0,
+        "min_score": 1.0,
+        "max_score": 1.0
+      },
+      "answer_relevancy": {
+        "analysis": "The Answer Relevancy metric shows a very high average score of 0.96, indicating that the system consistently provides responses that directly and comprehensively address user questions. Most examples demonstrate clear, detailed, and contextually appropriate answers, often including helpful additional information or caveats. The single moderate score example reveals a gap in providing detailed procedural instructions, suggesting that improving completeness and step-by-step guidance in complex transfer or setup queries could further enhance relevancy. Overall, the system performs strongly with limited room for improvement, primarily by ensuring thoroughness in responses to multifaceted questions.",
+        "metric_name": "Answer Relevancy",
+        "metric_description": "How well the answer addresses the question.",
+        "avg_score": 0.96,
+        "min_score": 0.6,
+        "max_score": 1.0
+      },
+      "context_recall": {
+        "analysis": "The Context Recall metric shows perfect average performance (score 1.0), indicating that the retrieved context consistently contains all essential information needed to answer the user's questions fully. Across stratified examples, the retrieval reliably includes comprehensive and relevant details matching the ground truth, demonstrating strong retrieval effectiveness. Given this high performance, there is limited room for improvement in retrieval coverage; efforts should instead focus on enhancing answer generation quality and faithfulness to maximize overall response accuracy and user satisfaction.",
+        "metric_name": "Context Recall",
+        "metric_description": "Whether retrieved context contains information needed for ground truth.",
+        "avg_score": 1.0,
+        "min_score": 1.0,
+        "max_score": 1.0
+      },
+      "factuality": {
+        "analysis": "The Factuality metric shows a high average score of approximately 0.92, indicating strong overall answer correctness relative to ground truth references. Most errors are minor omissions of specific details or exact phrasing rather than outright factual inaccuracies, suggesting the generation component reliably produces accurate information but sometimes lacks completeness. To further improve, focus on enhancing coverage of all critical steps or details in multi-step procedural answers and including specific references or links when relevant, which would reduce partial credit losses. Since factuality is already high, improvements should prioritize targeted refinement of completeness and detail rather than broad changes.",
+        "metric_name": "Factuality",
+        "metric_description": "Answer correctness vs ground truth reference.",
+        "avg_score": 0.9199999999999999,
+        "min_score": 0.6,
+        "max_score": 1.0
+      },
+      "grading_note": {
+        "analysis": "The overall metric performance is high with an average score of 0.92, indicating that the grading note generation effectively meets the criteria in most cases. High-scoring examples demonstrate clear, detailed, and comprehensive step-by-step instructions or direct, concise answers that fully address user queries. The main area for improvement lies in moderate to lower scoring cases (e.g., score 0.4 and 0.8), where responses lack sufficient detail, such as missing stepwise procedures or broader alternative options. To enhance performance, focus on enriching answers with explicit, actionable steps and more comprehensive coverage of alternatives or prerequisites, ensuring completeness and clarity. Given the strong overall results, only targeted refinements are needed to address occasional gaps rather than broad system changes.",
+        "metric_name": "Grading Note",
+        "metric_description": "Two-stage grading note generation then scoring.",
+        "avg_score": 0.9199999999999999,
+        "min_score": 0.4,
+        "max_score": 1.0
+      }
+    },
+    "examples": {
+      "example_8": {
+        "question": "How can I redeem my 250 free business cards with the Wix Logo Maker plan?",
+        "candidate_answer": "To redeem your 250 free business cards with the Wix Logo Maker plan, follow these steps:\n\n- Purchase an Unlimited or Business Wix Logo Maker plan to be eligible.\n- Go to the Brand Studio in your Wix account.\n- Click the \"My Brands\" drop-down at the top and select your relevant brand.\n- Click \"Brand Actions\" and select \"Print Logo on Merchandise.\"\n- Click \"Get Started\" next to Business Cards.\n- Choose a template by hovering over it and clicking \"Select.\"\n- Add your business details, then click \"Save & Continue.\"\n- Click \"Add to Cart\" — the business cards should be free (price 0) in the cart.\n- Complete the checkout to have the double-sided cards shipped to your door.\n\nNote: The free cards must be redeemed using the logo included in your purchased plan and cannot be transferred to another account or redeemed by collaborators [S1][S2].",
+        "gt_answer": "To redeem your 250 free business cards with the Wix Logo Maker plan, follow these steps:\n\n1. Go to the [Brand Studio](http://www.wix.com/logo/maker/esh).\n2. Click the **My Brands** drop-down at the top.\n3. Select the relevant brand.\n4. Click **Brand Actions** at the top.\n5. Select **Print Logo on Merchandise**.\n6. Click **Get Started** beside **Business Cards**.\n7. Hover over the template you like best and click **Select.**\n8. Add your business details and click **Save & Continue.**\n9. Click **Add to Cart** (In the cart, the price of the business cards should be 0).\n10. Choose whether you want to customize the design.\n11. Click **Continue** to place an order.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7625000000000001,
+        "answer_overlap": 0.644736842105263,
+        "token_f1": 0.6434108527131781,
+        "bleu": 0.33578504341054205,
+        "rouge_1": 0.6434108527131781,
+        "rouge_2": 0.41406250000000006,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 0.8,
+        "grading_note_score": 1.0
+      },
+      "example_4": {
+        "question": "How can I create a new album in the Shared Gallery app on my live site?",
+        "candidate_answer": "To create a new album in the Shared Gallery app on your live site, follow these steps:\n\n- Go to the Shared Gallery section in your site's dashboard or directly on your live site.\n- Log in with the email address associated with your Wix account.\n- Click \"Create Album.\"\n- Enter a name and description for the album.\n- Click the Add icon to upload a cover image.\n- Click \"Create Album\" to finalize.\n\nNote: You and any site visitor with Manage Gallery permissions can create albums. After creating your first album, all photos and videos will be organized into albums, and you can only add media to albums, not individually to the main gallery page [S1][S2].",
+        "gt_answer": "To create a new album on your live site using the Shared Gallery app, follow these steps:\n\n1. Go to the Shared Gallery page on your site.\n2. Log in with the email address associated with your Wix account.\n3. Click **Create Album**.\n4. Enter a name and description for your album.\n5. Click the Add icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/9dcc39dd-da6f-4c38-b1c3-ee79d33f39d5/2021/11/12/13ed5068-32fa-452e-af44-6a7bfea3b16a/e7e3e187-3586-4b86-aa02-66d1a9592d0e.png) to add a cover image.\n6. Click **Create Album**.\n\n### Important\n* When you create your first album, another album with the same name as your site is also created. All of the photos and videos that you previously uploaded are automatically moved to this folder.\n* Your gallery's main page will also display only albums instead of individual photos and videos.\n* To return to displaying individual photos and videos, you need to [delete your albums](https://support.wix.com/en/article/creating-and-managing-albums-in-the-shared-gallery-app#deleting-an-album).",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.8676470588235291,
+        "answer_overlap": 0.42342342342342304,
+        "token_f1": 0.61168384879725,
+        "bleu": 0.20941895904895902,
+        "rouge_1": 0.61168384879725,
+        "rouge_2": 0.332179930795847,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 0.8,
+        "grading_note_score": 1.0
+      },
+      "example_1": {
+        "question": "Can I hide the titles of my album, track, or artist in my Wix Music player?",
+        "candidate_answer": "- Currently, it is not possible to hide the titles of your album, track, or artist in the Wix Music player.\n- Wix is continuously working on product improvements and values user feedback on this feature.\n\n[S1]",
+        "gt_answer": "Currently, you cannot hide the titles of your album, track or artist in your Wix Music player.",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7419354838709671,
+        "answer_overlap": 0.875,
+        "token_f1": 0.538461538461538,
+        "bleu": 0.317687240658773,
+        "rouge_1": 0.538461538461538,
+        "rouge_2": 0.44000000000000006,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 1.0
+      },
+      "example_6": {
+        "question": "Can I add drop-down or multiple choice options to the Wix Booking Form?",
+        "candidate_answer": "No, you cannot add drop-down or multiple choice options to the Wix Booking Form at this time. The form only supports short text fields (up to 40 characters), paragraph fields (up to 255 characters), and checkbox fields. The platform is continuously being improved, and user feedback is encouraged for future updates [S1].",
+        "gt_answer": "It is not currently possible to add other types of fields, such as drop-downs or multiple choice options, to the Wix Booking Form.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.6666666666666661,
+        "answer_overlap": 0.565217391304347,
+        "token_f1": 0.36363636363636304,
+        "bleu": 0.17765182020286702,
+        "rouge_1": 0.36363636363636304,
+        "rouge_2": 0.21333333333333301,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 1.0
+      },
+      "example_0": {
+        "question": "Can I manually select which products are displayed in the Related Products Gallery in Wix Stores?",
+        "candidate_answer": "No, you cannot manually select which products appear in the Related Products Gallery in Wix Stores. The gallery automatically shows products based on the same category, frequently bought together, or frequently viewed together data. Manual selection of related products is not supported at this time [S1].",
+        "gt_answer": "Currently, it is not possible to hand pick which products are related to each store item. When you display a [Related Products Gallery](https://support.wix.com/en/article/wix-stores-adding-a-related-products-or-best-sellers-gallery), you can choose whether it shows your customers other products from the same category, products frequently bought together (based on data), or frequently viewed together (based on data).",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.6944444444444441,
+        "answer_overlap": 0.42857142857142805,
+        "token_f1": 0.49557522123893805,
+        "bleu": 0.11837841849358201,
+        "rouge_1": 0.49557522123893805,
+        "rouge_2": 0.252252252252252,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 1.0
+      },
+      "example_9": {
+        "question": "What should I do if I need support for an app that has been removed from the Wix App Market?",
+        "candidate_answer": "If you need support for an app that has been removed from the Wix App Market, you should contact the app developers directly. Their support information is typically provided in the removal notice or can be found on the developer's website.\n\n- For example, apps like \"Gamify - Game Maker by Gamify\" or \"Google Search Ads by Cobiro\" have specific developer support links you can use to reach out for assistance [S1].  \n- Wix no longer provides support for these removed apps, so direct contact with the developer is necessary.\n\nThis approach ensures you get the most accurate and timely help for the app in question [S1].",
+        "gt_answer": "If you need support regarding one of the apps that have been removed from the Wix App Market, it is recommended to reach out to the app developers directly. You can find the developer support information in the table below:\n\n- **Gamify - Game Maker by Gamify**: [https://www.gamify.com/](https://www.gamify.com/)\n- **Google Search Ads by Cobiro**: [https://cobiro.com/](https://cobiro.com/)\n- **BeProfit Profit Calc & Reports by Become**: [https://www.become.co/](https://www.become.co/)\n- **123videoads**: [http://www.123videoads.com/](http://www.123videoads.com/)\n- **Royal Mail C&D by SellIntegro**: [https://sellintegro.eu/](https://sellintegro.eu/)\n- **Twitter Feed by POWR**: [https://help.powr.io/hc/](https://help.powr.io/hc/)",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.6575342465753421,
+        "answer_overlap": 0.5238095238095231,
+        "token_f1": 0.38532110091743105,
+        "bleu": 0.19316858027219602,
+        "rouge_1": 0.38532110091743105,
+        "rouge_2": 0.25,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 0.6,
+        "grading_note_score": 1.0
+      },
+      "example_2": {
+        "question": "What happened to the Wix Music distribution service and what are the alternatives for music distribution?",
+        "candidate_answer": "- Wix Music's distribution service ended on January 1st, 2019.\n- To continue distributing music, users are recommended to use Soundrop, which is free and offers extensive distribution features across major platforms.\n- Users will still receive outstanding payments for music sold through Wix distribution, with revenues typically released within 3-4 months of sale.\n- For any issues related to previously distributed music, contacting Wix Support is advised [S1].",
+        "gt_answer": "Wix Music's distribution service ended on January 1st, 2019. To continue distributing your music, you can check out [Soundrop](https://soundrop.com/). Soundrop is free and has tons of cool distribution features across top platforms.\n\n### Important\n* You will still receive outstanding payments for any music you sold using Wix distribution. Most stores and services release revenues within 3-4 months of a sale.\n* If you have any issues with your previously distributed music, [contact Wix Support.](https://www.wix.com/contact/en)",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7272727272727271,
+        "answer_overlap": 0.634920634920634,
+        "token_f1": 0.626666666666666,
+        "bleu": 0.32118932508396303,
+        "rouge_1": 0.626666666666666,
+        "rouge_2": 0.418918918918918,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 0.8
+      },
+      "example_5": {
+        "question": "How can I transfer a Google Workspace business email from my Wix account to Google?",
+        "candidate_answer": "To transfer a Google Workspace business email from your Wix account to Google:\n\n- Contact Wix Customer Care for assistance with the transfer.\n- This process will disconnect the Workspace business email from your Wix account.\n- The transfer is irreversible; once moved to Google, you cannot repurchase the business email through Wix.\n\nFor detailed steps and support, reach out to Wix Customer Care directly.\n\n[S1]",
+        "gt_answer": "Yes, you can transfer a Google Workspace business email from Wix to Google. This action disconnects the Workspace business email from your Wix account. To do so, [contact Wix Customer Care](https://www.wix.com/contact/en) for assistance. This is an irreversible action. Once transferred to Google, you cannot repurchase the business email through Wix.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.763157894736842,
+        "answer_overlap": 0.6756756756756751,
+        "token_f1": 0.672268907563025,
+        "bleu": 0.42964059653685704,
+        "rouge_1": 0.672268907563025,
+        "rouge_2": 0.47863247863247804,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 0.6,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 0.4
+      },
+      "example_3": {
+        "question": "Can I create more than 1000 product variants in Wix Stores?",
+        "candidate_answer": "No, you cannot create more than 1000 product variants per product in Wix Stores. The current limit is up to 1000 variants per product, and this is a known restriction as per the latest workflow information [S1].",
+        "gt_answer": "Currently, you can only create up to a total of 1000 variants per product.",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.551724137931034,
+        "answer_overlap": 0.642857142857142,
+        "token_f1": 0.35294117647058804,
+        "bleu": 0.11407522846435501,
+        "rouge_1": 0.35294117647058804,
+        "rouge_2": 0.16326530612244902,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 1.0
+      },
+      "example_7": {
+        "question": "Can I connect properties between different widgets in Wix Blocks?",
+        "candidate_answer": "No, currently Wix Blocks only allows connecting properties within a single widget. Connecting properties between different widgets is not supported at this time, though this feature is being considered for future updates to enable more cohesive and interactive app experiences [S1].",
+        "gt_answer": "Currently, Wix Blocks properties only connect elements within a single widget. This feature would allow you to create more cohesive and interactive experiences by connecting widget properties to app-level properties; enabling seamless data exchange between different widgets and allowing events to be triggered across the app.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.729729729729729,
+        "answer_overlap": 0.55,
+        "token_f1": 0.522727272727272,
+        "bleu": 0.18817339446085402,
+        "rouge_1": 0.522727272727272,
+        "rouge_2": 0.255813953488372,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 1.0
+      }
+    },
+    "configs": {
+      "rag_configs": {
+        "run_id": "eval-8578da4c8569a710a3a03442fda1bf85",
+        "name": "L2 GPT 4.1 mini - WixQA Synthetic",
+        "dataset_name": "WixQA Synthetic",
+        "knowledge_base_id": "kb-d4069abadfb54ef39af3f49153145532",
+        "knowledge_base_name": "WixQA Curpus 100",
+        "chat_configuration_id": "cfg-d5eabad574f04c209ccd1c5a80c512a2",
+        "chat_configuration": {
+          "id": "cfg-d5eabad574f04c209ccd1c5a80c512a2",
+          "name": "L2 GPT 4.1 mini",
+          "tone": "Professional",
+          "metadata": {
+            "top_k": 2,
+            "runtime": "model-farm",
+            "classifier": "query_classifier_distilbert",
+            "route_mode": "simple_rag",
+            "retrieval_mode": "hybrid",
+            "route_strategy": "L2 Simple RAG",
+            "welcome_message": "Welcome to Adaptive RAG Studio. Workflow assistant 2 will assist you.",
+            "actual_generator": "deployment",
+            "configuration_id": "nUcjS2lW2ean",
+            "reranker_enabled": false,
+            "citations_enabled": true,
+            "agent_max_iterations": 5,
+            "agent_max_tool_calls": 8,
+            "retrieval_mode_label": "Hybrid",
+            "agent_timeout_seconds": 90,
+            "conversation_starters": [
+              "What are the main steps in this workflow?",
+              "Summarize the selected knowledge base."
+            ],
+            "generation_parameters": {},
+            "planner_deployment_id": "",
+            "reranker_deployment_id": "",
+            "fallback_deployment_ids": [],
+            "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+            "agent_public_web_enabled": false,
+            "classifier_deployment_id": "model-local-distilbert",
+            "classifier_margin_threshold": 0,
+            "conversation_awareness_enabled": false,
+            "conversation_history_exchanges": 3,
+            "classifier_confidence_threshold": 0,
+            "conversation_history_characters": 4000
+          },
+          "description": "Default configuration for concise business workflow answers.",
+          "humor_level": 0,
+          "system_prompt": "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
+          "generator_model": "gpt-4.1-mini",
+          "citations_enabled": true,
+          "predefined_prompt": "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.",
+          "generator_provider": "openai",
+          "response_structure": "Concise answer with bullets and cited workflow context",
+          "generation_parameters": {},
+          "planner_deployment_id": "",
+          "reranker_deployment_id": "",
+          "fallback_deployment_ids": [],
+          "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+          "agent_public_web_enabled": false,
+          "conversation_awareness_enabled": false
+        },
+        "retrieval_mode": "hybrid",
+        "top_k": 2,
+        "route_distribution": {
+          "l2_simple_rag": 100
+        },
+        "wixqa_metrics": {
+          "mrr": 0.985,
+          "bleu": 0.22443295420919745,
+          "rouge_1": 0.5366215239817578,
+          "rouge_2": 0.34044859449596876,
+          "hit_at_k": 0.99,
+          "token_f1": 0.5366215239817578,
+          "ndcg_at_k": 1.3270113644643016,
+          "factuality": 0.906,
+          "recall_at_k": 0.99,
+          "context_recall": 0.8785,
+          "judge_coverage": 1.0,
+          "precision_at_k": 0.765,
+          "retrieval_coverage": 1.0
+        }
+      }
+    },
+    "rag_traditional_metrics": {
+      "routing_match": 0.3,
+      "context_relevance_proxy": 0.0,
+      "faithfulness_proxy": 0.7162612390051282,
+      "answer_overlap": 0.5964212062667434,
+      "token_f1": 0.521269294919225,
+      "bleu": 0.24051686066329486,
+      "rouge_1": 0.521269294919225,
+      "rouge_2": 0.32184586735436493
+    }
+  }
+}

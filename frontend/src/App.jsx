@@ -5688,6 +5688,7 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
   const [isBusy, setIsBusy] = useState(false);
   const [isLoadingCompatibility, setIsLoadingCompatibility] = useState(false);
   const [diagnosticLimit, setDiagnosticLimit] = useState(100);
+  const [diagnosticJudgeId, setDiagnosticJudgeId] = useState("");
   const [form, setForm] = useState({
     name: "WixQA configuration benchmark",
     knowledgeBaseId: selectedKnowledgeBaseId || "",
@@ -5703,11 +5704,8 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
   const selectedExperiment = experiments.find((item) => item.id === selectedExperimentId);
   const selectedRun = runs.find((item) => item.id === selectedRunId);
   const selectedRagxplain = selectedRun?.metadata?.ragxplain || {};
-  const ragxplainJudgeMatches = Boolean(
-    selectedRagxplain.status === "completed"
-    && selectedRagxplain.judge
-    && selectedRagxplain.judge === selectedRun?.metadata?.judge_deployment_id
-  );
+  const ragxplainReady = selectedRagxplain.status === "completed";
+  const artifactJudge = judges.find((judge) => judge.id === selectedRagxplain.judge);
   const selectedKnowledgeBase = knowledgeBases.find((item) => item.id === form.knowledgeBaseId);
   const wixqaDocumentCount = Number(datasets[0]?.knowledge_base_document_count || 0);
   const hasCompatibleDataset = datasets.some((item) => Number(item.compatible_record_count || 0) > 0);
@@ -5830,6 +5828,20 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
   }, [selectedRunId]);
 
   useEffect(() => {
+    if (!selectedRun) {
+      setDiagnosticJudgeId("");
+      return;
+    }
+    const runJudgeId = selectedRun.metadata?.judge_deployment_id || "";
+    const preferred = judges.some((judge) => judge.id === runJudgeId)
+      ? runJudgeId
+      : judges[0]?.id || "";
+    setDiagnosticJudgeId((current) => (
+      current && judges.some((judge) => judge.id === current) ? current : preferred
+    ));
+  }, [selectedRun?.id, selectedRun?.metadata?.judge_deployment_id, judges]);
+
+  useEffect(() => {
     if (!activeExperiment) return undefined;
     const timer = window.setInterval(async () => {
       try {
@@ -5945,8 +5957,16 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
 
   async function runRagxplain() {
     if (!selectedRun) return;
+    if (!diagnosticJudgeId) {
+      setStatus("Select an enabled judge model for RAGXplain diagnosis.");
+      return;
+    }
     try {
-      const queued = await startRagxplainDiagnosis(selectedRun.id, { limit: Number(diagnosticLimit), seed: 42 });
+      const queued = await startRagxplainDiagnosis(selectedRun.id, {
+        limit: Number(diagnosticLimit),
+        seed: 42,
+        judge_deployment_id: diagnosticJudgeId
+      });
       setRuns((current) => current.map((run) => run.id === selectedRun.id
         ? { ...run, metadata: { ...run.metadata, ragxplain: queued.ragxplain } }
         : run));
@@ -6137,14 +6157,14 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
                 )}
                 <div className="table-panel">
                   <table>
-                    <thead><tr><th>Rank</th><th>Configuration</th><th>Quality</th><th>Cost / case</th><th>Latency</th><th>Eligibility</th></tr></thead>
+                    <thead><tr><th>Rank</th><th>Configuration</th><th>Quality</th><th title="Answer pipeline and WixQA judge calls. Optional RAGXplain diagnosis is excluded.">Evaluation cost / case</th><th>Latency</th><th>Eligibility</th></tr></thead>
                     <tbody>
                       {(selectedExperiment.leaderboard || []).map((entry) => (
                         <tr key={entry.configuration_id} className={entry.winner ? "evaluation-winner" : ""}>
                           <td>{entry.winner ? "Best" : entry.rank || "-"}</td>
                           <td><strong>{entry.configuration_name}</strong><small>{entry.configuration_route} | {Object.entries(entry.dataset_scores || {}).map(([name, score]) => `${name}: ${formatPercentMetric(score)}`).join(" | ")}</small></td>
                           <td>{formatPercentMetric(entry.quality_score)}</td>
-                          <td>${formatNumber(entry.average_cost_per_case_usd, 4)}</td>
+                          <td title={`Total evaluation cost: $${formatNumber(entry.total_estimated_cost_usd, 6)}`}>${formatNumber(entry.average_cost_per_case_usd, 6)}</td>
                           <td>{formatNumber(entry.average_latency_ms)} ms</td>
                           <td>
                             {entry.eligible
@@ -6181,17 +6201,28 @@ function EvaluationScreen({ selectedKnowledgeBaseId, onSelectKnowledgeBase, onOp
             {selectedRun && (
               <div className="action-row">
                 <label className="compact-number-field">RAGXplain cases<input type="number" min="1" max={selectedRun.metadata?.record_count || 100} value={diagnosticLimit} onChange={(event) => setDiagnosticLimit(Number(event.target.value))} /></label>
-                <button className="secondary-action" onClick={runRagxplain}><GitBranch size={16} /> Run diagnosis</button>
+                <label className="compact-diagnosis-judge">
+                  <span>Diagnosis judge</span>
+                  <select value={diagnosticJudgeId} onChange={(event) => setDiagnosticJudgeId(event.target.value)}>
+                    <option value="">Select judge</option>
+                    {judges.map((judge) => (
+                      <option key={judge.id} value={judge.id} title={modelDeploymentLabel(judge)}>
+                        {shortDeploymentLabel(judge)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button className="secondary-action" disabled={!diagnosticJudgeId} onClick={runRagxplain}><GitBranch size={16} /> Run diagnosis</button>
                 <button className="icon-button" aria-label="Refresh selected evaluation run" title="Refresh RAGXplain status" onClick={refreshSelectedRun}><RefreshCw size={16} /></button>
-                <button className="secondary-action" disabled={!ragxplainJudgeMatches} onClick={() => onOpenDetail(selectedRun, null, "ragxplain")}><ExternalLink size={16} /> Open insights</button>
+                <button className="secondary-action" disabled={!ragxplainReady} onClick={() => onOpenDetail(selectedRun, null, "ragxplain")}><ExternalLink size={16} /> Open insights</button>
               </div>
             )}
           </div>
           {selectedRun?.metadata?.ragxplain && (
-            <div className={`evaluation-ragxplain-status ${!ragxplainJudgeMatches && selectedRagxplain.status === "completed" ? "is-failed" : `is-${selectedRagxplain.status || "not-requested"}`}`}>
+            <div className={`evaluation-ragxplain-status is-${selectedRagxplain.status || "not-requested"}`}>
               <strong>RAGXplain: {selectedRagxplain.status || "not requested"}</strong>
-              {!ragxplainJudgeMatches && selectedRagxplain.status === "completed" && (
-                <span>Legacy artifact used {selectedRagxplain.judge || "an unknown judge"}. Run diagnosis again to use {selectedRun.metadata?.judge_deployment_id}.</span>
+              {selectedRagxplain.judge && (
+                <span>Judge: {artifactJudge?.name || selectedRagxplain.judge}</span>
               )}
               {selectedRagxplain.error && <span>{selectedRagxplain.error}</span>}
             </div>
@@ -6545,7 +6576,7 @@ function AnalyticsScreen() {
             <div className="analytics-chart">
               {trend.length ? (
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={trend} margin={{ top: 8, right: 10, left: 10, bottom: 4 }}>
+                  <ComposedChart data={trend} margin={{ top: 8, right: 20, left: 30, bottom: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                     <XAxis dataKey="day" tickFormatter={shortChartDate} minTickGap={24} />
                     <YAxis yAxisId="tokens" tickFormatter={(value) => formatNumber(value, 0)} />

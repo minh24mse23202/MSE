@@ -111,6 +111,7 @@ class KnowledgeJobWorker:
                 str(payload.get("run_id") or ""),
                 limit=int(payload.get("limit") or 100),
                 seed=int(payload.get("seed") or 42),
+                judge_deployment_id=str(payload.get("judge_deployment_id") or ""),
             )
             return {
                 "run_id": run.id,

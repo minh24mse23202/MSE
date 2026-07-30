@@ -461,10 +461,10 @@ class EvaluationExperimentService:
         )
 
     def list(self) -> List[EvaluationExperimentRecord]:
-        return self.repository.list()
+        return [self._refresh_leaderboard(record) for record in self.repository.list()]
 
     def get(self, experiment_id: str) -> EvaluationExperimentRecord:
-        return self.repository.get(experiment_id)
+        return self._refresh_leaderboard(self.repository.get(experiment_id))
 
     def runs(self, experiment_id: str) -> List[EvaluationRunRecord]:
         record = self.get(experiment_id)
@@ -491,6 +491,30 @@ class EvaluationExperimentService:
         if self.knowledge_service is None:
             return None
         return set(self.knowledge_service.list_wixqa_source_record_ids(knowledge_base_id))
+
+    def _refresh_leaderboard(
+        self,
+        experiment: EvaluationExperimentRecord,
+    ) -> EvaluationExperimentRecord:
+        if not experiment.run_ids:
+            return experiment
+        runs: List[EvaluationRunRecord] = []
+        for run_id in experiment.run_ids:
+            try:
+                runs.append(self.evaluation_service.get_run(run_id))
+            except KeyError:
+                continue
+        snapshots = list(experiment.metadata.get("configuration_snapshots") or [])
+        leaderboard = _build_leaderboard(experiment, runs, snapshots)
+        if leaderboard == experiment.leaderboard:
+            return experiment
+        return self.repository.save(
+            replace(
+                experiment,
+                leaderboard=leaderboard,
+                updated_at=utc_now(),
+            )
+        )
 
 
 def _validate_datasets(datasets: Dict[str, Optional[int]]) -> Dict[str, Optional[int]]:
@@ -586,16 +610,25 @@ def _build_leaderboard(
     for configuration_id in experiment.configuration_ids:
         config_runs = [run for run in runs if run.chat_configuration_id == configuration_id]
         dataset_scores: Dict[str, float] = {}
-        costs = []
+        total_cost = 0.0
+        total_cost_cases = 0
         latencies = []
         for run in config_runs:
             wixqa = dict(run.metrics.get("wixqa") or {})
             score = quality_score(wixqa, experiment.quality_weights)
             dataset_scores[run.dataset_name] = score
-            costs.append(float(run.metrics.get("average_cost_per_case_usd", 0.0)))
+            run_cases = int(run.metadata.get("record_count") or run.limit or 0)
+            run_total_cost = run.metrics.get("total_estimated_cost_usd")
+            if run_total_cost is None:
+                run_total_cost = (
+                    float(run.metrics.get("average_cost_per_case_usd", 0.0))
+                    * run_cases
+                )
+            total_cost += float(run_total_cost or 0.0)
+            total_cost_cases += run_cases
             latencies.append(float(run.metrics.get("average_latency_ms", 0.0)))
         aggregate = mean(dataset_scores.values()) if dataset_scores else 0.0
-        average_cost = mean(costs) if costs else 0.0
+        average_cost = total_cost / total_cost_cases if total_cost_cases else 0.0
         average_latency = mean(latencies) if latencies else 0.0
         violations = []
         if experiment.max_cost_per_case is not None and average_cost > experiment.max_cost_per_case:
@@ -614,6 +647,9 @@ def _build_leaderboard(
                 "quality_score": aggregate,
                 "dataset_scores": dataset_scores,
                 "average_cost_per_case_usd": average_cost,
+                "total_estimated_cost_usd": total_cost,
+                "cost_case_count": total_cost_cases,
+                "cost_scope": "answer_pipeline_and_wixqa_judges",
                 "average_latency_ms": average_latency,
                 "eligible": not violations,
                 "constraint_violations": violations,

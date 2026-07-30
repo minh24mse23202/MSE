@@ -1368,6 +1368,7 @@ class AdaptiveRAGAnswerService:
             "generator": generation.model,
             "configured_generator": configured_generator,
             "actual_generator": actual_generator,
+            "generator_metadata": dict(generation.metadata),
             "fallback_used": fallback_index > 0,
             "fallback_attempts": list(generation.metadata.get("fallback_attempts") or []),
             "generation_status": generation.status,

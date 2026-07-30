@@ -44,7 +44,7 @@ Conversation-aware RAG defaults to three completed exchanges and 4,000 character
 If MiniLM re-indexing fails on Windows with `c10.dll` or `[WinError 1114]`, reinstall the stable CPU PyTorch wheel, then reinstall the project extras and restart the API:
 
 ```powershell
-python -m pip install --force-reinstall "torch>=2.2,<2.6" --index-url https://download.pytorch.org/whl/cpu
+python -m pip install --force-reinstall "torch>=2.2,<3" --index-url https://download.pytorch.org/whl/cpu
 python -m pip install -e ".[dev,api,app,ml]"
 python -m uvicorn api.main:app --reload --env-file .env
 ```
@@ -240,6 +240,12 @@ Train versioned four-class DistilBERT and T5-small artifacts without replacing t
 python scripts/train_hf_query_classifier.py --dataset data/processed/four_class_qac.jsonl
 python scripts/train_t5_query_classifier.py --dataset data/processed/four_class_qac.jsonl
 ```
+
+The complete step-by-step Colab and GPU-environment workflow is documented in
+[`docs/classifier_training/README.md`](docs/classifier_training/README.md). It
+covers the frozen dataset transfer, checksum verification, GPU setup,
+hyperparameters, artifact packaging, local smoke tests, and activation in AI
+Models.
 
 The resulting artifacts are written to `data/artifacts/query_classifier_distilbert_v2` and `data/artifacts/query_classifier_t5_v2`. Adaptive routing escalates one level when classifier confidence is below `0.60` or the top-two probability margin is below `0.15`; both thresholds are saved per RAG Customizer configuration. Explicit L1-L4 routes bypass confidence escalation.
 Each training script retains at most one intermediate Hugging Face checkpoint to control disk usage.

@@ -14,7 +14,7 @@ from aragbiz.answering import AdaptiveRAGAnswerService, AnswerOptions
 from aragbiz.data import load_qac_jsonl
 from aragbiz.knowledge import KnowledgeProcessingError, utc_now
 from aragbiz.evaluation_metrics import aggregate_wixqa_metrics, deterministic_case_metrics
-from aragbiz.model_farm import ModelCallContext, ModelFarmError, ModelGateway
+from aragbiz.model_farm import ModelCallContext, ModelFarmError, ModelGateway, ModelUsageEvent
 from aragbiz.pipeline import RAGPipeline
 from aragbiz.ragxplain import RagxplainError, RagxplainRunner, RagxplainUnavailableError
 from aragbiz.schemas import AnswerResult, QACRecord, RetrievedContext, RetrievalMode
@@ -189,6 +189,7 @@ class EvaluationService:
 
         metrics = evaluate_predictions(records, results)
         metrics.update(_runtime_metrics(results))
+        metrics.update(self._model_usage_metrics(run_id, len(results)))
         wixqa_metrics = aggregate_wixqa_metrics([case.metrics.get("result", {}) for case in cases])
         metrics["wixqa"] = wixqa_metrics
         run_name = (config.name or "RAG configuration evaluation").strip()
@@ -388,11 +389,35 @@ class EvaluationService:
 
     def list_runs(self) -> List[EvaluationRunRecord]:
         self.repository.initialize()
-        return self.repository.list_runs()
+        return [self._with_model_usage(run) for run in self.repository.list_runs()]
 
     def get_run(self, run_id: str) -> EvaluationRunRecord:
         self.repository.initialize()
-        return self.repository.get_run(run_id)
+        return self._with_model_usage(self.repository.get_run(run_id))
+
+    def _model_usage_metrics(self, run_id: str, case_count: int) -> Dict[str, Any]:
+        if self.model_gateway is None:
+            return {}
+        model_farm_service = getattr(self.model_gateway, "service", None)
+        if model_farm_service is None or not hasattr(model_farm_service, "list_usage"):
+            return {}
+        events = model_farm_service.list_usage(
+            evaluation_run_id=run_id,
+            limit=50000,
+        )
+        evaluation_events = [
+            event
+            for event in events
+            if not event.purpose.startswith("ragxplain_")
+        ]
+        return _model_usage_metrics(evaluation_events, case_count)
+
+    def _with_model_usage(self, run: EvaluationRunRecord) -> EvaluationRunRecord:
+        case_count = int(run.metadata.get("record_count") or run.limit or 0)
+        usage_metrics = self._model_usage_metrics(run.id, case_count)
+        if not usage_metrics:
+            return run
+        return replace(run, metrics={**run.metrics, **usage_metrics})
 
     def list_cases(self, run_id: str) -> List[EvaluationCaseRecord]:
         self.repository.initialize()
@@ -430,13 +455,18 @@ class EvaluationService:
         *,
         limit: int = 100,
         seed: int = 42,
+        judge_deployment_id: str = "",
     ) -> EvaluationRunRecord:
         if self.ragxplain_runner is None or self.model_gateway is None:
             raise RagxplainUnavailableError("RAGXplain Model Farm integration is not configured.")
         run = self.get_run(run_id)
         cases = self.list_cases(run_id)
-        judge_deployment_id = str(run.metadata.get("judge_deployment_id") or "")
-        if not judge_deployment_id:
+        resolved_judge_deployment_id = str(
+            judge_deployment_id
+            or run.metadata.get("judge_deployment_id")
+            or ""
+        )
+        if not resolved_judge_deployment_id:
             raise RagxplainUnavailableError("This evaluation run has no registered judge deployment.")
         selected_cases = _stratified_ragxplain_cases(cases, max(1, min(int(limit), len(cases))), seed)
         running_metadata = {
@@ -445,7 +475,7 @@ class EvaluationService:
                 "status": "running",
                 "output_dir": str(self.ragxplain_runner.output_dir(run.id)),
                 "overall_insights_path": None,
-                "judge": judge_deployment_id,
+                "judge": resolved_judge_deployment_id,
                 "case_count": len(selected_cases),
                 "random_state": seed,
                 "error": None,
@@ -472,7 +502,7 @@ class EvaluationService:
                     "wixqa_metrics": run.metrics.get("wixqa", {}),
                 },
                 model_gateway=self.model_gateway,
-                judge_deployment_id=judge_deployment_id,
+                judge_deployment_id=resolved_judge_deployment_id,
                 knowledge_base_id=run.knowledge_base_id,
                 external_processing_allowed=_kb_external_processing_allowed(knowledge_base.metadata),
                 random_state=seed,
@@ -482,7 +512,7 @@ class EvaluationService:
                 "status": "failed",
                 "output_dir": str(self.ragxplain_runner.output_dir(run.id)),
                 "overall_insights_path": None,
-                "judge": judge_deployment_id,
+                "judge": resolved_judge_deployment_id,
                 "case_count": len(selected_cases),
                 "random_state": seed,
                 "error": str(exc),
@@ -497,13 +527,18 @@ class EvaluationService:
         *,
         limit: int = 100,
         seed: int = 42,
+        judge_deployment_id: str = "",
     ) -> EvaluationRunRecord:
         if self.ragxplain_runner is None or self.model_gateway is None:
             raise RagxplainUnavailableError("RAGXplain Model Farm integration is not configured.")
         run = self.get_run(run_id)
         cases = self.list_cases(run_id)
-        judge_deployment_id = str(run.metadata.get("judge_deployment_id") or "")
-        if not judge_deployment_id:
+        resolved_judge_deployment_id = str(
+            judge_deployment_id
+            or run.metadata.get("judge_deployment_id")
+            or ""
+        )
+        if not resolved_judge_deployment_id:
             raise RagxplainUnavailableError("This evaluation run has no registered judge deployment.")
         previous = dict(run.metadata.get("ragxplain") or {})
         selected_count = min(max(1, int(limit)), len(cases))
@@ -511,13 +546,13 @@ class EvaluationService:
             "status": "queued",
             "output_dir": str(self.ragxplain_runner.output_dir(run.id)),
             "overall_insights_path": None,
-            "judge": judge_deployment_id,
+            "judge": resolved_judge_deployment_id,
             "case_count": selected_count,
             "random_state": int(seed),
             "error": None,
             "replaces_legacy_artifact": bool(
                 previous.get("status") == "completed"
-                and previous.get("judge") != judge_deployment_id
+                and previous.get("judge") != resolved_judge_deployment_id
             ),
         }
         return self.repository.save_run(
@@ -820,9 +855,20 @@ def _runtime_metrics(results: List[AnswerResult]) -> Dict[str, float]:
 
 def _result_usage(result: AnswerResult) -> Dict[str, float]:
     metadata = result.metadata
-    generator = metadata.get("actual_generator")
+    generator = metadata.get("generator_metadata")
     if not isinstance(generator, dict):
-        generator = metadata.get("generator_metadata")
+        generator = next(
+            (
+                step.get("metadata")
+                for step in reversed(list(metadata.get("trace_steps") or []))
+                if isinstance(step, dict)
+                and step.get("step") == "Generator execution"
+                and isinstance(step.get("metadata"), dict)
+            ),
+            None,
+        )
+    if not isinstance(generator, dict):
+        generator = metadata.get("actual_generator")
     if not isinstance(generator, dict):
         generator = {}
     return {
@@ -831,6 +877,37 @@ def _result_usage(result: AnswerResult) -> Dict[str, float]:
         "estimated_cost_usd": float(
             generator.get("estimated_cost_usd", metadata.get("estimated_cost_usd", 0.0)) or 0.0
         ),
+    }
+
+
+def _model_usage_metrics(
+    events: List[ModelUsageEvent],
+    case_count: int,
+) -> Dict[str, Any]:
+    if not events:
+        return {}
+    total_cost = sum(float(event.estimated_cost_usd or 0.0) for event in events)
+    total_input_tokens = sum(int(event.input_tokens or 0) for event in events)
+    total_output_tokens = sum(int(event.output_tokens or 0) for event in events)
+    purpose_costs: Dict[str, float] = {}
+    for event in events:
+        purpose_costs[event.purpose] = (
+            purpose_costs.get(event.purpose, 0.0)
+            + float(event.estimated_cost_usd or 0.0)
+        )
+    divisor = max(int(case_count), 1)
+    return {
+        "average_cost_per_case_usd": total_cost / divisor,
+        "total_estimated_cost_usd": total_cost,
+        "total_input_tokens": float(total_input_tokens),
+        "total_output_tokens": float(total_output_tokens),
+        "model_usage_call_count": len(events),
+        "model_usage_cost_by_purpose": {
+            key: round(value, 10)
+            for key, value in sorted(purpose_costs.items())
+        },
+        "cost_scope": "answer_pipeline_and_wixqa_judges",
+        "ragxplain_cost_included": False,
     }
 
 

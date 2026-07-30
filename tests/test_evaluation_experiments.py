@@ -148,6 +148,8 @@ def test_experiment_matrix_uses_shared_samples_and_ranks_configurations(monkeypa
     assert len(completed.run_ids) == 2
     assert completed.leaderboard[0]["configuration_id"] == "config-a"
     assert completed.leaderboard[0]["winner"] is True
+    assert completed.leaderboard[0]["average_cost_per_case_usd"] == pytest.approx(0.01)
+    assert completed.leaderboard[0]["total_estimated_cost_usd"] == pytest.approx(0.03)
     assert completed.metadata["knowledge_base_compatibility"]["status"] == "compatible"
 
     # Resume is idempotent because deterministic child run IDs are reused.

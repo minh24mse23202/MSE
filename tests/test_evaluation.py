@@ -12,18 +12,21 @@ from aragbiz.evaluation import (
     EvaluationRunConfig,
     EvaluationService,
     JsonEvaluationRepository,
+    _model_usage_metrics,
     _parse_partial_judge_payload,
+    _result_usage,
     evaluate_predictions,
 )
 from aragbiz.generation import ExtractiveGenerator
 from aragbiz.knowledge import HashEmbeddingModel, KnowledgeService, OverlapChunker
 from aragbiz.knowledge_store import JsonKnowledgeRepository
-from aragbiz.model_farm import ModelGenerationResult
+from aragbiz.model_farm import ModelGenerationResult, ModelUsageEvent
 from aragbiz.routing import AdaptiveRouter
 from aragbiz.ragxplain import (
     RagxplainError,
     RagxplainRunner,
     _ModelGatewayJudge,
+    _is_complete_overall_analysis,
     _normalize_response_schema,
     _validate_semantic_metric_artifacts,
 )
@@ -104,6 +107,72 @@ def test_evaluate_predictions_non_empty_runtime_metrics():
     assert metrics["faithfulness_proxy"] == 1.0
     assert metrics["answer_overlap"] == 1.0
     assert metrics["average_latency_ms"] == 12.5
+
+
+def test_result_usage_recovers_generator_cost_from_trace_steps():
+    result = AnswerResult(
+        question="Question",
+        answer="Answer",
+        contexts=[],
+        metadata={
+            "actual_generator": {"provider": "OpenRouter", "model": "test"},
+            "trace_steps": [
+                {
+                    "step": "Generator execution",
+                    "metadata": {
+                        "input_tokens": 120,
+                        "output_tokens": 30,
+                        "estimated_cost_usd": 0.0015,
+                    },
+                }
+            ],
+        },
+    )
+
+    assert _result_usage(result) == {
+        "input_tokens": 120.0,
+        "output_tokens": 30.0,
+        "estimated_cost_usd": 0.0015,
+    }
+
+
+def test_model_usage_metrics_include_evaluation_calls_per_case():
+    events = [
+        ModelUsageEvent(
+            id="usage-generation",
+            deployment_id="generator",
+            provider="OpenRouter",
+            model="model",
+            capability="generation",
+            purpose="answer_generation",
+            status="completed",
+            input_tokens=100,
+            output_tokens=20,
+            total_tokens=120,
+            estimated_cost_usd=0.006,
+        ),
+        ModelUsageEvent(
+            id="usage-judge",
+            deployment_id="judge",
+            provider="OpenRouter",
+            model="judge-model",
+            capability="judge",
+            purpose="wixqa_factuality_judge",
+            status="completed",
+            input_tokens=80,
+            output_tokens=10,
+            total_tokens=90,
+            estimated_cost_usd=0.004,
+        ),
+    ]
+
+    metrics = _model_usage_metrics(events, case_count=2)
+
+    assert metrics["total_estimated_cost_usd"] == pytest.approx(0.01)
+    assert metrics["average_cost_per_case_usd"] == pytest.approx(0.005)
+    assert metrics["total_input_tokens"] == 180.0
+    assert metrics["total_output_tokens"] == 30.0
+    assert metrics["ragxplain_cost_included"] is False
 
 
 def test_json_evaluation_repository_crud(tmp_path):
@@ -381,7 +450,16 @@ def _successful_ragxplain_process(command, **kwargs):
     (output_dir / "results.csv").write_text("question,candidate_answer\nq,a\n", encoding="utf-8")
     (output_dir / "metrics_insights.json").write_text("{}", encoding="utf-8")
     (output_dir / "overall_insights.json").write_text(
-        json.dumps({"analysis": {"executive_summary": "Healthy run", "insights": []}}),
+        json.dumps(
+            {
+                "analysis": {
+                    "executive_summary": "Healthy run",
+                    "executive_summary_gist": "Healthy.",
+                    "insights": [{"title": "Keep monitoring"}],
+                    "strategic_conclusion": "Continue evaluation.",
+                }
+            }
+        ),
         encoding="utf-8",
     )
     return subprocess.CompletedProcess(command, 0, stdout="done", stderr="")
@@ -474,10 +552,15 @@ def test_ragxplain_failure_does_not_discard_evaluation_cases(tmp_path):
             judge_deployment_id="judge-1",
         )
     )
-    run = evaluation.run_ragxplain(run.id, limit=1)
+    run = evaluation.run_ragxplain(
+        run.id,
+        limit=1,
+        judge_deployment_id="judge-2",
+    )
 
     assert run.status == "completed"
     assert run.metadata["ragxplain"]["status"] == "failed"
+    assert run.metadata["ragxplain"]["judge"] == "judge-2"
     assert "Judge unavailable" in run.metadata["ragxplain"]["error"]
     assert len(evaluation.list_cases(run.id)) == 1
 
@@ -520,7 +603,7 @@ def test_model_gateway_judge_normalizes_fenced_schema_json():
     assert json.loads(result)["analysis"]["executive_summary"] == "Healthy"
     assert len(gateway.calls) == 1
     parameters = gateway.calls[0][2]["parameters"]
-    assert parameters["max_tokens"] == 6000
+    assert parameters["max_tokens"] == 20000
     assert parameters["response_format"]["type"] == "json_schema"
     assert parameters["response_format"]["json_schema"]["name"] == "prompts_overall_insight_md"
 
@@ -567,7 +650,7 @@ def test_model_gateway_judge_retries_incomplete_schema_json():
 
     assert json.loads(result)["analysis"]["executive_summary"] == "Recovered"
     assert len(gateway.calls) == 2
-    assert gateway.calls[1][2]["parameters"]["max_tokens"] == 7000
+    assert gateway.calls[1][2]["parameters"]["max_tokens"] == 30000
     assert gateway.calls[1][2]["context"].purpose == "ragxplain_overall_insight_json_retry"
 
 
@@ -589,6 +672,63 @@ def test_ragxplain_response_schema_name_is_normalized_without_mutation():
     assert original["name"] == "prompts/context_relevancy.md"
     assert _normalize_response_schema({"name": "overall_insight_response"})["name"] == "overall_insight_response"
     assert _normalize_response_schema({"name": ".../"})["name"] == "ragxplain_response"
+
+
+def test_ragxplain_incomplete_overall_analysis_uses_metric_fallback_for_viewer(tmp_path):
+    root = _create_ragxplain_root(tmp_path)
+    runner = RagxplainRunner(
+        str(root),
+        str(tmp_path / "results"),
+        "unused",
+    )
+    artifact = runner.output_dir("eval-1") / "overall_insights.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        json.dumps(
+            {
+                "analysis": {"error": "Judge response is not a complete JSON object"},
+                "prompt": {
+                    "insights": {
+                        "context_relevancy": {
+                            "metric_name": "Context Relevancy",
+                            "avg_score": 0.95,
+                            "min_score": 0.2,
+                            "max_score": 1.0,
+                            "analysis": "Most retrieved context is relevant.",
+                        },
+                        "factuality": {
+                            "metric_name": "Factuality",
+                            "avg_score": 0.72,
+                            "min_score": 0.4,
+                            "max_score": 1.0,
+                            "analysis": "Some answers omit required details.",
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = runner.load_overall_insights(str(artifact))
+
+    assert _is_complete_overall_analysis(payload["analysis"])
+    assert "deterministic fallback" in payload["analysis"]["executive_summary"]
+    assert payload["aragbiz_overall_analysis"]["status"] == "metric_fallback"
+    assert json.loads(artifact.read_text(encoding="utf-8"))["analysis"].get("error")
+
+
+def test_ragxplain_complete_analysis_validation():
+    assert not _is_complete_overall_analysis({"error": "truncated"})
+    assert not _is_complete_overall_analysis({"executive_summary": "Only a summary"})
+    assert _is_complete_overall_analysis(
+        {
+            "executive_summary": "Healthy run.",
+            "executive_summary_gist": "Healthy.",
+            "insights": [{"title": "Monitor"}],
+            "strategic_conclusion": "Continue.",
+        }
+    )
 
 
 def test_ragxplain_semantic_metric_validation_accepts_all_six_metrics(tmp_path):

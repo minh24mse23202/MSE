@@ -1,0 +1,473 @@
+{
+  "context_adherence": {
+    "analysis": "The Context Adherence metric shows perfect performance with an average score of 1.0, indicating that the model consistently generates answers strictly based on the retrieved context without introducing external or unsupported information. All stratified examples demonstrate precise alignment with source content, reflecting strong retrieval and generation integration. Given this high level of fidelity, there is minimal room for improvement in context adherence, and efforts can focus on maintaining this standard while optimizing other aspects such as answer completeness or fluency.",
+    "metric_name": "Context Adherence",
+    "metric_description": "How faithfully the answer uses only retrieved context.",
+    "avg_score": 1.0,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately summarizes the steps to redeem free business cards as described in the context, including the requirement to purchase the appropriate plan, the navigation steps in the Brand Studio, and the note about restrictions on transferring or redeeming by collaborators. No external information or assumptions are introduced.",
+        "question": "How can I redeem my 250 free business cards with the Wix Logo Maker plan?",
+        "candidate_answer": "To redeem your 250 free business cards with the Wix Logo Maker plan, follow these steps:\n\n- Purchase an Unlimited or Business Wix Logo Maker plan to be eligible.\n- Go to the Brand Studio in your Wix account.\n- Click the \"My Brands\" drop-down at the top and select your relevant brand.\n- Click \"Brand Actions\" and select \"Print Logo on Merchandise.\"\n- Click \"Get Started\" next to Business Cards.\n- Choose a template by hovering over it and clicking \"Select.\"\n- Add your business details, then click \"Save & Continue.\"\n- Click \"Add to Cart\" — the business cards should be free (price 0) in the cart.\n- Complete the checkout to have the double-sided cards shipped to your door.\n\nNote: The free cards must be redeemed using the logo included in your purchased plan and cannot be transferred to another account or redeemed by collaborators [S1][S2]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response directly reflects the information from the first context snippet, accurately stating that hiding titles is not currently possible and that Wix values user feedback and is working on improvements. No external information or assumptions are introduced.",
+        "question": "Can I hide the titles of my album, track, or artist in my Wix Music player?",
+        "candidate_answer": "- Currently, it is not possible to hide the titles of your album, track, or artist in the Wix Music player.\n- Wix is continuously working on product improvements and values user feedback on this feature.\n\n[S1]"
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately summarizes all key points from the provided context without adding any external information or assumptions. Each statement is directly supported by the context, demonstrating excellent adherence.",
+        "question": "What happened to the Wix Music distribution service and what are the alternatives for music distribution?",
+        "candidate_answer": "- Wix Music's distribution service ended on January 1st, 2019.\n- To continue distributing music, users are recommended to use Soundrop, which is free and offers extensive distribution features across major platforms.\n- Users will still receive outstanding payments for music sold through Wix distribution, with revenues typically released within 3-4 months of sale.\n- For any issues related to previously distributed music, contacting Wix Support is advised [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately summarizes the information from the context about transferring a Google Workspace business email from Wix to Google, including contacting Wix Customer Care, the disconnection from Wix, and the irreversibility of the action. No external information or assumptions are introduced.",
+        "question": "How can I transfer a Google Workspace business email from my Wix account to Google?",
+        "candidate_answer": "To transfer a Google Workspace business email from your Wix account to Google:\n\n- Contact Wix Customer Care for assistance with the transfer.\n- This process will disconnect the Workspace business email from your Wix account.\n- The transfer is irreversible; once moved to Google, you cannot repurchase the business email through Wix.\n\nFor detailed steps and support, reach out to Wix Customer Care directly.\n\n[S1]"
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately reflects the information in the context, specifically from [1], stating that Wix Blocks properties only connect elements within a single widget and that connecting properties between different widgets is not currently supported but is a feature being considered. No external information or assumptions are introduced.",
+        "question": "Can I connect properties between different widgets in Wix Blocks?",
+        "candidate_answer": "No, currently Wix Blocks only allows connecting properties within a single widget. Connecting properties between different widgets is not supported at this time, though this feature is being considered for future updates to enable more cohesive and interactive app experiences [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately reflects the information in the context, specifically from source [1], stating that manual selection of related products in the Wix Stores Related Products Gallery is not possible and that the gallery shows products based on category or data-driven relationships. No external information or assumptions are introduced.",
+        "question": "Can I manually select which products are displayed in the Related Products Gallery in Wix Stores?",
+        "candidate_answer": "No, you cannot manually select which products appear in the Related Products Gallery in Wix Stores. The gallery automatically shows products based on the same category, frequently bought together, or frequently viewed together data. Manual selection of related products is not supported at this time [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately reflects the information in the context, stating that support for removed apps should be sought directly from the developers and providing examples from the context. No external information or assumptions are introduced.",
+        "question": "What should I do if I need support for an app that has been removed from the Wix App Market?",
+        "candidate_answer": "If you need support for an app that has been removed from the Wix App Market, you should contact the app developers directly. Their support information is typically provided in the removal notice or can be found on the developer's website.\n\n- For example, apps like \"Gamify - Game Maker by Gamify\" or \"Google Search Ads by Cobiro\" have specific developer support links you can use to reach out for assistance [S1].  \n- Wix no longer provides support for these removed apps, so direct contact with the developer is necessary.\n\nThis approach ensures you get the most accurate and timely help for the app in question [S1]."
+      }
+    ]
+  },
+  "context_recall": {
+    "analysis": "The Context Recall metric shows perfect average performance (score 1.0), indicating that the retrieved context consistently contains all essential information needed to answer the user's questions fully. Across stratified examples, the retrieval reliably includes comprehensive and relevant details matching the ground truth, demonstrating strong retrieval effectiveness. Given this high performance, there is limited room for improvement in retrieval coverage; efforts should instead focus on enhancing answer generation quality and faithfulness to maximize overall response accuracy and user satisfaction.",
+    "metric_name": "Context Recall",
+    "metric_description": "Whether retrieved context contains information needed for ground truth.",
+    "avg_score": 1.0,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The retrieved context contains all the essential steps from the ground truth answer for redeeming the 250 free business cards with the Wix Logo Maker plan. It includes navigating to Brand Studio, selecting the brand, accessing Brand Actions, choosing Print Logo on Merchandise, selecting Business Cards, picking a template, adding business details, adding to cart with a zero price, and proceeding to order. Thus, it fully enables answering the user's question.",
+        "question": "How can I redeem my 250 free business cards with the Wix Logo Maker plan?",
+        "candidate_answer": "To redeem your 250 free business cards with the Wix Logo Maker plan, follow these steps:\n\n- Purchase an Unlimited or Business Wix Logo Maker plan to be eligible.\n- Go to the Brand Studio in your Wix account.\n- Click the \"My Brands\" drop-down at the top and select your relevant brand.\n- Click \"Brand Actions\" and select \"Print Logo on Merchandise.\"\n- Click \"Get Started\" next to Business Cards.\n- Choose a template by hovering over it and clicking \"Select.\"\n- Add your business details, then click \"Save & Continue.\"\n- Click \"Add to Cart\" — the business cards should be free (price 0) in the cart.\n- Complete the checkout to have the double-sided cards shipped to your door.\n\nNote: The free cards must be redeemed using the logo included in your purchased plan and cannot be transferred to another account or redeemed by collaborators [S1][S2].",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7625000000000001,
+        "answer_overlap": 0.644736842105263,
+        "token_f1": 0.6434108527131781,
+        "bleu": 0.33578504341054205,
+        "rouge_1": 0.6434108527131781,
+        "rouge_2": 0.41406250000000006,
+        "gt_answer": "To redeem your 250 free business cards with the Wix Logo Maker plan, follow these steps:\n\n1. Go to the [Brand Studio](http://www.wix.com/logo/maker/esh).\n2. Click the **My Brands** drop-down at the top.\n3. Select the relevant brand.\n4. Click **Brand Actions** at the top.\n5. Select **Print Logo on Merchandise**.\n6. Click **Get Started** beside **Business Cards**.\n7. Hover over the template you like best and click **Select.**\n8. Add your business details and click **Save & Continue.**\n9. Click **Add to Cart** (In the cart, the price of the business cards should be 0).\n10. Choose whether you want to customize the design.\n11. Click **Continue** to place an order."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The retrieved context explicitly states that you cannot hide the titles of your album, track, or artist in the Wix Music player, which fully matches the essential information in the ground truth answer.",
+        "question": "Can I hide the titles of my album, track, or artist in my Wix Music player?",
+        "candidate_answer": "- Currently, it is not possible to hide the titles of your album, track, or artist in the Wix Music player.\n- Wix is continuously working on product improvements and values user feedback on this feature.\n\n[S1]",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7419354838709671,
+        "answer_overlap": 0.875,
+        "token_f1": 0.538461538461538,
+        "bleu": 0.317687240658773,
+        "rouge_1": 0.538461538461538,
+        "rouge_2": 0.44000000000000006,
+        "gt_answer": "Currently, you cannot hide the titles of your album, track or artist in your Wix Music player."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The retrieved context fully contains all essential information from the ground truth answer: Wix Music's distribution service ended on January 1st, 2019; Soundrop is recommended as a free alternative with many features; outstanding payments for music sold via Wix distribution will still be received within 3-4 months; and users can contact Wix Support for issues with previously distributed music. Therefore, it completely enables answering the user's question.",
+        "question": "What happened to the Wix Music distribution service and what are the alternatives for music distribution?",
+        "candidate_answer": "- Wix Music's distribution service ended on January 1st, 2019.\n- To continue distributing music, users are recommended to use Soundrop, which is free and offers extensive distribution features across major platforms.\n- Users will still receive outstanding payments for music sold through Wix distribution, with revenues typically released within 3-4 months of sale.\n- For any issues related to previously distributed music, contacting Wix Support is advised [S1].",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7272727272727271,
+        "answer_overlap": 0.634920634920634,
+        "token_f1": 0.626666666666666,
+        "bleu": 0.32118932508396303,
+        "rouge_1": 0.626666666666666,
+        "rouge_2": 0.418918918918918,
+        "gt_answer": "Wix Music's distribution service ended on January 1st, 2019. To continue distributing your music, you can check out [Soundrop](https://soundrop.com/). Soundrop is free and has tons of cool distribution features across top platforms.\n\n### Important\n* You will still receive outstanding payments for any music you sold using Wix distribution. Most stores and services release revenues within 3-4 months of a sale.\n* If you have any issues with your previously distributed music, [contact Wix Support.](https://www.wix.com/contact/en)"
+      },
+      {
+        "score": 1.0,
+        "explanation": "The retrieved context fully contains all essential information from the ground truth answer: it confirms that transferring a Google Workspace business email from Wix to Google is possible, explains that this disconnects the email from the Wix account, instructs to contact Wix Customer Care for assistance, and states that the action is irreversible and the email cannot be repurchased through Wix. Thus, it completely enables answering the user's question.",
+        "question": "How can I transfer a Google Workspace business email from my Wix account to Google?",
+        "candidate_answer": "To transfer a Google Workspace business email from your Wix account to Google:\n\n- Contact Wix Customer Care for assistance with the transfer.\n- This process will disconnect the Workspace business email from your Wix account.\n- The transfer is irreversible; once moved to Google, you cannot repurchase the business email through Wix.\n\nFor detailed steps and support, reach out to Wix Customer Care directly.\n\n[S1]",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.763157894736842,
+        "answer_overlap": 0.6756756756756751,
+        "token_f1": 0.672268907563025,
+        "bleu": 0.42964059653685704,
+        "rouge_1": 0.672268907563025,
+        "rouge_2": 0.47863247863247804,
+        "gt_answer": "Yes, you can transfer a Google Workspace business email from Wix to Google. This action disconnects the Workspace business email from your Wix account. To do so, [contact Wix Customer Care](https://www.wix.com/contact/en) for assistance. This is an irreversible action. Once transferred to Google, you cannot repurchase the business email through Wix."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The retrieved context fully contains the essential information from the ground truth answer: it states that Wix Blocks properties only connect elements within a single widget and describes the potential feature allowing connection of widget properties to app-level properties for seamless data exchange and event triggering across the app. Thus, it completely enables answering the user's question.",
+        "question": "Can I connect properties between different widgets in Wix Blocks?",
+        "candidate_answer": "No, currently Wix Blocks only allows connecting properties within a single widget. Connecting properties between different widgets is not supported at this time, though this feature is being considered for future updates to enable more cohesive and interactive app experiences [S1].",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.729729729729729,
+        "answer_overlap": 0.55,
+        "token_f1": 0.522727272727272,
+        "bleu": 0.18817339446085402,
+        "rouge_1": 0.522727272727272,
+        "rouge_2": 0.255813953488372,
+        "gt_answer": "Currently, Wix Blocks properties only connect elements within a single widget. This feature would allow you to create more cohesive and interactive experiences by connecting widget properties to app-level properties; enabling seamless data exchange between different widgets and allowing events to be triggered across the app."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The retrieved context fully contains the essential information from the ground truth answer: it states that it is not possible to manually select related products, and that the Related Products Gallery can show products from the same category, frequently bought together, or frequently viewed together based on data. This completely addresses the user's question.",
+        "question": "Can I manually select which products are displayed in the Related Products Gallery in Wix Stores?",
+        "candidate_answer": "No, you cannot manually select which products appear in the Related Products Gallery in Wix Stores. The gallery automatically shows products based on the same category, frequently bought together, or frequently viewed together data. Manual selection of related products is not supported at this time [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.6944444444444441,
+        "answer_overlap": 0.42857142857142805,
+        "token_f1": 0.49557522123893805,
+        "bleu": 0.11837841849358201,
+        "rouge_1": 0.49557522123893805,
+        "rouge_2": 0.252252252252252,
+        "gt_answer": "Currently, it is not possible to hand pick which products are related to each store item. When you display a [Related Products Gallery](https://support.wix.com/en/article/wix-stores-adding-a-related-products-or-best-sellers-gallery), you can choose whether it shows your customers other products from the same category, products frequently bought together (based on data), or frequently viewed together (based on data)."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The retrieved context fully contains all the essential information from the ground truth answer, including the recommendation to contact app developers directly and the complete list of removed apps with their corresponding developer support URLs. This enables a complete and accurate response to the user's question.",
+        "question": "What should I do if I need support for an app that has been removed from the Wix App Market?",
+        "candidate_answer": "If you need support for an app that has been removed from the Wix App Market, you should contact the app developers directly. Their support information is typically provided in the removal notice or can be found on the developer's website.\n\n- For example, apps like \"Gamify - Game Maker by Gamify\" or \"Google Search Ads by Cobiro\" have specific developer support links you can use to reach out for assistance [S1].  \n- Wix no longer provides support for these removed apps, so direct contact with the developer is necessary.\n\nThis approach ensures you get the most accurate and timely help for the app in question [S1].",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.6575342465753421,
+        "answer_overlap": 0.5238095238095231,
+        "token_f1": 0.38532110091743105,
+        "bleu": 0.19316858027219602,
+        "rouge_1": 0.38532110091743105,
+        "rouge_2": 0.25,
+        "gt_answer": "If you need support regarding one of the apps that have been removed from the Wix App Market, it is recommended to reach out to the app developers directly. You can find the developer support information in the table below:\n\n- **Gamify - Game Maker by Gamify**: [https://www.gamify.com/](https://www.gamify.com/)\n- **Google Search Ads by Cobiro**: [https://cobiro.com/](https://cobiro.com/)\n- **BeProfit Profit Calc & Reports by Become**: [https://www.become.co/](https://www.become.co/)\n- **123videoads**: [http://www.123videoads.com/](http://www.123videoads.com/)\n- **Royal Mail C&D by SellIntegro**: [https://sellintegro.eu/](https://sellintegro.eu/)\n- **Twitter Feed by POWR**: [https://help.powr.io/hc/](https://help.powr.io/hc/)"
+      }
+    ]
+  },
+  "answer_relevancy": {
+    "analysis": "The Answer Relevancy metric shows a very high average score of 0.96, indicating that the system consistently provides responses that directly and comprehensively address user questions. Most examples demonstrate clear, detailed, and contextually appropriate answers, often including helpful additional information or caveats. The single moderate score example reveals a gap in providing detailed procedural instructions, suggesting that improving completeness and step-by-step guidance in complex transfer or setup queries could further enhance relevancy. Overall, the system performs strongly with limited room for improvement, primarily by ensuring thoroughness in responses to multifaceted questions.",
+    "metric_name": "Answer Relevancy",
+    "metric_description": "How well the answer addresses the question.",
+    "avg_score": 0.96,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The AI response directly addresses the user's question by providing a clear, step-by-step guide on how to redeem the 250 free business cards with the Wix Logo Maker plan. It includes necessary details about eligibility, navigation within the Wix platform, and the redemption process, fully meeting the user's needs.",
+        "question": "How can I redeem my 250 free business cards with the Wix Logo Maker plan?",
+        "candidate_answer": "To redeem your 250 free business cards with the Wix Logo Maker plan, follow these steps:\n\n- Purchase an Unlimited or Business Wix Logo Maker plan to be eligible.\n- Go to the Brand Studio in your Wix account.\n- Click the \"My Brands\" drop-down at the top and select your relevant brand.\n- Click \"Brand Actions\" and select \"Print Logo on Merchandise.\"\n- Click \"Get Started\" next to Business Cards.\n- Choose a template by hovering over it and clicking \"Select.\"\n- Add your business details, then click \"Save & Continue.\"\n- Click \"Add to Cart\" — the business cards should be free (price 0) in the cart.\n- Complete the checkout to have the double-sided cards shipped to your door.\n\nNote: The free cards must be redeemed using the logo included in your purchased plan and cannot be transferred to another account or redeemed by collaborators [S1][S2]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response directly and clearly answers the user's question by stating that it is currently not possible to hide titles in the Wix Music player. It also adds relevant context about ongoing product improvements, which is helpful and relevant to the user's inquiry.",
+        "question": "Can I hide the titles of my album, track, or artist in my Wix Music player?",
+        "candidate_answer": "- Currently, it is not possible to hide the titles of your album, track, or artist in the Wix Music player.\n- Wix is continuously working on product improvements and values user feedback on this feature.\n\n[S1]"
+      },
+      {
+        "score": 1.0,
+        "explanation": "The response directly addresses the user's question by explaining that Wix Music's distribution service ended on January 1st, 2019, and provides a clear alternative (Soundrop) for music distribution. It also includes relevant details about outstanding payments and support, fully covering the user's query.",
+        "question": "What happened to the Wix Music distribution service and what are the alternatives for music distribution?",
+        "candidate_answer": "- Wix Music's distribution service ended on January 1st, 2019.\n- To continue distributing music, users are recommended to use Soundrop, which is free and offers extensive distribution features across major platforms.\n- Users will still receive outstanding payments for music sold through Wix distribution, with revenues typically released within 3-4 months of sale.\n- For any issues related to previously distributed music, contacting Wix Support is advised [S1]."
+      },
+      {
+        "score": 0.6,
+        "explanation": "The response partially addresses the user's query by suggesting contacting Wix Customer Care and mentioning the transfer's irreversibility. However, it lacks detailed instructions on how to perform the transfer or how to set up the Google Workspace email directly with Google, which are important aspects of the user's question.",
+        "question": "How can I transfer a Google Workspace business email from my Wix account to Google?",
+        "candidate_answer": "To transfer a Google Workspace business email from your Wix account to Google:\n\n- Contact Wix Customer Care for assistance with the transfer.\n- This process will disconnect the Workspace business email from your Wix account.\n- The transfer is irreversible; once moved to Google, you cannot repurchase the business email through Wix.\n\nFor detailed steps and support, reach out to Wix Customer Care directly.\n\n[S1]"
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response directly addresses the user's question by clearly stating that connecting properties between different widgets in Wix Blocks is not currently supported. It also provides additional context about potential future updates, demonstrating a full understanding of the user's inquiry.",
+        "question": "Can I connect properties between different widgets in Wix Blocks?",
+        "candidate_answer": "No, currently Wix Blocks only allows connecting properties within a single widget. Connecting properties between different widgets is not supported at this time, though this feature is being considered for future updates to enable more cohesive and interactive app experiences [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response directly addresses the user's question by clearly stating that manual selection of products in the Related Products Gallery in Wix Stores is not possible. It also explains how the gallery determines which products to display, providing a complete and relevant answer.",
+        "question": "Can I manually select which products are displayed in the Related Products Gallery in Wix Stores?",
+        "candidate_answer": "No, you cannot manually select which products appear in the Related Products Gallery in Wix Stores. The gallery automatically shows products based on the same category, frequently bought together, or frequently viewed together data. Manual selection of related products is not supported at this time [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The response directly addresses the user's question by explaining that support for removed apps must be sought from the app developers, provides guidance on where to find developer contact information, and clarifies that Wix no longer supports these apps. This fully meets the user's need for support instructions.",
+        "question": "What should I do if I need support for an app that has been removed from the Wix App Market?",
+        "candidate_answer": "If you need support for an app that has been removed from the Wix App Market, you should contact the app developers directly. Their support information is typically provided in the removal notice or can be found on the developer's website.\n\n- For example, apps like \"Gamify - Game Maker by Gamify\" or \"Google Search Ads by Cobiro\" have specific developer support links you can use to reach out for assistance [S1].  \n- Wix no longer provides support for these removed apps, so direct contact with the developer is necessary.\n\nThis approach ensures you get the most accurate and timely help for the app in question [S1]."
+      }
+    ]
+  },
+  "context_relevancy": {
+    "analysis": "The Context Relevancy metric shows perfect performance with an average score of 1.0, indicating that the retrieved context is consistently highly relevant and directly addresses user queries without missing or split information. All stratified examples demonstrate clear, complete, and focused context that fully supports the candidate answers, reflecting strong retrieval quality and effective alignment with user intent. Given this high level of performance, there is minimal room for improvement in context relevancy, and efforts can instead focus on maintaining this standard while optimizing other aspects of the RAG system.",
+    "metric_name": "Context Relevancy",
+    "metric_description": "How relevant retrieved context is to the question.",
+    "avg_score": 1.0,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The context provides detailed, step-by-step instructions on how to redeem the 250 free business cards with the Wix Logo Maker plan, directly addressing the user query. It also includes relevant conditions and restrictions, such as the need to have purchased the Unlimited or Business plan, and clarifies limitations on transferring or redeeming cards from different accounts. The information is complete and not split, making it highly relevant and sufficient to answer the query.",
+        "question": "How can I redeem my 250 free business cards with the Wix Logo Maker plan?",
+        "candidate_answer": "To redeem your 250 free business cards with the Wix Logo Maker plan, follow these steps:\n\n- Purchase an Unlimited or Business Wix Logo Maker plan to be eligible.\n- Go to the Brand Studio in your Wix account.\n- Click the \"My Brands\" drop-down at the top and select your relevant brand.\n- Click \"Brand Actions\" and select \"Print Logo on Merchandise.\"\n- Click \"Get Started\" next to Business Cards.\n- Choose a template by hovering over it and clicking \"Select.\"\n- Add your business details, then click \"Save & Continue.\"\n- Click \"Add to Cart\" — the business cards should be free (price 0) in the cart.\n- Complete the checkout to have the double-sided cards shipped to your door.\n\nNote: The free cards must be redeemed using the logo included in your purchased plan and cannot be transferred to another account or redeemed by collaborators [S1][S2]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The context directly answers the user query by stating that it is currently not possible to hide the titles of albums, tracks, or artists in the Wix Music player. This is a clear and complete response to the user's question, with no split content affecting understanding.",
+        "question": "Can I hide the titles of my album, track, or artist in my Wix Music player?",
+        "candidate_answer": "- Currently, it is not possible to hide the titles of your album, track, or artist in the Wix Music player.\n- Wix is continuously working on product improvements and values user feedback on this feature.\n\n[S1]"
+      },
+      {
+        "score": 1.0,
+        "explanation": "The context directly answers the user query by stating that Wix Music's distribution service ended on January 1st, 2019, and suggests Soundrop as an alternative for music distribution. It also provides additional relevant details about outstanding payments and support, fully addressing the query without any split content.",
+        "question": "What happened to the Wix Music distribution service and what are the alternatives for music distribution?",
+        "candidate_answer": "- Wix Music's distribution service ended on January 1st, 2019.\n- To continue distributing music, users are recommended to use Soundrop, which is free and offers extensive distribution features across major platforms.\n- Users will still receive outstanding payments for music sold through Wix distribution, with revenues typically released within 3-4 months of sale.\n- For any issues related to previously distributed music, contacting Wix Support is advised [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The context directly addresses the user query by confirming that transferring a Google Workspace business email from a Wix account to Google is possible. It provides clear instructions to contact Wix Customer Care for assistance and notes that the action is irreversible, which fully answers the user's question without any split or missing information.",
+        "question": "How can I transfer a Google Workspace business email from my Wix account to Google?",
+        "candidate_answer": "To transfer a Google Workspace business email from your Wix account to Google:\n\n- Contact Wix Customer Care for assistance with the transfer.\n- This process will disconnect the Workspace business email from your Wix account.\n- The transfer is irreversible; once moved to Google, you cannot repurchase the business email through Wix.\n\nFor detailed steps and support, reach out to Wix Customer Care directly.\n\n[S1]"
+      },
+      {
+        "score": 1.0,
+        "explanation": "The context explicitly states that Wix Blocks properties currently only connect elements within a single widget and do not support connecting properties between different widgets. This directly answers the user query about connecting properties between different widgets in Wix Blocks, providing a clear and complete response.",
+        "question": "Can I connect properties between different widgets in Wix Blocks?",
+        "candidate_answer": "No, currently Wix Blocks only allows connecting properties within a single widget. Connecting properties between different widgets is not supported at this time, though this feature is being considered for future updates to enable more cohesive and interactive app experiences [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The context directly addresses the user query by explaining that in Wix Stores, you cannot manually select which products are displayed in the Related Products Gallery. It clearly states the current options and explicitly mentions the impossibility of hand-picking related products, fully answering the query.",
+        "question": "Can I manually select which products are displayed in the Related Products Gallery in Wix Stores?",
+        "candidate_answer": "No, you cannot manually select which products appear in the Related Products Gallery in Wix Stores. The gallery automatically shows products based on the same category, frequently bought together, or frequently viewed together data. Manual selection of related products is not supported at this time [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The context directly addresses the user query by explaining that for apps removed from the Wix App Market, users should contact the app developers directly for support. It even provides a table with app names, removal dates, and developer support links, which fully answers the question. The content is complete and not split mid-sentence, making it highly relevant and sufficient.",
+        "question": "What should I do if I need support for an app that has been removed from the Wix App Market?",
+        "candidate_answer": "If you need support for an app that has been removed from the Wix App Market, you should contact the app developers directly. Their support information is typically provided in the removal notice or can be found on the developer's website.\n\n- For example, apps like \"Gamify - Game Maker by Gamify\" or \"Google Search Ads by Cobiro\" have specific developer support links you can use to reach out for assistance [S1].  \n- Wix no longer provides support for these removed apps, so direct contact with the developer is necessary.\n\nThis approach ensures you get the most accurate and timely help for the app in question [S1]."
+      }
+    ]
+  },
+  "grading_note": {
+    "analysis": "The overall metric performance is high with an average score of 0.92, indicating that the grading note generation effectively meets the criteria in most cases. High-scoring examples demonstrate clear, detailed, and comprehensive step-by-step instructions or direct, concise answers that fully address user queries. The main area for improvement lies in moderate to lower scoring cases (e.g., score 0.4 and 0.8), where responses lack sufficient detail, such as missing stepwise procedures or broader alternative options. To enhance performance, focus on enriching answers with explicit, actionable steps and more comprehensive coverage of alternatives or prerequisites, ensuring completeness and clarity. Given the strong overall results, only targeted refinements are needed to address occasional gaps rather than broad system changes.",
+    "metric_name": "Grading Note",
+    "metric_description": "Two-stage grading note generation then scoring.",
+    "avg_score": 0.9199999999999999,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The response fully satisfies the grading note criteria by providing a clear, step-by-step process for redeeming the 250 free business cards with the Wix Logo Maker plan. It includes necessary prerequisites (purchasing the correct plan), detailed instructions on navigating the Wix account, selecting the brand, choosing templates, and completing checkout. Additionally, it offers a relevant note about usage restrictions, directly addressing the user's query concisely and comprehensively.",
+        "question": "How can I redeem my 250 free business cards with the Wix Logo Maker plan?",
+        "candidate_answer": "To redeem your 250 free business cards with the Wix Logo Maker plan, follow these steps:\n\n- Purchase an Unlimited or Business Wix Logo Maker plan to be eligible.\n- Go to the Brand Studio in your Wix account.\n- Click the \"My Brands\" drop-down at the top and select your relevant brand.\n- Click \"Brand Actions\" and select \"Print Logo on Merchandise.\"\n- Click \"Get Started\" next to Business Cards.\n- Choose a template by hovering over it and clicking \"Select.\"\n- Add your business details, then click \"Save & Continue.\"\n- Click \"Add to Cart\" — the business cards should be free (price 0) in the cart.\n- Complete the checkout to have the double-sided cards shipped to your door.\n\nNote: The free cards must be redeemed using the logo included in your purchased plan and cannot be transferred to another account or redeemed by collaborators [S1][S2]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The response clearly states that it is not possible to hide titles in the Wix Music player, directly addressing the user's question. It also provides additional context about Wix's ongoing product improvements, which is relevant and helpful. Thus, it fully satisfies the grading note criteria.",
+        "question": "Can I hide the titles of my album, track, or artist in my Wix Music player?",
+        "candidate_answer": "- Currently, it is not possible to hide the titles of your album, track, or artist in the Wix Music player.\n- Wix is continuously working on product improvements and values user feedback on this feature.\n\n[S1]"
+      },
+      {
+        "score": 0.8,
+        "explanation": "The response clearly states that Wix Music's distribution service ended on January 1st, 2019, addressing the status of the service. It also provides an alternative, Soundrop, with some details about its features. Additionally, it mentions payment and support information related to Wix Music. However, the response could be improved by listing more alternative music distribution options to fully satisfy the grading note criteria.",
+        "question": "What happened to the Wix Music distribution service and what are the alternatives for music distribution?",
+        "candidate_answer": "- Wix Music's distribution service ended on January 1st, 2019.\n- To continue distributing music, users are recommended to use Soundrop, which is free and offers extensive distribution features across major platforms.\n- Users will still receive outstanding payments for music sold through Wix distribution, with revenues typically released within 3-4 months of sale.\n- For any issues related to previously distributed music, contacting Wix Support is advised [S1]."
+      },
+      {
+        "score": 0.4,
+        "explanation": "The response briefly mentions contacting Wix Customer Care and warns about the irreversibility of the transfer, but it lacks a clear, detailed step-by-step process for transferring the Google Workspace business email from Wix to Google. It also does not specify necessary account preparations, verification steps, or important prerequisites, which are essential according to the grading note criteria.",
+        "question": "How can I transfer a Google Workspace business email from my Wix account to Google?",
+        "candidate_answer": "To transfer a Google Workspace business email from your Wix account to Google:\n\n- Contact Wix Customer Care for assistance with the transfer.\n- This process will disconnect the Workspace business email from your Wix account.\n- The transfer is irreversible; once moved to Google, you cannot repurchase the business email through Wix.\n\nFor detailed steps and support, reach out to Wix Customer Care directly.\n\n[S1]"
+      },
+      {
+        "score": 1.0,
+        "explanation": "The response clearly states that connecting properties between different widgets in Wix Blocks is not currently possible and provides a concise explanation about the current limitation and future considerations, fully satisfying the grading note criteria.",
+        "question": "Can I connect properties between different widgets in Wix Blocks?",
+        "candidate_answer": "No, currently Wix Blocks only allows connecting properties within a single widget. Connecting properties between different widgets is not supported at this time, though this feature is being considered for future updates to enable more cohesive and interactive app experiences [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The response clearly states that manual selection of products in the Related Products Gallery is not possible and provides a concise explanation of how the gallery automatically selects products based on category and purchase/view data, fully satisfying the grading note criteria.",
+        "question": "Can I manually select which products are displayed in the Related Products Gallery in Wix Stores?",
+        "candidate_answer": "No, you cannot manually select which products appear in the Related Products Gallery in Wix Stores. The gallery automatically shows products based on the same category, frequently bought together, or frequently viewed together data. Manual selection of related products is not supported at this time [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The response clearly outlines the necessary steps for obtaining support for an app removed from the Wix App Market by advising to contact the app developers directly. It logically explains that support information can be found in the removal notice or on the developer's website, and clarifies that Wix no longer provides support for these apps. The answer is structured well and provides actionable guidance, fully satisfying the grading note criteria.",
+        "question": "What should I do if I need support for an app that has been removed from the Wix App Market?",
+        "candidate_answer": "If you need support for an app that has been removed from the Wix App Market, you should contact the app developers directly. Their support information is typically provided in the removal notice or can be found on the developer's website.\n\n- For example, apps like \"Gamify - Game Maker by Gamify\" or \"Google Search Ads by Cobiro\" have specific developer support links you can use to reach out for assistance [S1].  \n- Wix no longer provides support for these removed apps, so direct contact with the developer is necessary.\n\nThis approach ensures you get the most accurate and timely help for the app in question [S1]."
+      }
+    ]
+  },
+  "factuality": {
+    "analysis": "The Factuality metric shows a high average score of approximately 0.92, indicating strong overall answer correctness relative to ground truth references. Most errors are minor omissions of specific details or exact phrasing rather than outright factual inaccuracies, suggesting the generation component reliably produces accurate information but sometimes lacks completeness. To further improve, focus on enhancing coverage of all critical steps or details in multi-step procedural answers and including specific references or links when relevant, which would reduce partial credit losses. Since factuality is already high, improvements should prioritize targeted refinement of completeness and detail rather than broad changes.",
+    "metric_name": "Factuality",
+    "metric_description": "Answer correctness vs ground truth reference.",
+    "avg_score": 0.9199999999999999,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately states that you cannot create more than 1000 product variants per product in Wix Stores and clearly mentions the current limit of 1000 variants, matching the essential information in the ground truth answer.",
+        "question": "Can I create more than 1000 product variants in Wix Stores?",
+        "candidate_answer": "No, you cannot create more than 1000 product variants per product in Wix Stores. The current limit is up to 1000 variants per product, and this is a known restriction as per the latest workflow information [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.551724137931034,
+        "answer_overlap": 0.642857142857142,
+        "token_f1": 0.35294117647058804,
+        "bleu": 0.11407522846435501,
+        "rouge_1": 0.35294117647058804,
+        "rouge_2": 0.16326530612244902,
+        "gt_answer": "Currently, you can only create up to a total of 1000 variants per product."
+      },
+      {
+        "score": 0.8,
+        "explanation": "The AI response includes most of the essential steps from the GT answer, such as navigating to Brand Studio, selecting the brand, choosing 'Print Logo on Merchandise,' selecting business cards, adding details, and adding to cart with a price of zero. It also adds the prerequisite of purchasing an eligible plan and mentions checkout and shipping, which are logical extensions. However, it omits the exact step of clicking 'Continue' to place the order and the option to customize the design before continuing. The additional note about logo usage and non-transferability is extra but not misleading. Overall, the AI response provides a strong match with minor missing details.",
+        "question": "How can I redeem my 250 free business cards with the Wix Logo Maker plan?",
+        "candidate_answer": "To redeem your 250 free business cards with the Wix Logo Maker plan, follow these steps:\n\n- Purchase an Unlimited or Business Wix Logo Maker plan to be eligible.\n- Go to the Brand Studio in your Wix account.\n- Click the \"My Brands\" drop-down at the top and select your relevant brand.\n- Click \"Brand Actions\" and select \"Print Logo on Merchandise.\"\n- Click \"Get Started\" next to Business Cards.\n- Choose a template by hovering over it and clicking \"Select.\"\n- Add your business details, then click \"Save & Continue.\"\n- Click \"Add to Cart\" — the business cards should be free (price 0) in the cart.\n- Complete the checkout to have the double-sided cards shipped to your door.\n\nNote: The free cards must be redeemed using the logo included in your purchased plan and cannot be transferred to another account or redeemed by collaborators [S1][S2].",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7625000000000001,
+        "answer_overlap": 0.644736842105263,
+        "token_f1": 0.6434108527131781,
+        "bleu": 0.33578504341054205,
+        "rouge_1": 0.6434108527131781,
+        "rouge_2": 0.41406250000000006,
+        "gt_answer": "To redeem your 250 free business cards with the Wix Logo Maker plan, follow these steps:\n\n1. Go to the [Brand Studio](http://www.wix.com/logo/maker/esh).\n2. Click the **My Brands** drop-down at the top.\n3. Select the relevant brand.\n4. Click **Brand Actions** at the top.\n5. Select **Print Logo on Merchandise**.\n6. Click **Get Started** beside **Business Cards**.\n7. Hover over the template you like best and click **Select.**\n8. Add your business details and click **Save & Continue.**\n9. Click **Add to Cart** (In the cart, the price of the business cards should be 0).\n10. Choose whether you want to customize the design.\n11. Click **Continue** to place an order."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response clearly states that it is not possible to add drop-down or multiple choice options to the Wix Booking Form, matching the ground truth. It also provides additional details about the types of fields supported, which does not detract from the factual accuracy and completeness of the answer.",
+        "question": "Can I add drop-down or multiple choice options to the Wix Booking Form?",
+        "candidate_answer": "No, you cannot add drop-down or multiple choice options to the Wix Booking Form at this time. The form only supports short text fields (up to 40 characters), paragraph fields (up to 255 characters), and checkbox fields. The platform is continuously being improved, and user feedback is encouraged for future updates [S1].",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.6666666666666661,
+        "answer_overlap": 0.565217391304347,
+        "token_f1": 0.36363636363636304,
+        "bleu": 0.17765182020286702,
+        "rouge_1": 0.36363636363636304,
+        "rouge_2": 0.21333333333333301,
+        "gt_answer": "It is not currently possible to add other types of fields, such as drop-downs or multiple choice options, to the Wix Booking Form."
+      },
+      {
+        "score": 0.8,
+        "explanation": "The AI response includes most of the essential steps for creating a new album in the Shared Gallery app, such as navigating to the Shared Gallery, logging in, clicking 'Create Album,' entering name and description, adding a cover image, and finalizing the album creation. It also mentions that after creating the first album, photos and videos are organized into albums, which aligns with the GT's important note. However, it omits the detail that the first album created has the same name as the site and that previously uploaded media is automatically moved to this folder. It also lacks the information about the gallery's main page displaying only albums and the option to delete albums to return to individual media display. These omissions are minor but relevant for a complete understanding.",
+        "question": "How can I create a new album in the Shared Gallery app on my live site?",
+        "candidate_answer": "To create a new album in the Shared Gallery app on your live site, follow these steps:\n\n- Go to the Shared Gallery section in your site's dashboard or directly on your live site.\n- Log in with the email address associated with your Wix account.\n- Click \"Create Album.\"\n- Enter a name and description for the album.\n- Click the Add icon to upload a cover image.\n- Click \"Create Album\" to finalize.\n\nNote: You and any site visitor with Manage Gallery permissions can create albums. After creating your first album, all photos and videos will be organized into albums, and you can only add media to albums, not individually to the main gallery page [S1][S2].",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.8676470588235291,
+        "answer_overlap": 0.42342342342342304,
+        "token_f1": 0.61168384879725,
+        "bleu": 0.20941895904895902,
+        "rouge_1": 0.61168384879725,
+        "rouge_2": 0.332179930795847,
+        "gt_answer": "To create a new album on your live site using the Shared Gallery app, follow these steps:\n\n1. Go to the Shared Gallery page on your site.\n2. Log in with the email address associated with your Wix account.\n3. Click **Create Album**.\n4. Enter a name and description for your album.\n5. Click the Add icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/9dcc39dd-da6f-4c38-b1c3-ee79d33f39d5/2021/11/12/13ed5068-32fa-452e-af44-6a7bfea3b16a/e7e3e187-3586-4b86-aa02-66d1a9592d0e.png) to add a cover image.\n6. Click **Create Album**.\n\n### Important\n* When you create your first album, another album with the same name as your site is also created. All of the photos and videos that you previously uploaded are automatically moved to this folder.\n* Your gallery's main page will also display only albums instead of individual photos and videos.\n* To return to displaying individual photos and videos, you need to [delete your albums](https://support.wix.com/en/article/creating-and-managing-albums-in-the-shared-gallery-app#deleting-an-album)."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response includes all essential information from the ground truth answer: it confirms the possibility of transferring the Google Workspace business email from Wix to Google, mentions contacting Wix Customer Care for assistance, states that the email will be disconnected from Wix, and notes that the transfer is irreversible and the email cannot be repurchased through Wix. The response is complete and accurate.",
+        "question": "How can I transfer a Google Workspace business email from my Wix account to Google?",
+        "candidate_answer": "To transfer a Google Workspace business email from your Wix account to Google:\n\n- Contact Wix Customer Care for assistance with the transfer.\n- This process will disconnect the Workspace business email from your Wix account.\n- The transfer is irreversible; once moved to Google, you cannot repurchase the business email through Wix.\n\nFor detailed steps and support, reach out to Wix Customer Care directly.\n\n[S1]",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.763157894736842,
+        "answer_overlap": 0.6756756756756751,
+        "token_f1": 0.672268907563025,
+        "bleu": 0.42964059653685704,
+        "rouge_1": 0.672268907563025,
+        "rouge_2": 0.47863247863247804,
+        "gt_answer": "Yes, you can transfer a Google Workspace business email from Wix to Google. This action disconnects the Workspace business email from your Wix account. To do so, [contact Wix Customer Care](https://www.wix.com/contact/en) for assistance. This is an irreversible action. Once transferred to Google, you cannot repurchase the business email through Wix."
+      },
+      {
+        "score": 0.6,
+        "explanation": "The AI response correctly advises contacting the app developers directly for support on removed apps, which is the core information from the GT answer. However, it does not provide the specific developer support links listed in the GT answer, which are important for directly accessing support. The AI mentions that support info is typically in the removal notice or on the developer's website but lacks the concrete examples and URLs that would better solve the user's query.",
+        "question": "What should I do if I need support for an app that has been removed from the Wix App Market?",
+        "candidate_answer": "If you need support for an app that has been removed from the Wix App Market, you should contact the app developers directly. Their support information is typically provided in the removal notice or can be found on the developer's website.\n\n- For example, apps like \"Gamify - Game Maker by Gamify\" or \"Google Search Ads by Cobiro\" have specific developer support links you can use to reach out for assistance [S1].  \n- Wix no longer provides support for these removed apps, so direct contact with the developer is necessary.\n\nThis approach ensures you get the most accurate and timely help for the app in question [S1].",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.6575342465753421,
+        "answer_overlap": 0.5238095238095231,
+        "token_f1": 0.38532110091743105,
+        "bleu": 0.19316858027219602,
+        "rouge_1": 0.38532110091743105,
+        "rouge_2": 0.25,
+        "gt_answer": "If you need support regarding one of the apps that have been removed from the Wix App Market, it is recommended to reach out to the app developers directly. You can find the developer support information in the table below:\n\n- **Gamify - Game Maker by Gamify**: [https://www.gamify.com/](https://www.gamify.com/)\n- **Google Search Ads by Cobiro**: [https://cobiro.com/](https://cobiro.com/)\n- **BeProfit Profit Calc & Reports by Become**: [https://www.become.co/](https://www.become.co/)\n- **123videoads**: [http://www.123videoads.com/](http://www.123videoads.com/)\n- **Royal Mail C&D by SellIntegro**: [https://sellintegro.eu/](https://sellintegro.eu/)\n- **Twitter Feed by POWR**: [https://help.powr.io/hc/](https://help.powr.io/hc/)"
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately states that Wix Blocks currently only allows connecting properties within a single widget and that connecting properties between different widgets is not supported. It also mentions that this feature is being considered for future updates to enable more cohesive and interactive experiences, which aligns with the ground truth answer. Therefore, all essential information is present.",
+        "question": "Can I connect properties between different widgets in Wix Blocks?",
+        "candidate_answer": "No, currently Wix Blocks only allows connecting properties within a single widget. Connecting properties between different widgets is not supported at this time, though this feature is being considered for future updates to enable more cohesive and interactive app experiences [S1].",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.729729729729729,
+        "answer_overlap": 0.55,
+        "token_f1": 0.522727272727272,
+        "bleu": 0.18817339446085402,
+        "rouge_1": 0.522727272727272,
+        "rouge_2": 0.255813953488372,
+        "gt_answer": "Currently, Wix Blocks properties only connect elements within a single widget. This feature would allow you to create more cohesive and interactive experiences by connecting widget properties to app-level properties; enabling seamless data exchange between different widgets and allowing events to be triggered across the app."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately states that it is currently not possible to hide the titles of album, track, or artist in the Wix Music player, matching the ground truth answer. The additional information about Wix working on improvements and valuing feedback does not detract from the factual accuracy and completeness of the response.",
+        "question": "Can I hide the titles of my album, track, or artist in my Wix Music player?",
+        "candidate_answer": "- Currently, it is not possible to hide the titles of your album, track, or artist in the Wix Music player.\n- Wix is continuously working on product improvements and values user feedback on this feature.\n\n[S1]",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7419354838709671,
+        "answer_overlap": 0.875,
+        "token_f1": 0.538461538461538,
+        "bleu": 0.317687240658773,
+        "rouge_1": 0.538461538461538,
+        "rouge_2": 0.44000000000000006,
+        "gt_answer": "Currently, you cannot hide the titles of your album, track or artist in your Wix Music player."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately states that manual selection of related products in the Wix Stores Related Products Gallery is not possible. It correctly mentions that the gallery displays products based on the same category, frequently bought together, or frequently viewed together data, matching the essential information from the ground truth answer.",
+        "question": "Can I manually select which products are displayed in the Related Products Gallery in Wix Stores?",
+        "candidate_answer": "No, you cannot manually select which products appear in the Related Products Gallery in Wix Stores. The gallery automatically shows products based on the same category, frequently bought together, or frequently viewed together data. Manual selection of related products is not supported at this time [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.6944444444444441,
+        "answer_overlap": 0.42857142857142805,
+        "token_f1": 0.49557522123893805,
+        "bleu": 0.11837841849358201,
+        "rouge_1": 0.49557522123893805,
+        "rouge_2": 0.252252252252252,
+        "gt_answer": "Currently, it is not possible to hand pick which products are related to each store item. When you display a [Related Products Gallery](https://support.wix.com/en/article/wix-stores-adding-a-related-products-or-best-sellers-gallery), you can choose whether it shows your customers other products from the same category, products frequently bought together (based on data), or frequently viewed together (based on data)."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately includes all essential information from the ground truth: the end date of Wix Music's distribution service, the recommendation of Soundrop as an alternative with its features, the note about outstanding payments and typical revenue release timeframe, and the advice to contact Wix Support for issues. The information is complete and factual, fully addressing the user's query.",
+        "question": "What happened to the Wix Music distribution service and what are the alternatives for music distribution?",
+        "candidate_answer": "- Wix Music's distribution service ended on January 1st, 2019.\n- To continue distributing music, users are recommended to use Soundrop, which is free and offers extensive distribution features across major platforms.\n- Users will still receive outstanding payments for music sold through Wix distribution, with revenues typically released within 3-4 months of sale.\n- For any issues related to previously distributed music, contacting Wix Support is advised [S1].",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7272727272727271,
+        "answer_overlap": 0.634920634920634,
+        "token_f1": 0.626666666666666,
+        "bleu": 0.32118932508396303,
+        "rouge_1": 0.626666666666666,
+        "rouge_2": 0.418918918918918,
+        "gt_answer": "Wix Music's distribution service ended on January 1st, 2019. To continue distributing your music, you can check out [Soundrop](https://soundrop.com/). Soundrop is free and has tons of cool distribution features across top platforms.\n\n### Important\n* You will still receive outstanding payments for any music you sold using Wix distribution. Most stores and services release revenues within 3-4 months of a sale.\n* If you have any issues with your previously distributed music, [contact Wix Support.](https://www.wix.com/contact/en)"
+      }
+    ]
+  }
+}
