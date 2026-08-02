@@ -26,3 +26,4 @@ data/traces/*
 feedback.jsonl
 project_proposal/*
 project_report/*
+tmp/*

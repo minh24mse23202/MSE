@@ -1,0 +1,158 @@
+{
+  "context_adherence": {
+    "analysis": "The average Context Adherence score of 0.6 indicates moderate performance, suggesting the model sometimes includes unsupported or extraneous information beyond the retrieved context. Analysis of stratified examples reveals that high-scoring answers strictly summarize or paraphrase the retrieved content without adding assumptions, while low-scoring answers introduce unsupported claims or details not present in the context. To improve, the system should enhance context grounding by strengthening retrieval precision and implementing stricter filtering or alignment mechanisms during generation to avoid hallucinations. Additionally, training or prompting strategies that emphasize faithful use of retrieved passages can help reduce off-context content and boost adherence scores.",
+    "metric_name": "Context Adherence",
+    "metric_description": "How faithfully the answer uses only retrieved context.",
+    "avg_score": 0.6,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately summarizes the information from the context about transferring a Google Workspace business email from Wix to Google, including contacting Wix Customer Care, the disconnection from Wix, and the irreversibility of the action. No external information or assumptions are introduced.",
+        "question": "how to transfer a business email away from Wix",
+        "candidate_answer": "To transfer a Google Workspace business email away from Wix, you need to:\n\n- Contact Wix Customer Care for assistance with the transfer.\n- Understand that this action will disconnect the Workspace business email from your Wix account.\n- Note that the transfer is irreversible, and once moved to Google, you cannot repurchase the business email through Wix.\n\nThis process ensures the email is transferred directly to Google Workspace outside of Wix management [S1]."
+      },
+      {
+        "score": 0.2,
+        "explanation": "The AI response introduces information about purchasing Wix Premium plans and using them on other platforms, which is not mentioned or supported in the provided context. The context only discusses Wix Analytics availability on Wix sites and features related to site plans, without any reference to using Wix Premium plans on non-Wix-hosted websites. Therefore, the answer is almost entirely unsupported by the context.",
+        "question": "can I buy a premium plan but build my website on other platforms",
+        "candidate_answer": "- Yes, you can purchase a Wix Premium plan but build your website on other platforms; however, Wix Premium plans and their features are designed specifically for Wix-hosted websites.\n- Features such as Wix Analytics, custom reports, and sales reports are integrated within the Wix platform and may not be transferable or usable on external platforms [S1].\n- If your goal is to use Wix services like Analytics or Premium features, these require hosting your site on Wix.\n\nIn summary, while you can buy a Wix Premium plan, its benefits are intended for Wix websites and may not apply if your site is hosted elsewhere [S1]."
+      }
+    ]
+  },
+  "answer_relevancy": {
+    "analysis": "The average Answer Relevancy score of 0.9 indicates strong overall performance, with answers generally addressing user questions effectively. High-scoring examples show clear, direct responses that clarify platform-specific constraints and provide relevant guidance. The moderate example reveals a common issue: assumptions about user context (e.g., only Google Workspace emails) and incomplete coverage of alternative scenarios, which can limit answer completeness. To improve, the system should incorporate broader context awareness and include more comprehensive instructions or disclaimers for less common cases. Given the high average, further gains may be incremental and best focused on edge cases and nuanced user intents.",
+    "metric_name": "Answer Relevancy",
+    "metric_description": "How well the answer addresses the question.",
+    "avg_score": 0.9,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The response directly addresses the user's question about buying a premium plan and building a website on other platforms. It clarifies that while purchasing the plan is possible, the features are designed for use on the platform itself, thus fully answering the user's query.",
+        "question": "can I buy a premium plan but build my website on other platforms",
+        "candidate_answer": "- Yes, you can purchase a Wix Premium plan but build your website on other platforms; however, Wix Premium plans and their features are designed specifically for Wix-hosted websites.\n- Features such as Wix Analytics, custom reports, and sales reports are integrated within the Wix platform and may not be transferable or usable on external platforms [S1].\n- If your goal is to use Wix services like Analytics or Premium features, these require hosting your site on Wix.\n\nIn summary, while you can buy a Wix Premium plan, its benefits are intended for Wix websites and may not apply if your site is hosted elsewhere [S1]."
+      },
+      {
+        "score": 0.8,
+        "explanation": "The response addresses the main point of transferring a business email away from Wix, specifically for Google Workspace emails, and provides relevant steps and considerations. However, it assumes the email is Google Workspace-based and does not cover other types of business emails or provide detailed instructions on the actual transfer process, which might be important for some users.",
+        "question": "how to transfer a business email away from Wix",
+        "candidate_answer": "To transfer a Google Workspace business email away from Wix, you need to:\n\n- Contact Wix Customer Care for assistance with the transfer.\n- Understand that this action will disconnect the Workspace business email from your Wix account.\n- Note that the transfer is irreversible, and once moved to Google, you cannot repurchase the business email through Wix.\n\nThis process ensures the email is transferred directly to Google Workspace outside of Wix management [S1]."
+      }
+    ]
+  },
+  "context_relevancy": {
+    "analysis": "The average Context Relevancy score of 0.7 indicates moderate performance, suggesting that while many retrieved contexts are relevant, there is room for improvement. Analysis of stratified examples shows that high-scoring cases provide direct, specific answers closely aligned with the user query, whereas lower-scoring examples include context that is only tangentially related or focuses on peripheral details rather than the core question. To improve, the retrieval component should be refined to better prioritize documents or passages that directly address the user's intent, possibly by enhancing query understanding or using more precise semantic matching. Additionally, filtering out loosely related content and incorporating relevance feedback loops could help increase the overall contextual relevance and thus improve generation quality.",
+    "metric_name": "Context Relevancy",
+    "metric_description": "How relevant retrieved context is to the question.",
+    "avg_score": 0.7,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The context directly addresses the user query by explaining that it is possible to transfer a Google Workspace business email from Wix to Google, provides the necessary action (contact Wix Customer Care), and notes that the transfer is irreversible. This information fully answers the query about how to transfer a business email away from Wix.",
+        "question": "how to transfer a business email away from Wix",
+        "candidate_answer": "To transfer a Google Workspace business email away from Wix, you need to:\n\n- Contact Wix Customer Care for assistance with the transfer.\n- Understand that this action will disconnect the Workspace business email from your Wix account.\n- Note that the transfer is irreversible, and once moved to Google, you cannot repurchase the business email through Wix.\n\nThis process ensures the email is transferred directly to Google Workspace outside of Wix management [S1]."
+      },
+      {
+        "score": 0.4,
+        "explanation": "The context discusses Wix Analytics features related to Premium plans and refund policies for Wix Logo Maker plans, but it does not address whether a user can buy a premium plan and build their website on other platforms. The information is marginally relevant as it relates to Wix Premium plans but lacks any direct answer to the user's query about using other platforms.",
+        "question": "can I buy a premium plan but build my website on other platforms",
+        "candidate_answer": "- Yes, you can purchase a Wix Premium plan but build your website on other platforms; however, Wix Premium plans and their features are designed specifically for Wix-hosted websites.\n- Features such as Wix Analytics, custom reports, and sales reports are integrated within the Wix platform and may not be transferable or usable on external platforms [S1].\n- If your goal is to use Wix services like Analytics or Premium features, these require hosting your site on Wix.\n\nIn summary, while you can buy a Wix Premium plan, its benefits are intended for Wix websites and may not apply if your site is hosted elsewhere [S1]."
+      }
+    ]
+  },
+  "grading_note": {
+    "analysis": "The average score of 0.7 indicates moderate performance in grading note generation, with some responses fully meeting criteria while others lack completeness and clarity. Common issues in lower-scoring examples include insufficient procedural detail, missing prerequisites, and unclear step-by-step guidance, which reduce the usefulness and accuracy of the answers. To improve, focus on enhancing answer completeness by explicitly outlining necessary steps, prerequisites, and potential limitations, especially for procedural or transfer-related queries. Since some responses perform well by providing clear, concise, and context-aware explanations, reinforcing these strengths through consistent answer templates and better retrieval of relevant information can further boost overall quality.",
+    "metric_name": "Grading Note",
+    "metric_description": "Two-stage grading note generation then scoring.",
+    "avg_score": 0.7,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The response directly answers the user's question by confirming that it is possible to buy a premium plan but clarifies that the plan's features are designed specifically for Wix-hosted websites. It provides a concise explanation about the limitations and conditions related to using the premium plan with other platforms, fully satisfying the grading note criteria.",
+        "question": "can I buy a premium plan but build my website on other platforms",
+        "candidate_answer": "- Yes, you can purchase a Wix Premium plan but build your website on other platforms; however, Wix Premium plans and their features are designed specifically for Wix-hosted websites.\n- Features such as Wix Analytics, custom reports, and sales reports are integrated within the Wix platform and may not be transferable or usable on external platforms [S1].\n- If your goal is to use Wix services like Analytics or Premium features, these require hosting your site on Wix.\n\nIn summary, while you can buy a Wix Premium plan, its benefits are intended for Wix websites and may not apply if your site is hosted elsewhere [S1]."
+      },
+      {
+        "score": 0.4,
+        "explanation": "The response mentions contacting Wix Customer Care and some consequences of the transfer but lacks a clear, step-by-step procedure. It does not specify the necessary prerequisites or tools required for the transfer, nor does it provide detailed instructions on how to perform the transfer. Therefore, it addresses few aspects of the grading note with significant omissions.",
+        "question": "how to transfer a business email away from Wix",
+        "candidate_answer": "To transfer a Google Workspace business email away from Wix, you need to:\n\n- Contact Wix Customer Care for assistance with the transfer.\n- Understand that this action will disconnect the Workspace business email from your Wix account.\n- Note that the transfer is irreversible, and once moved to Google, you cannot repurchase the business email through Wix.\n\nThis process ensures the email is transferred directly to Google Workspace outside of Wix management [S1]."
+      }
+    ]
+  },
+  "context_recall": {
+    "analysis": "The overall Context Recall metric shows low performance with an average score of 0.4, indicating that the retrieved context often lacks key information needed to fully support the ground truth answers. Common issues include partial coverage of essential details and missing critical facts, such as procedural steps or platform-specific constraints. To improve, the retrieval component should be enhanced by expanding the knowledge base with more comprehensive documents and refining query formulations to better capture all relevant aspects of the user's question. Additionally, incorporating more precise retrieval models or reranking strategies could help surface context that fully aligns with the ground truth, thereby boosting recall and downstream answer quality.",
+    "metric_name": "Context Recall",
+    "metric_description": "Whether retrieved context contains information needed for ground truth.",
+    "avg_score": 0.4,
+    "stratified_examples": [
+      {
+        "score": 0.6,
+        "explanation": "The retrieved context includes the essential information that transferring a Google Workspace business email from Wix involves contacting Wix Customer Care for assistance, which aligns with the GT answer's instruction to contact a Customer Care Expert. However, it does not mention the need to ensure access to the Google Admin Console or to disable the email's auto-renewal, which are key steps in the GT answer. Therefore, the context partially covers the essential information but misses some important details.",
+        "question": "how to transfer a business email away from Wix",
+        "candidate_answer": "To transfer a Google Workspace business email away from Wix, you need to:\n\n- Contact Wix Customer Care for assistance with the transfer.\n- Understand that this action will disconnect the Workspace business email from your Wix account.\n- Note that the transfer is irreversible, and once moved to Google, you cannot repurchase the business email through Wix.\n\nThis process ensures the email is transferred directly to Google Workspace outside of Wix management [S1].",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.75,
+        "answer_overlap": 0.6538461538461531,
+        "token_f1": 0.38,
+        "bleu": 0.10498948845761301,
+        "rouge_1": 0.38,
+        "rouge_2": 0.183673469387755,
+        "gt_answer": "To transfer a business email away from Wix, ensure access to your Google Admin Console, disable the email's auto-renewal, and contact a Customer Care Expert for assistance"
+      },
+      {
+        "score": 0.2,
+        "explanation": "The retrieved context does not mention that Wix Premium Plans are designed specifically for websites built on the Wix platform, nor does it state that Premium Plans cannot be used for sites built on other platforms. Therefore, the essential information from the ground truth answer is missing.",
+        "question": "can I buy a premium plan but build my website on other platforms",
+        "candidate_answer": "- Yes, you can purchase a Wix Premium plan but build your website on other platforms; however, Wix Premium plans and their features are designed specifically for Wix-hosted websites.\n- Features such as Wix Analytics, custom reports, and sales reports are integrated within the Wix platform and may not be transferable or usable on external platforms [S1].\n- If your goal is to use Wix services like Analytics or Premium features, these require hosting your site on Wix.\n\nIn summary, while you can buy a Wix Premium plan, its benefits are intended for Wix websites and may not apply if your site is hosted elsewhere [S1].",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.546875,
+        "answer_overlap": 0.758620689655172,
+        "token_f1": 0.42465753424657504,
+        "bleu": 0.053783963008865,
+        "rouge_1": 0.42465753424657504,
+        "rouge_2": 0.125,
+        "gt_answer": "Wix Premium Plans are designed to be used with websites built on the Wix platform. If you purchase a Premium Plan, it will apply to your Wix site, and you cannot use Wix Premium Plans for a site built on another platform."
+      }
+    ]
+  },
+  "factuality": {
+    "analysis": "The Factuality metric shows moderate performance with an average score of 0.8, indicating generally correct answers but with some missing or extraneous details. Common issues include omission of key procedural steps (e.g., disabling auto-renewal in email transfer) and inclusion of additional information not present in the ground truth, which can dilute focus or introduce slight inaccuracies. To improve, the system should enhance precision by better aligning generated content strictly with essential ground truth facts, possibly through tighter retrieval filtering or more focused generation prompts emphasizing factual completeness and conciseness. Overall, the system performs well but would benefit from targeted refinements to reduce minor factual gaps and extraneous content.",
+    "metric_name": "Factuality",
+    "metric_description": "Answer correctness vs ground truth reference.",
+    "avg_score": 0.8,
+    "stratified_examples": [
+      {
+        "score": 0.8,
+        "explanation": "The AI response includes most essential information from the ground truth, such as contacting Wix Customer Care for assistance and the implication of transferring the business email away from Wix. However, it misses mentioning the need to disable the email's auto-renewal and ensuring access to the Google Admin Console, which are important steps in the process. Overall, it provides a strong match but lacks some minor details.",
+        "question": "how to transfer a business email away from Wix",
+        "candidate_answer": "To transfer a Google Workspace business email away from Wix, you need to:\n\n- Contact Wix Customer Care for assistance with the transfer.\n- Understand that this action will disconnect the Workspace business email from your Wix account.\n- Note that the transfer is irreversible, and once moved to Google, you cannot repurchase the business email through Wix.\n\nThis process ensures the email is transferred directly to Google Workspace outside of Wix management [S1].",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.75,
+        "answer_overlap": 0.6538461538461531,
+        "token_f1": 0.38,
+        "bleu": 0.10498948845761301,
+        "rouge_1": 0.38,
+        "rouge_2": 0.183673469387755,
+        "gt_answer": "To transfer a business email away from Wix, ensure access to your Google Admin Console, disable the email's auto-renewal, and contact a Customer Care Expert for assistance"
+      },
+      {
+        "score": 0.8,
+        "explanation": "The AI response correctly states that Wix Premium Plans are designed for websites built on the Wix platform and that their features may not be transferable to other platforms. It also clarifies that while you can purchase a Premium plan, its benefits are intended for Wix-hosted sites. However, it adds extra details about specific features like Wix Analytics and reports, which are not mentioned in the ground truth but do not contradict it. The core essential information from the ground truth is present, making it a strong match with minor additional details.",
+        "question": "can I buy a premium plan but build my website on other platforms",
+        "candidate_answer": "- Yes, you can purchase a Wix Premium plan but build your website on other platforms; however, Wix Premium plans and their features are designed specifically for Wix-hosted websites.\n- Features such as Wix Analytics, custom reports, and sales reports are integrated within the Wix platform and may not be transferable or usable on external platforms [S1].\n- If your goal is to use Wix services like Analytics or Premium features, these require hosting your site on Wix.\n\nIn summary, while you can buy a Wix Premium plan, its benefits are intended for Wix websites and may not apply if your site is hosted elsewhere [S1].",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.546875,
+        "answer_overlap": 0.758620689655172,
+        "token_f1": 0.42465753424657504,
+        "bleu": 0.053783963008865,
+        "rouge_1": 0.42465753424657504,
+        "rouge_2": 0.125,
+        "gt_answer": "Wix Premium Plans are designed to be used with websites built on the Wix platform. If you purchase a Premium Plan, it will apply to your Wix site, and you cannot use Wix Premium Plans for a site built on another platform."
+      }
+    ]
+  }
+}

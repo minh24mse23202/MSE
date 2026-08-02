@@ -1,0 +1,506 @@
+{
+  "analysis": {
+    "executive_summary": "The RAG system demonstrates strong overall performance with high scores in context relevancy (0.93), context adherence (0.93), and answer relevancy (0.98), indicating effective retrieval of pertinent information and faithful, relevant answer generation. The key strength lies in the system's ability to ground answers strictly in retrieved context, minimizing hallucinations and maintaining user intent alignment. However, the main weakness is in factuality (0.82) and context recall (0.88), where missing fine-grained procedural details and incomplete retrieval of nuanced information limit answer completeness and accuracy. Targeted improvements in retrieval breadth and prompt engineering to emphasize detail and completeness will likely yield the most impactful gains.",
+    "executive_summary_gist": "The system excels at retrieving relevant context and generating faithful, relevant answers with minimal hallucination. Its main limitation is incomplete retrieval of detailed procedural information, which reduces factual accuracy and answer completeness.",
+    "insights": [
+      {
+        "title": "Enhance Retrieval Breadth to Improve Context Recall and Factual Completeness",
+        "priority": "critical",
+        "problem_detection": "The system's context recall average of 0.88 and factuality average of 0.82 reveal gaps in retrieving all necessary fine-grained procedural details, leading to incomplete or slightly inaccurate answers.",
+        "problem_detection_gist": "Incomplete retrieval of detailed procedural information limits factual accuracy and answer completeness.",
+        "root_cause_analysis": "The hybrid retrieval with top_k=2 may insufficiently capture all relevant substeps or nuanced options, especially for complex multi-step workflows. The current retrieval strategy likely prioritizes high-precision but narrower context, missing minor yet important details that affect factuality. Additionally, the retrieval freshness or indexing granularity might not fully support capturing edge-case or customization information.",
+        "root_cause_analysis_gist": "Limited retrieval breadth and top_k=2 constrain capturing all relevant procedural details, causing incomplete context and reduced factuality.",
+        "evidence_trace": "Metrics show high context relevancy (0.93) but lower context recall (0.88) and factuality (0.82), indicating relevant but incomplete context retrieval. Examples such as the document upload question show low context recall (0.2) and factuality (0.4) due to missing specific upload steps. Another example about adding a profile page has perfect context recall but only 0.8 factuality, missing minor procedural notes. These patterns confirm that while retrieved context is relevant, it lacks comprehensive coverage of all necessary details.",
+        "evidence_trace_gist": "High context relevancy but lower recall and factuality metrics, exemplified by missing procedural details in document upload and profile page addition questions.",
+        "recommended_protocol": "### 1. Increase Retrieval Depth and Breadth\n- Increase `top_k` from 2 to 4 or 5 to retrieve more candidate documents, capturing finer-grained procedural details.\n- Adjust hybrid retrieval weights to slightly favor recall over precision, ensuring inclusion of edge-case or customization information.\n> Note: This may increase latency and cost; monitor retrieval time and optimize indexing accordingly.\n\n### 2. Refine Indexing and Document Granularity\n- Re-index the knowledge base with finer document chunking to isolate substeps and nuanced instructions.\n- Incorporate metadata tagging for procedural steps and customization options to improve retriever filtering.\n\n### 3. Augment Prompting to Emphasize Completeness\n- Modify generation prompts to explicitly instruct the model to include all relevant substeps and edge cases.\n- Add examples in prompt templates highlighting the importance of completeness and specificity.\n> This complements retrieval improvements by guiding the generator to leverage all retrieved details fully.",
+        "recommended_protocol_gist": "- Increase `top_k` to 4-5 for broader retrieval.\n- Re-index with finer chunking and metadata tagging.\n- Enhance prompts to emphasize completeness and detail."
+      },
+      {
+        "title": "Maintain and Monitor Strong Context Relevancy and Adherence to Prevent Hallucinations",
+        "priority": "high",
+        "problem_detection": "While context relevancy and adherence scores are high (~0.93), occasional low outliers (min 0.2) suggest rare cases of irrelevant or hallucinated content.",
+        "problem_detection_gist": "Rare instances of irrelevant or hallucinated content despite overall strong context relevancy and adherence.",
+        "root_cause_analysis": "The hybrid retrieval and generation pipeline generally aligns well, but edge cases with low retrieval quality or ambiguous queries may cause the generator to hallucinate or use unsupported information. The current top_k=2 setting limits context diversity, which can exacerbate hallucination if retrieved documents are insufficient or noisy.",
+        "root_cause_analysis_gist": "Limited retrieval diversity and occasional ambiguous queries lead to rare hallucinations despite strong overall grounding.",
+        "evidence_trace": "The `context_adherence` metric averages 0.93 with perfect scores in stratified examples, but minimum scores as low as 0.2 indicate occasional failures. For example, the document upload question shows low adherence (0.2) and factuality (0.4), reflecting hallucinated or unsupported steps. This suggests that when retrieval fails to provide relevant context, the generator may hallucinate to fill gaps.",
+        "evidence_trace_gist": "High average context adherence but rare low scores linked to hallucination in cases with poor retrieval, such as document upload instructions.",
+        "recommended_protocol": "### 1. Implement Retrieval Quality Filters and Confidence Thresholds\n- Add a confidence threshold on retriever scores to filter out low-quality documents.\n- Enable or tune reranker components to prioritize higher-quality context.\n\n### 2. Increase `top_k` to Provide More Context Diversity\n- Increasing `top_k` to 4-5 can provide the generator with more context options, reducing hallucination risk.\n\n### 3. Enhance Generation Prompting for Uncertainty Handling\n- Update prompts to instruct the model to explicitly mention uncertainty or lack of information when context is insufficient.\n- Incorporate fallback strategies to avoid fabricating unsupported details.\n> These steps help maintain strong grounding and reduce hallucination without sacrificing answer relevance.",
+        "recommended_protocol_gist": "- Add retriever confidence filtering and reranking.\n- Increase `top_k` for more context diversity.\n- Update prompts to handle uncertainty explicitly."
+      },
+      {
+        "title": "Improve Answer Clarity and Completeness in Borderline Cases",
+        "priority": "high",
+        "problem_detection": "Despite very high answer relevancy (0.98), some borderline cases show minor clarity issues, ambiguous references, or missing helpful links and examples.",
+        "problem_detection_gist": "Minor clarity and completeness issues in some answers reduce user understanding despite high relevancy.",
+        "root_cause_analysis": "The generation prompt and response structure emphasize conciseness and citation but may not sufficiently encourage elaboration or disambiguation in complex answers. The current prompt may not explicitly require clarifying ambiguous terms or adding helpful links, leading to occasional user confusion.",
+        "root_cause_analysis_gist": "Prompt design prioritizes conciseness over elaboration, causing occasional ambiguous or incomplete explanations.",
+        "evidence_trace": "Examples such as the profile page addition question show perfect relevancy but factuality and grading note scores slightly lower due to missing clarifications (e.g., what 'the Editor' means) and lack of helpful links. The grading note metric (0.92 avg) also indicates occasional incomplete coverage of all criteria or missing alternative methods.",
+        "evidence_trace_gist": "High answer relevancy but minor clarity and completeness gaps, exemplified by ambiguous references and missing links in profile page instructions.",
+        "recommended_protocol": "### 1. Refine Prompt Templates to Encourage Elaboration\n- Modify prompts to require explicit clarification of ambiguous terms and inclusion of helpful links or examples.\n- Add instructions to provide alternative methods or limitations when applicable.\n\n### 2. Incorporate Post-Generation Answer Enrichment\n- Implement a lightweight post-processing step to detect ambiguous phrases and append clarifications or relevant links.\n\n### 3. Use Few-Shot Examples Highlighting Clarity\n- Include few-shot prompt examples demonstrating clear, detailed, and well-structured answers with explicit clarifications.\n> These improvements will enhance user comprehension and satisfaction without compromising conciseness.",
+        "recommended_protocol_gist": "- Update prompts to require clarifications and helpful links.\n- Add post-generation enrichment for ambiguous terms.\n- Use few-shot examples emphasizing clarity and completeness."
+      },
+      {
+        "title": "Incrementally Enhance Grading Note Completeness and Detail",
+        "priority": "medium",
+        "problem_detection": "The grading note metric averages 0.92 but shows occasional moderate scores due to incomplete coverage of grading criteria and missing specific steps or clarifications.",
+        "problem_detection_gist": "Grading notes sometimes lack full detail or coverage of all criteria, reducing comprehensiveness.",
+        "root_cause_analysis": "The generation prompt and structure may not fully enforce exhaustive coverage of all grading note criteria or alternative approaches. The model might prioritize brevity or omit less critical details, leading to incomplete grading notes.",
+        "root_cause_analysis_gist": "Prompt constraints and generation preferences cause occasional omission of grading note details and alternatives.",
+        "evidence_trace": "Examples with moderate grading note scores show missing specific steps or clarifications that would improve comprehensiveness. For instance, some answers lack alternative methods or detailed sub-steps that would enhance grading note quality.",
+        "evidence_trace_gist": "Moderate grading note scores linked to missing steps and clarifications, indicating room for incremental completeness improvements.",
+        "recommended_protocol": "### 1. Adjust Prompt Instructions to Emphasize Exhaustiveness\n- Explicitly instruct the model to cover all grading note criteria and include alternative methods or limitations.\n\n### 2. Increase Maximum Generation Length for Grading Notes\n- Allow longer outputs to accommodate more detailed and comprehensive grading notes.\n\n### 3. Implement Targeted Post-Editing or Validation\n- Use rule-based checks or secondary models to verify completeness and prompt regeneration if key criteria are missing.\n> These incremental changes will improve grading note quality without major pipeline disruption.",
+        "recommended_protocol_gist": "- Emphasize exhaustiveness in grading note prompts.\n- Increase max generation length.\n- Add post-editing or validation for completeness."
+      }
+    ],
+    "strategic_conclusion": "The RAG system is robust in retrieving relevant context and generating faithful, relevant answers, but its factual accuracy and completeness hinge on improving retrieval breadth and prompt design. Prioritizing enhanced retrieval depth and refined prompting will yield the greatest impact, while maintaining strong grounding and clarity safeguards user trust. Incremental improvements in grading note detail will further polish the user experience without major architectural changes.",
+    "configuration_targets": [
+      {
+        "diagnostic_area": "Retrieval quality",
+        "metrics": [
+          "Context Relevancy",
+          "Context Recall"
+        ],
+        "sections": [
+          "Knowledge Base",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "chunking_strategy",
+          "embedding_deployment_id",
+          "retrieval_mode",
+          "top_k",
+          "reranker_deployment_id"
+        ]
+      },
+      {
+        "diagnostic_area": "Faithfulness and grounding",
+        "metrics": [
+          "Context Adherence",
+          "Factuality"
+        ],
+        "sections": [
+          "Generator target & prompts",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "generator_deployment_id",
+          "system_prompt",
+          "predefined_prompt",
+          "citations_enabled"
+        ]
+      },
+      {
+        "diagnostic_area": "Relevance and intent",
+        "metrics": [
+          "Answer Relevancy"
+        ],
+        "sections": [
+          "Adaptive RAG",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "route_mode",
+          "classifier_deployment_id",
+          "planner_deployment_id",
+          "response_structure"
+        ]
+      },
+      {
+        "diagnostic_area": "Structure and style",
+        "metrics": [
+          "Grading Note"
+        ],
+        "sections": [
+          "General",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "response_structure",
+          "tone",
+          "humor_level",
+          "system_prompt",
+          "predefined_prompt"
+        ]
+      }
+    ]
+  },
+  "prompt": {
+    "insights": {
+      "context_relevancy": {
+        "analysis": "The Context Relevancy metric shows a high average score of 0.93, indicating strong performance in retrieving highly relevant context for user queries. The stratified examples consistently demonstrate complete, detailed, and directly applicable context that fully addresses the questions without splitting information, reflecting effective retrieval and alignment with user intent. Given this strong performance, improvements are likely to yield minimal gains; however, maintaining the quality of indexing and retrieval freshness will help sustain this level. Overall, the system effectively supports generation with pertinent context, requiring only routine monitoring rather than targeted enhancements.",
+        "metric_name": "Context Relevancy",
+        "metric_description": "How relevant retrieved context is to the question.",
+        "avg_score": 0.9333333333333332,
+        "min_score": 0.2,
+        "max_score": 1.0
+      },
+      "context_adherence": {
+        "analysis": "The Context Adherence metric shows a high average score of 0.93, indicating that the model consistently generates answers that faithfully use only the retrieved context without introducing extraneous information. All stratified examples scored a perfect 1.0, demonstrating strong adherence across low, middle, and high performance strata. This suggests the retrieval and generation components are well-aligned in grounding responses strictly in the provided context. Given this strong performance, minimal improvements are needed; continued monitoring to maintain strict context fidelity and occasional checks for edge cases where hallucination might occur would suffice.",
+        "metric_name": "Context Adherence",
+        "metric_description": "How faithfully the answer uses only retrieved context.",
+        "avg_score": 0.9333333333333332,
+        "min_score": 0.2,
+        "max_score": 1.0
+      },
+      "answer_relevancy": {
+        "analysis": "The Answer Relevancy metric shows a very high average score of 0.98, indicating that the generated answers consistently address user questions accurately and comprehensively. The stratified examples reveal that most responses provide clear, step-by-step instructions or direct explanations fully satisfying user intent, with only minor room for improvement in clarity or detail in a few cases. Given this strong performance, improvements should focus on enhancing answer clarity and completeness in borderline cases, such as elaborating on ambiguous references (e.g., specifying what \"the Editor\" means) and adding helpful links or examples. Overall, the system demonstrates excellent relevancy with limited potential for significant gains.",
+        "metric_name": "Answer Relevancy",
+        "metric_description": "How well the answer addresses the question.",
+        "avg_score": 0.9833333333333334,
+        "min_score": 0.8,
+        "max_score": 1.0
+      },
+      "context_recall": {
+        "analysis": "The Context Recall metric shows a high average score of 0.88, indicating that the retrieved context generally contains the necessary information to answer user questions accurately. Most examples with high scores demonstrate comprehensive coverage of key details from the ground truth, enabling faithful and complete answers. However, moderate-scoring cases reveal common issues such as missing minor but relevant details, incomplete step-by-step instructions, or lack of coverage on customization and edge-case nuances. To improve further, focus on enhancing retrieval breadth to capture finer-grained procedural details and ensure inclusion of all relevant substeps or options, especially for complex multi-step tasks. Overall, the system performs well with limited room for major gains, but targeted improvements in retrieval completeness and granularity could boost recall and downstream answer quality.",
+        "metric_name": "Context Recall",
+        "metric_description": "Whether retrieved context contains information needed for ground truth.",
+        "avg_score": 0.8833333333333333,
+        "min_score": 0.2,
+        "max_score": 1.0
+      },
+      "factuality": {
+        "analysis": "The overall factuality metric shows moderate to strong performance with an average score of approximately 0.82, indicating generally accurate answers relative to ground truth. Common issues in lower-scoring examples include omission of specific procedural details, slight inaccuracies in navigation steps, and missing minor but relevant notes, which reduce completeness and precision. To improve, focus on enhancing retrieval of exact procedural steps and incorporating finer-grained details from source documents, possibly by refining retriever relevance or augmenting prompt instructions to emphasize completeness and specificity. Since the generation quality is generally good, improvements should prioritize retrieval accuracy and context relevance to boost factual correctness further.",
+        "metric_name": "Factuality",
+        "metric_description": "Answer correctness vs ground truth reference.",
+        "avg_score": 0.8166666666666668,
+        "min_score": 0.4,
+        "max_score": 1.0
+      },
+      "grading_note": {
+        "analysis": "The overall metric performance is high with an average score of approximately 0.92, indicating that the grading note generation is generally clear, logically ordered, and satisfies the criteria well. Common issues in the moderate scoring examples include occasional lack of detail, incomplete coverage of all grading note criteria, and missing specific steps or clarifications that would improve comprehensiveness. To further enhance performance, focus on enriching responses with more explicit instructions, covering all relevant sub-steps, and clarifying alternative methods or limitations when applicable. Given the strong current performance, improvements should be targeted and incremental, emphasizing completeness and clarity rather than broad changes.",
+        "metric_name": "Grading Note",
+        "metric_description": "Two-stage grading note generation then scoring.",
+        "avg_score": 0.9166666666666666,
+        "min_score": 0.6,
+        "max_score": 1.0
+      }
+    },
+    "examples": {
+      "example_2": {
+        "question": "How can I add a Profile page to my Members Area using the Wix Editor?",
+        "candidate_answer": "To add a Profile page to your Members Area using the Wix Editor, follow these steps:\n\n- Open the Wix Editor and go to the Pages panel on the left side.\n- Click on \"Members Area.\"\n- Select \"Member Page.\"\n- Click on the Member Menu element and choose \"Manage and Navigate.\"\n- Click \"+ Add More Tabs.\"\n- Click \"+ Add Tab\" under \"Profile\" to add the Profile page.\n\nThis will add a customizable Profile page where members can express themselves with descriptions, images, videos, and more [S1][S2].",
+        "gt_answer": "If the Profile page isn't already part of your Members Area, you can add it directly from the Pages panel in your Editor by following these steps:\n\n1. Click **Pages and Menu** on the left side of the editor.\n2. Click **Members Area**.\n3. Click **Member Page**.\n4. Select the Member Menu element and click **Manage and Navigate**.\n5. Click **\\+ Add More Tabs**.\n6. Click **\\+ Add Tab** under **Profile**.\n\nWhen using social apps (e.g. Wix Blog, Wix Forum, Fileshare), the Profile page is automatically added to your site. You can check if it already exists in the Pages panel.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.75,
+        "answer_overlap": 0.484375,
+        "token_f1": 0.568306010928961,
+        "bleu": 0.19337924180162702,
+        "rouge_1": 0.568306010928961,
+        "rouge_2": 0.29834254143646405,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 0.8,
+        "grading_note_score": 0.8
+      },
+      "example_7": {
+        "question": "How can I upload a document to my Wix site using the Wix Editor?",
+        "candidate_answer": "To upload a document to your Wix site using the Wix Editor, follow these steps:\n\n- Open the Wix Editor and go to the page where you want to add the document.\n- Click on the “Add” (+) button on the left sidebar.\n- Select “Document” or “File” from the options (usually under Media or Uploads).\n- Upload your document file (PDF, DOCX, etc.) from your computer.\n- Once uploaded, add the document to your page as a clickable link or button for visitors to download or view.\n\nNote: The retrieved workflow context does not specifically cover document uploads in Wix Editor, so these steps are based on standard Wix Editor functionality and may vary slightly depending on your site setup.\n\nIf you need detailed guidance or encounter issues, please consult Wix support or the Wix Help Center for document upload specifics.",
+        "gt_answer": "To upload a document to your Wix site using the Wix Editor, follow these steps:\n\n1. Click the **Media** icon ![](https://lh4.googleusercontent.com/BXNb33YHdV1YVOl6x53HWxYlbCJjbQYPUNQhfeBRMZ3pbrDcFMXRtiGg_fi4nL40hqEfSQdWNag99l1MKxbPQaelz8jR59OMPmorRRF9Xapk6K__y-zhuAOjPcc_wS6W_fy44aeY) on the left side of the editor.\n2. Click the **Upload Media** icon ![](https://lh3.googleusercontent.com/G_5iGn3FqIhWY2HCdwNmDOmdMpHFUsk38-ywwhmW1mgMh83q2N397YR7ku5Corkpr7byNVY0dVR0w9FDiPGuzuEC8nHCcFu6_iKkgSR09XvzcGADwnuzlix3ZbOnsKq3cfxso6Ae).\n3. Choose your file(s) from your computer.\n4. (Optional) Select the file and click **Add to Page** to add it to your site.\n\nFor more information, you can learn about [sharing documents on your site](https://support.wix.com/en/article/wix-editor-sharing-documents-on-your-site) or display PDF files directly using the [PDF Viewer App](https://support.wix.com/en/article/wix-apps-adding-and-setting-up-the-pdf-viewer-app).",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.36708860759493606,
+        "answer_overlap": 0.39726027397260205,
+        "token_f1": 0.442748091603053,
+        "bleu": 0.17455784478240402,
+        "rouge_1": 0.442748091603053,
+        "rouge_2": 0.17692307692307602,
+        "context_relevancy_score": 0.2,
+        "context_adherence_score": 0.2,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 0.2,
+        "factuality_score": 0.4,
+        "grading_note_score": 0.8
+      },
+      "example_9": {
+        "question": "How can I upload my own image to the Wix Logo Maker and customize it?",
+        "candidate_answer": "To upload and customize your own image in the Wix Logo Maker:\n\n- Upload your image via the Media Manager by clicking the Upload icon on the left of the logo editor, then selecting Upload Image. You can upload from your computer or connect to social networks like Facebook, Instagram, or Google Drive [S1].\n- After uploading, customize your image's size, position, and shadows directly within the logo editor.\n- For more advanced edits, use the Wix Photo Studio without leaving the Logo Maker [S1].\n- You can also remove the background of your uploaded image by clicking the image to open customization settings and selecting the Remove Background tool [S2].\n\nThis process allows you to create a unique logo with your own images fully integrated and customizable [S1][S2].",
+        "gt_answer": "To upload an image to your logo in the Wix Logo Maker, follow these steps:\n\n1. Click the Upload icon on the left of the logo editor.\n2. Click **Upload Image**.\n3. Upload an image or select an image from your Site Files.\n   \n   1. **Upload an image:**\n      1. Click **\\+ Upload Media.**\n      2. Select the location you want to upload your image from (from your computer or a social network).\n      3. Click the image(s) you want to upload.\n      4. Click **Upload Selection**.\n      5. Click **Add to Logo**.\n   2. **Use a site file:**\n      1. Select the image you want to add to your logo.\n      2. Click **Add to Logo**.\n\nAfter uploading, you can customize your image using the Customize Image panel:\n\n1. Click the Upload icon on the left of the logo editor.\n2. Hover over the image you want to edit in Customize Image panel and click **Customize**.\n3. Customize the following aspects of your image:\n   * **Size:** Drag the slider to increase or decrease the size of your image.\n   * **Image opacity:** Drag the slider to increase or decrease the transparency of your image.\n   * **Flip:** Flip your image horizontally or vertically.\n   * **Rotate:** Drag the slider to rotate your image.\n   * **Horizontal position:** Drag the slider to move your image left or right.\n   * **Vertical position:** Drag the slider to move your image up or down.\n   * **Shadow:** Click the toggle to enable a shadow around your image and customize the following:\n     + **Shadow color:** Click the color box to select the shadow's color or enter a hex code.\n     + **Shadow opacity:** Drag the slider to increase or decrease the transparency of your shadow.\n     + **Shadow horizontal position:** Drag the slider to move your shadow left or right.\n     + **Shadow vertical position:** Drag the slider to move your shadow up or down.\n     + **Shadow blur:** Drag the slider to increase or decrease the blurriness of your shadow.\n   * **Blur:** Drag the slider to increase or decrease the blurriness of your image.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.853333333333333,
+        "answer_overlap": 0.36144578313253,
+        "token_f1": 0.30357142857142805,
+        "bleu": 0.043834608156086,
+        "rouge_1": 0.30357142857142805,
+        "rouge_2": 0.14349775784753302,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 0.8,
+        "factuality_score": 0.6,
+        "grading_note_score": 1.0
+      },
+      "example_10": {
+        "question": "How can I review reports about members from my site's dashboard?",
+        "candidate_answer": "To review reports about members from your site's dashboard:\n\n- Go to **Site Members** in your site's dashboard.\n- Click the **Reported** tab to see members who have been reported.\n- Click the **More Actions** icon next to the relevant member.\n- Choose **Review Reports** to see details such as the reporting member, date, and reason if provided.\n- Based on the review, you can either **Block Member** to prevent access or **Remove Reports** to dismiss the report.\n\nThis process allows you to manage member reports efficiently and maintain a safe members area [S1][S2].",
+        "gt_answer": "To review reports from your site's dashboard:\n\n1. [Go to Site Members](https://www.wix.com/my-account/site-selector/?buttonText=Manage%20Members%20List&title=Select%20a%20Site&autoSelectOnSingleSite=true&actionUrl=https://www.wix.com/dashboard/%7B%7BmetaSiteId%7D%7D/member-permissions/members) in your site's dashboard.\n2. Click the **Reported** tab.\n3. Click the More Actions icon next to the relevant member.\n4. Choose what to do with this member:\n   \n   * **Review Reports:** See the report details, including the member who submitted the report, the date and the reason, if the member specified it.\n     \n     + According to how you want to handle this report, click **Block Member** or **Remove Reports**.\n   * **Remove Reports:** Delete and dismiss the report that was submitted about this member.\n   * **View member:** Before making your decision, open the reported member's Contact Card to see more details about them.\n   * **Block member:** Block this member from your Members Area, so they can't access it nor sign up again using the same email address.\n\n### Note\nWhen removing a report, it gets automatically deleted with no option to see it again in the future.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7627118644067791,
+        "answer_overlap": 0.38532110091743105,
+        "token_f1": 0.517985611510791,
+        "bleu": 0.12305720656345301,
+        "rouge_1": 0.517985611510791,
+        "rouge_2": 0.26811594202898503,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 0.8,
+        "grading_note_score": 1.0
+      },
+      "example_11": {
+        "question": "How can I access the Orders tab in Wix to manage subscription orders?",
+        "candidate_answer": "To access the Orders tab in Wix and manage subscription orders, follow these steps:\n\n- Go to your site's dashboard.\n- Click on **Sales**.\n- Select the **Orders** tab.\n\nIn the Orders tab, you can manage subscription orders just like one-time purchases, including fulfilling orders, adding tracking numbers, or canceling them. To manage subscription-specific details, click **View Subscription** on the order page to update information such as the customer's address [S1].",
+        "gt_answer": "To access the Orders tab in Wix and manage your subscription orders, follow these steps:\n\n1. [Go to your site's dashboard](https://www.wix.com/my-account/site-selector/?buttonText=Go%20to%20Dashboard&title=Select%20a%20Site&autoSelectOnSingleSite=true&actionUrl=https://www.wix.com/dashboard/{{metaSiteId}}/home/).\n2. Click **Sales**.\n3. Select the **Orders** tab.\n\nOnce you are in the Orders tab, you can perform all the actions on a subscription order (fulfill the order, add a tracking number, cancel it, etc.) just as you would a one-time order. Information about the subscription appears on the order page. Click **View Subscription** in the order to manage the subscription, such as updating the address. Learn more about [managing a product subscription](https://support.wix.com/en/article/wix-stores-managing-product-subscriptions).",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.755102040816326,
+        "answer_overlap": 0.4375,
+        "token_f1": 0.517073170731707,
+        "bleu": 0.17637472012295802,
+        "rouge_1": 0.517073170731707,
+        "rouge_2": 0.32512315270935904,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 1.0
+      },
+      "example_0": {
+        "question": "Can I upload my own fonts to ADI?",
+        "candidate_answer": "- No, you cannot upload your own fonts directly to ADI.\n- To use custom fonts, you need to go to the Editor and follow the instructions there.\n\n[S1]",
+        "gt_answer": "Currently, you cannot upload your own fonts to ADI. If you want to upload your own fonts, you need to [head to the Editor](https://support.wix.com/en/article/adi-moving-from-adi-to-the-editor) and follow the instructions [here](https://support.wix.com/en/article/wix-editor-uploading-and-using-your-own-fonts).",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7619047619047611,
+        "answer_overlap": 0.482758620689655,
+        "token_f1": 0.48192771084337305,
+        "bleu": 0.180800555853937,
+        "rouge_1": 0.48192771084337305,
+        "rouge_2": 0.39506172839506104,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 0.8,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 0.6
+      },
+      "example_1": {
+        "question": "How can I change the main color in my site's color palette using ADI?",
+        "candidate_answer": "To change the main color in your site's color palette using ADI:\n\n- Click **Design** on the top bar inside ADI.\n- Select **Colors**.\n- Click the **Design icon** in the Main Color box at the top.\n- Choose your new main color.\n- ADI will then generate a new list of recommended color palettes based on your selected main color.\n\nThis process helps ensure your site's colors remain complementary and visually appealing [S1].",
+        "gt_answer": "To change the main color in your palette:\n\n1. Click **Design** on the top bar inside ADI.\n2. Select **Colors**.\n3. Click the Design icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/2017/01/04/9faf2831-3a10-405e-bf82-abdd3c3db13e.jpg) in the **Main Color** box at the top.\n4. Choose one of the suggested colors, or click the Add icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/d6b40156-9694-4cfe-9209-54815ef9d6dc/2022/02/24/0415e843-44e7-49e8-83ae-a3c567bb6483/9bda7b85-add0-4678-9f54-254a3a163b20.png) to choose a custom color.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7555555555555551,
+        "answer_overlap": 0.343283582089552,
+        "token_f1": 0.419161676646706,
+        "bleu": 0.23109632317024,
+        "rouge_1": 0.419161676646706,
+        "rouge_2": 0.29090909090909,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 0.8,
+        "factuality_score": 0.8,
+        "grading_note_score": 1.0
+      },
+      "example_6": {
+        "question": "How can I add and set up a range slider in my CMS to filter content by a number value?",
+        "candidate_answer": "To add and set up a range slider in your CMS to filter content by a number value, follow these steps:\n\n- Navigate to the page or section where you want the filter.\n- Click **Add Elements** on the left side of the editor.\n- Select **Input**, then **Slider**.\n- Scroll to **Range Sliders** and drag the desired range slider onto the page.\n- Click the **Connect to CMS** icon on the range slider.\n- In the **Connect Range Slider** panel, select **Filter content**.\n- Choose the dataset connected to the elements you want to filter (e.g., repeater, gallery, table).\n- Select the number field visitors will use to filter content.\n- Optionally, add a new field to your collection if needed.\n- Set the filter condition:  \n  - **Between**: shows items with values between the slider handles.  \n  - **Outside of**: shows items with values outside the slider handles.\n\nThis setup allows visitors to filter content dynamically based on the number range selected [S1][S2].",
+        "gt_answer": "To add and set up a range slider in your CMS to filter content by a number value, follow these steps:\n\n1. **Go to your editor**: [Access your editor](https://manage.wix.com/account/site-selector/?actionUrl=https%3A%2F%2Fwww.wix.com%2Feditor%2F%7BmetaSiteId%7D%3FeditorSessionId%3D%7Besi%7D%26).\n\n2. **Add the range slider input element**:\n   \n   1. Go to the page or section where you want visitors to filter content by a number value.\n   2. Click **Add Elements** ![](https://d2x3xhvgiqkx42.cloudfront.net/65d5031a-8d20-483c-b08f-0a758e1cf2fd/68a0236f-77f4-43c6-931f-8298ae691a9e/2022/11/17/01f24c8b-2ea3-4d06-a26d-9975a43d617e/a79e245b-4870-4444-ba82-248eca4eb9a7.png) on the left side of the editor.\n   3. Click **Input**.\n   4. Click **Slider**.\n   5. Scroll down to **Range Sliders**, then click and drag the relevant range slider onto the page.\n\n3. **Connect the range slider to the CMS**:\n   \n   1. Click the **Connect to CMS** icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/d6b40156-9694-4cfe-9209-54815ef9d6dc/2023/06/16/2d484f5d-e1bf-4d48-9e42-82216e8b88de/08e74518-edad-42f8-b007-c974ba767eb6.png) on the range slider.\n   2. Select **Filter content** in the **Connect Range Slider** panel on the right.\n   3. Click the **Choose a dataset** drop-down and select the same dataset that connects to the elements (e.g., repeater, gallery, table) that you want visitors to filter.\n   4. Click the **Filter content by** drop-down and choose the number field that visitors will use to filter the content.\n\n   **Tip:** To add a new field to your collection and use it for filtering content, select **Add new field**, then enter the field name and click **Add**. You can add content to the field in your CMS collection later.\n   5. Click the **Condition** drop-down and select the relevant condition:\n      \n      * **Between:** Show items that have a connected number field value that is between the range slider handles.\n      * **Outside of:** Show items that have a connected number field value that is outside of the range slider handles.\n\n4. **Customize the range slider element**:\n   \n   * Click **Settings** to customize the following:\n     \n     + **Field title:** Edit the name that displays on the range slider and lets visitors know what it does.\n     + **Slider type:** Choose a continuous or stepped slider type:\n       \n       - **Continuous:** Visitors can select any value within the set range.\n       - **Stepped:** Visitors can select specific, incremental values within the set range. Set up the following options:\n         \n         * **Set steps by:** Click the drop-down and choose how you want to set the steps:\n           \n           + **Number of steps:** You choose how many steps appear in the range slider. Enter the number of steps in the **Steps** field.\n           + **Step value:** You choose the value increments of each step, up to 100. Enter the value of the increments in the **Value** field.\n         * **Value labels:** (Optional) Enter a prefix in the **Prefix** field to have it appear before the value (e.g., $). You can also enter a suffix in the **Suffix** field to have it appear after the value.\n   * Click the **Layout** icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/d6b40156-9694-4cfe-9209-54815ef9d6dc/2024/04/24/1e3a7616-1ca3-40ad-9e94-d2e18bfd4b98/33c4ffdc-7138-462f-b6e2-4d6505f6f8f6.png) to adjust the following:\n     \n     + The size and shape of your range slider handles.\n     + The track height (thickness) of the track that the handles slide on.\n     + Choose a **Left to right** or **Right to left** range display direction.\n     + Adjust the alignment, offset, and spacing around the field title.\n     + (Steps only) Choose a layout: **Lines** or **Dots**.\n   * Click the **Design** icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/d6b40156-9694-4cfe-9209-54815ef9d6dc/2024/04/24/d44e4657-75f7-476b-a92f-c0ed3bc775bc/4d1470bd-bd1d-4d8b-ac9d-5015333e2742.png) to choose a preset design and customize it further.\n\n5. **Click Preview** to test your range slider.\n6. **Click Publish** if you are ready to make the changes go live.\n\n**Important:** The range slider is not available in Editor X or the Studio Editor.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7435897435897431,
+        "answer_overlap": 0.261224489795918,
+        "token_f1": 0.33210332103321005,
+        "bleu": 0.019031460462888002,
+        "rouge_1": 0.33210332103321005,
+        "rouge_2": 0.23427866831072702,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 0.8,
+        "factuality_score": 0.8,
+        "grading_note_score": 1.0
+      },
+      "example_3": {
+        "question": "Can I get a refund for a logo purchased from Wix Logo Maker if I cancel my Logo + Website plan within 14 days?",
+        "candidate_answer": "- Logos purchased from Wix Logo Maker are non-refundable as they are digital goods and usage cannot be monitored after download.\n- If you cancel your Logo + Website plan within 14 days, you are only entitled to a refund for the website subscription, not for the logo files.\n- Any discount applied to the logo files in the plan will be revoked and deducted from your subscription refund.\n- In some cases where the logo files price exceeds the plan price, no refund will be issued.\n- After cancellation, you retain access to the Advanced Logo Maker plan benefits, and for Social Logo + Website plans, Brand Plus benefits continue for 1 year [S1].\n\nTherefore, you cannot get a refund for the logo itself when canceling within 14 days, only for the website subscription portion.",
+        "gt_answer": "Logos purchased from Wix Logo are **non-refundable** as they are digital goods, and we cannot monitor their use after download. If you cancel your Logo + Website plan within 14 days of purchase, you will only be entitled to a refund for your site subscription and not for your Logo files. Any discount you received with your plan for your Logo files will be revoked and deducted from the amount refunded to you for your subscription. In some cases, the logo files price is higher than the plan price. In these cases, you will not receive a refund.",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7222222222222221,
+        "answer_overlap": 0.737704918032786,
+        "token_f1": 0.6491228070175431,
+        "bleu": 0.32128535501661803,
+        "rouge_1": 0.6491228070175431,
+        "rouge_2": 0.407079646017699,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 0.8,
+        "grading_note_score": 1.0
+      },
+      "example_5": {
+        "question": "Can I integrate Wix Events with Wix Restaurants to allow customers to see events and buy tickets when they book a table?",
+        "candidate_answer": "Currently, Wix Events is not integrated with Wix Restaurants or Wix Table Reservations. This means customers cannot see events or buy tickets directly when booking a table through Wix Restaurants at this time. The platform team is aware and working on improvements, so your feedback is appreciated for future updates [S1].",
+        "gt_answer": "Currently, Wix Events is not integrated with [Wix Table Reservations](https://support.wix.com/en/article/wix-restaurants-adding-and-setting-up-wix-table-reservations). This would let restaurant customers see events and buy tickets when they book a table.",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.6829268292682921,
+        "answer_overlap": 0.5806451612903221,
+        "token_f1": 0.505494505494505,
+        "bleu": 0.24306692203143201,
+        "rouge_1": 0.505494505494505,
+        "rouge_2": 0.31460674157303303,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 0.8
+      },
+      "example_4": {
+        "question": "Can I connect properties between different widgets in Wix Blocks?",
+        "candidate_answer": "No, currently Wix Blocks only allows connecting properties within a single widget. Connecting properties between different widgets is not supported yet, but this feature is being considered for future updates to enable seamless data exchange across widgets and app-level interactions [S1].",
+        "gt_answer": "Currently, Wix Blocks properties only connect elements within a single widget. This feature would allow you to create more cohesive and interactive experiences by connecting widget properties to app-level properties; enabling seamless data exchange between different widgets and allowing events to be triggered across the app.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7368421052631571,
+        "answer_overlap": 0.5750000000000001,
+        "token_f1": 0.5393258426966291,
+        "bleu": 0.16911184559265802,
+        "rouge_1": 0.5393258426966291,
+        "rouge_2": 0.275862068965517,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 1.0
+      },
+      "example_8": {
+        "question": "How can I restore an archived program in Wix Online Programs?",
+        "candidate_answer": "You cannot directly restore an archived program in Wix Online Programs. However, you can duplicate the archived program and publish the new draft. The steps are:\n\n- Go to Online Programs in your site's dashboard.\n- Click the Archived tab.\n- Click the More Actions icon next to the relevant archived program.\n- Select Duplicate.\n- The duplicated program will appear in the Drafts tab.\n- From the Drafts tab, click the More Actions icon next to the duplicate program and publish or edit as needed [S1].",
+        "gt_answer": "Archived programs cannot be restored. However, you can duplicate the archived program and publish the new draft. \n\n**To duplicate an archived program:**\n1. [Go to Online Programs](https://www.wix.com/my-account/site-selector/?buttonText=Manage%20Online%20Programs&title=Select%20a%20Site&autoSelectOnSingleSite=true&actionUrl=https://www.wix.com/dashboard/%7B%7BmetaSiteId%7D%7D/challenges/list) in your site's dashboard.\n2. Click the **Archived** tab.\n3. Click the More Actions icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/8696077d-830a-4b1e-bd86-9df98f89994a/2020/01/26/b3736435-0d71-4f7d-89d4-6c2cc9a3259c/ede58fab-ed86-4013-9da2-512fe658aef6.png) next to the relevant program.\n4. Click **Duplicate**. \n\n**Tip:** The new duplicate program is in your **Drafts** tab.\n5. Click the **Drafts** tab.\n6. Click the More Actions icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/8696077d-830a-4b1e-bd86-9df98f89994a/2020/01/26/b3736435-0d71-4f7d-89d4-6c2cc9a3259c/ede58fab-ed86-4013-9da2-512fe658aef6.png) next to the duplicate program.\n7. Choose to do one of the following:\n   1. **Publish:** Click **Publish** to set your program live.\n   2. **Edit Settings:** [Update or change your program settings](https://support.wix.com/en/article/online-programs-managing-your-programs).",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.8,
+        "answer_overlap": 0.32380952380952305,
+        "token_f1": 0.475177304964539,
+        "bleu": 0.10809671583793501,
+        "rouge_1": 0.475177304964539,
+        "rouge_2": 0.30000000000000004,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 0.8,
+        "grading_note_score": 1.0
+      }
+    },
+    "configs": {
+      "rag_configs": {
+        "run_id": "eval-fa5340a6e0751170db9605e14538a4db",
+        "name": "Fixed L2 - WixQA Synthetic",
+        "dataset_name": "WixQA Synthetic",
+        "knowledge_base_id": "kb-d4069abadfb54ef39af3f49153145532",
+        "knowledge_base_name": "WixQA Curpus 100",
+        "chat_configuration_id": "cfg-d5eabad574f04c209ccd1c5a80c512a2",
+        "chat_configuration": {
+          "id": "cfg-d5eabad574f04c209ccd1c5a80c512a2",
+          "name": "Fixed L2",
+          "tone": "Professional",
+          "metadata": {
+            "top_k": 2,
+            "runtime": "model-farm",
+            "classifier": "Built-in trained classifier",
+            "route_mode": "simple_rag",
+            "retrieval_mode": "hybrid",
+            "route_strategy": "L2 Simple RAG",
+            "welcome_message": "Welcome to Adaptive RAG Studio. Workflow assistant 3 (Fixed L2) will assist you.",
+            "actual_generator": "deployment",
+            "configuration_id": "nUcjS2lW2ean",
+            "reranker_enabled": false,
+            "citations_enabled": true,
+            "agent_max_iterations": 5,
+            "agent_max_tool_calls": 8,
+            "retrieval_mode_label": "Hybrid",
+            "agent_timeout_seconds": 90,
+            "conversation_starters": [
+              "What are the main steps in this workflow?",
+              "Summarize the selected knowledge base."
+            ],
+            "generation_parameters": {},
+            "planner_deployment_id": "",
+            "reranker_deployment_id": "",
+            "fallback_deployment_ids": [
+              "model-e7c1d1c6dfbb455e8951ec7d7d6c6e8d"
+            ],
+            "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+            "agent_public_web_enabled": false,
+            "classifier_deployment_id": "",
+            "classifier_margin_threshold": 0,
+            "conversation_awareness_enabled": false,
+            "conversation_history_exchanges": 3,
+            "classifier_confidence_threshold": 0,
+            "conversation_history_characters": 4000
+          },
+          "description": "Default configuration for concise business workflow answers.",
+          "humor_level": 0,
+          "system_prompt": "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
+          "generator_model": "gpt-4.1-mini",
+          "citations_enabled": true,
+          "predefined_prompt": "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.",
+          "generator_provider": "openai",
+          "response_structure": "Concise answer with bullets and cited workflow context",
+          "generation_parameters": {},
+          "planner_deployment_id": "",
+          "reranker_deployment_id": "",
+          "fallback_deployment_ids": [
+            "model-e7c1d1c6dfbb455e8951ec7d7d6c6e8d"
+          ],
+          "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+          "agent_public_web_enabled": false,
+          "conversation_awareness_enabled": false
+        },
+        "retrieval_mode": "hybrid",
+        "top_k": 2,
+        "route_distribution": {
+          "l2_simple_rag": 12
+        },
+        "wixqa_metrics": {
+          "mrr": 0.9166666666666666,
+          "bleu": 0.12589215109691937,
+          "rouge_1": 0.4793331235035375,
+          "rouge_2": 0.2858167012597125,
+          "hit_at_k": 0.9166666666666666,
+          "token_f1": 0.4793331235035375,
+          "ndcg_at_k": 1.2847090229166835,
+          "factuality": 0.9166666666666666,
+          "recall_at_k": 0.9166666666666666,
+          "context_recall": 0.875,
+          "judge_coverage": 1.0,
+          "precision_at_k": 0.75,
+          "retrieval_coverage": 1.0
+        }
+      }
+    },
+    "rag_traditional_metrics": {
+      "routing_match": 0.16666666666666666,
+      "context_relevance_proxy": 0.0,
+      "faithfulness_proxy": 0.7242730886629253,
+      "answer_overlap": 0.44752737114419333,
+      "token_f1": 0.47933312350353713,
+      "bleu": 0.16530773328268636,
+      "rouge_1": 0.47933312350353713,
+      "rouge_2": 0.285816701259712
+    }
+  }
+}

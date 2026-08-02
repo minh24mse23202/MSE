@@ -87,7 +87,36 @@ npm install
 npm run dev
 ```
 
-The React app calls the FastAPI backend at `http://127.0.0.1:8000`.
+The React app calls FastAPI through the same-origin `/api` path. During local
+development, Vite proxies `/api/*` to `http://127.0.0.1:8000/*`. An explicit
+`VITE_ARAGBIZ_API_URL` remains supported for deployments that expose FastAPI
+at a separate origin.
+
+### Public demo with Microsoft Dev Tunnels
+
+Use one public tunnel for Vite and keep FastAPI private:
+
+1. Start PostgreSQL and run `alembic upgrade head`.
+2. Start FastAPI with
+   `python -m uvicorn api.main:app --reload --env-file .env`.
+3. Start `python -m aragbiz.worker` in another activated terminal.
+4. Run `npm run dev` from `frontend`.
+5. Set only port `5173` to **Public** in Dev Tunnels. Keep port `8000` private.
+6. Open `https://<tunnel>-5173.asse.devtunnels.ms/api/health` and confirm it
+   returns `{"status":"ok"}` before signing in.
+
+Do not set `VITE_ARAGBIZ_API_URL` for this workflow. In particular, remove an
+old value such as `http://127.0.0.1:8000` from the shell and from files under
+`frontend` because it overrides the same-origin default. In PowerShell:
+
+```powershell
+Remove-Item Env:VITE_ARAGBIZ_API_URL -ErrorAction SilentlyContinue
+```
+
+Public signup remains enabled. Before sharing the URL, use non-production
+provider keys, configure global and per-deployment model budgets, and do not
+share administrator credentials. Rotate JWT, administrator, encryption, and
+provider secrets after the demo.
 
 ## RAG Observability Traces
 

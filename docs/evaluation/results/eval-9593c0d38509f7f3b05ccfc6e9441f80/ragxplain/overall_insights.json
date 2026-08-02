@@ -1,0 +1,315 @@
+{
+  "analysis": {
+    "executive_summary": "The RAG system demonstrates solid answer relevancy with an average score of 0.9, indicating strong alignment with user intent. However, retrieval quality, particularly context recall (0.5 avg) and context relevancy (0.7 avg), limits the completeness and precision of the generated answers. Additionally, moderate context adherence (0.6 avg) and factuality (0.6 avg) reveal that the generator sometimes hallucinates or includes unsupported details, reducing trustworthiness. Targeted improvements in retrieval query formulation, knowledge base coverage, and generation grounding constraints are essential to elevate overall system reliability and answer correctness.",
+    "executive_summary_gist": "The system excels at addressing user intent but suffers from incomplete and sometimes inaccurate retrieval, causing hallucinations and factual errors. Enhancing retrieval precision and generation grounding will significantly improve answer completeness and trustworthiness.",
+    "insights": [
+      {
+        "title": "Enhance Retrieval Coverage and Precision to Improve Context Recall",
+        "priority": "critical",
+        "problem_detection": "The average `context_recall` score of 0.5 indicates that retrieved contexts frequently miss essential information needed for accurate answers, leading to incomplete or partially grounded responses.",
+        "problem_detection_gist": "Retrieved context often lacks key facts, causing incomplete answer grounding.",
+        "root_cause_analysis": "The retrieval component currently uses a hybrid retrieval mode with `top_k=1` and no reranker enabled, which limits the breadth and precision of retrieved passages. This narrow retrieval scope likely omits critical procedural details and platform-specific restrictions, as seen in examples where key steps like disabling auto-renewal or platform limitations are missing. Additionally, the knowledge base may lack explicit, comprehensive statements of essential facts, further reducing recall.",
+        "root_cause_analysis_gist": "Limited retrieval breadth and knowledge base gaps cause missing critical facts in context.",
+        "evidence_trace": "Metrics show moderate `context_recall` (avg 0.5) with a low minimum of 0.2, indicating frequent misses of key information. For example, the question \"can I buy a premium plan but build my website on other platforms\" had a low `context_recall` score of 0.2, missing explicit platform restrictions. Another example, \"how to transfer a business email away from Wix,\" scored 0.8 but still lacked some procedural details. These patterns confirm retrieval is not consistently capturing all necessary ground truth information.",
+        "evidence_trace_gist": "Moderate `context_recall` with frequent misses of key facts, exemplified by incomplete platform restriction retrieval.",
+        "recommended_protocol": "### 1. Increase Retrieval Breadth\n- Raise `top_k` from 1 to at least 3-5 to retrieve a wider set of candidate passages, improving the chance of capturing all essential facts.\n- Enable or integrate a reranker module to prioritize passages with higher semantic and factual relevance.\n\n### 2. Refine Query Formulation\n- Implement query expansion or reformulation techniques using question intent classification to generate more precise retrieval queries.\n- Use context-aware embeddings or domain-specific retrievers to better capture nuanced procedural details.\n\n### 3. Enrich Knowledge Base\n- Audit and expand the knowledge base to include explicit, detailed procedural steps and platform-specific constraints.\n- Incorporate structured metadata or annotations to facilitate targeted retrieval of critical facts.\n\n> Note: Increasing `top_k` and reranking will increase latency and computational cost but significantly improve recall and answer completeness.",
+        "recommended_protocol_gist": "- Increase `top_k` to 3-5 and enable reranking.\n- Apply query expansion and context-aware retrieval.\n- Enrich knowledge base with explicit procedural facts."
+      },
+      {
+        "title": "Strengthen Generation Grounding to Improve Context Adherence and Reduce Hallucinations",
+        "priority": "critical",
+        "problem_detection": "The average `context_adherence` score of 0.6 reveals that generated answers sometimes include information not supported by the retrieved context, leading to hallucinations or unwarranted extrapolations.",
+        "problem_detection_gist": "Generated answers occasionally hallucinate or add unsupported details beyond retrieved context.",
+        "root_cause_analysis": "Moderate retrieval quality combined with a generation model (GPT-4.1-mini) operating without strong grounding constraints or post-generation verification allows the model to fill gaps with assumptions or generalizations. The absence of a reranker and limited retrieval passages exacerbate this by providing insufficient or incomplete context, prompting the generator to hallucinate. Examples such as the \"can I buy a premium plan but build my website on other platforms\" question show low `context_adherence` (0.2) and factuality (0.4), with unsupported claims about plan usage.",
+        "root_cause_analysis_gist": "Insufficient retrieval context and lack of generation constraints cause hallucinations.",
+        "evidence_trace": "The `context_adherence` metric averages 0.6 with a minimum of 0.2, indicating frequent off-context content. For instance, the premium plan question's answer included unsupported details about plan applicability, scoring low on adherence and factuality. Conversely, high adherence examples closely follow retrieved passages, confirming that better grounding is achievable with improved retrieval and generation controls.",
+        "evidence_trace_gist": "Low `context_adherence` linked to hallucinations, exemplified by unsupported claims in premium plan answers.",
+        "recommended_protocol": "### 1. Implement Stronger Generation Constraints\n- Use constrained decoding techniques or prompt engineering to explicitly instruct the model to only use retrieved context.\n- Incorporate retrieval-augmented grounding prompts emphasizing citation and evidence-based answers.\n\n### 2. Add Post-Generation Verification\n- Integrate a fact-checking module comparing generated content against retrieved passages to flag or filter hallucinations.\n- Use confidence scoring or entailment models to assess answer faithfulness.\n\n### 3. Improve Retrieval Quality (Complementary)\n- As retrieval improves (per Insight 1), the generator will have richer, more precise context, naturally reducing hallucination incentives.\n\n> Note: Stronger constraints may reduce answer fluency or creativity; balance with user experience testing.",
+        "recommended_protocol_gist": "- Apply constrained decoding and grounding prompts.\n- Add post-generation fact-checking and filtering.\n- Improve retrieval to support better grounding."
+      },
+      {
+        "title": "Expand Answer Completeness to Address Edge Cases and Nuanced Scenarios",
+        "priority": "high",
+        "problem_detection": "While `answer_relevancy` is high (0.9 avg), some answers lack comprehensive coverage of multiple cases or nuanced procedures, leading to incomplete guidance in complex queries.",
+        "problem_detection_gist": "Answers sometimes omit alternative scenarios or detailed procedural steps.",
+        "root_cause_analysis": "The current generation approach prioritizes direct, concise answers but may not fully incorporate all relevant retrieved information or consider multiple user scenarios. Limited retrieval breadth (`top_k=1`) restricts available context, and generation parameters lack explicit instructions to cover edge cases or provide stepwise guidance. Examples include the email transfer question missing the step to disable auto-renewal and the premium plan question not fully clarifying platform restrictions.",
+        "root_cause_analysis_gist": "Narrow retrieval and generation focus limit answer completeness for complex queries.",
+        "evidence_trace": "`answer_relevancy` averages 0.9 with a minimum of 0.8, showing generally good but not perfect coverage. The email transfer example scored 0.8, missing some procedural details, while the premium plan question scored 1.0 but with incomplete nuance. These indicate room to improve answer breadth and depth, especially for multi-faceted questions.",
+        "evidence_trace_gist": "High `answer_relevancy` but incomplete coverage in complex procedural questions.",
+        "recommended_protocol": "### 1. Increase Retrieval Scope\n- Retrieve multiple relevant passages (`top_k` ≥ 3) to provide comprehensive context covering alternative cases.\n\n### 2. Enhance Generation Prompts\n- Modify prompts to explicitly request step-by-step instructions and coverage of alternative scenarios.\n- Use few-shot examples demonstrating thorough, multi-case answers.\n\n### 3. Implement Answer Aggregation\n- Develop a post-generation aggregation step to merge information from multiple retrieved passages into a cohesive, complete answer.\n\n> Note: Expanding answer completeness may increase response length and complexity; balance with user preferences.",
+        "recommended_protocol_gist": "- Retrieve multiple passages for broader context.\n- Use prompts requesting detailed, multi-case answers.\n- Aggregate information from multiple sources."
+      },
+      {
+        "title": "Refine Procedural Clarity and Formatting to Improve Grading Note Quality",
+        "priority": "medium",
+        "problem_detection": "The `grading_note` metric averages 0.8, indicating generally good but improvable answer structure and clarity, especially in procedural instructions.",
+        "problem_detection_gist": "Procedural answers sometimes lack explicit stepwise clarity and completeness.",
+        "root_cause_analysis": "Generation outputs occasionally omit detailed step-by-step guidance or prerequisites, possibly due to prompt design or generation parameter settings. The current response structure emphasizes concise bullet points but may not enforce procedural completeness or clarity. Examples show some answers missing explicit instructions like disabling auto-renewal or prerequisites for certain actions.",
+        "root_cause_analysis_gist": "Prompt and generation settings insufficiently enforce detailed procedural clarity.",
+        "evidence_trace": "`grading_note` scores range from 0.6 to 1.0, with moderate scores linked to incomplete procedural details. For example, the email transfer answer scored 0.6 despite good factuality, reflecting missing explicit steps. High-scoring examples provide clear, detailed instructions, confirming that improved prompt engineering can enhance clarity.",
+        "evidence_trace_gist": "Moderate `grading_note` scores reflect incomplete procedural clarity in some answers.",
+        "recommended_protocol": "### 1. Enhance Prompt Instructions\n- Update prompts to explicitly require stepwise, detailed procedural instructions with prerequisites.\n- Include examples of well-structured procedural answers in prompt context.\n\n### 2. Adjust Generation Parameters\n- Tune generation parameters (e.g., temperature, max tokens) to allow more detailed outputs without verbosity.\n\n### 3. Post-Processing Formatting\n- Implement answer post-processing to enforce consistent formatting, such as numbered steps for procedures.\n\n> Note: More detailed instructions may increase answer length; monitor user feedback for optimal balance.",
+        "recommended_protocol_gist": "- Update prompts to require detailed stepwise instructions.\n- Tune generation parameters for clarity.\n- Post-process answers for consistent procedural formatting."
+      }
+    ],
+    "strategic_conclusion": "Addressing retrieval limitations is paramount to improving overall RAG system performance, as richer and more precise context directly enhances generation faithfulness and factuality. Complementing retrieval improvements with stronger generation grounding and prompt engineering will reduce hallucinations and increase answer completeness. Finally, refining procedural clarity and formatting will elevate user comprehension and satisfaction, creating a robust, trustworthy RAG assistant tailored for complex business workflows.",
+    "configuration_targets": [
+      {
+        "diagnostic_area": "Retrieval quality",
+        "metrics": [
+          "Context Relevancy",
+          "Context Recall"
+        ],
+        "sections": [
+          "Knowledge Base",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "chunking_strategy",
+          "embedding_deployment_id",
+          "retrieval_mode",
+          "top_k",
+          "reranker_deployment_id"
+        ]
+      },
+      {
+        "diagnostic_area": "Faithfulness and grounding",
+        "metrics": [
+          "Context Adherence",
+          "Factuality"
+        ],
+        "sections": [
+          "Generator target & prompts",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "generator_deployment_id",
+          "system_prompt",
+          "predefined_prompt",
+          "citations_enabled"
+        ]
+      },
+      {
+        "diagnostic_area": "Relevance and intent",
+        "metrics": [
+          "Answer Relevancy"
+        ],
+        "sections": [
+          "Adaptive RAG",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "route_mode",
+          "classifier_deployment_id",
+          "planner_deployment_id",
+          "response_structure"
+        ]
+      },
+      {
+        "diagnostic_area": "Structure and style",
+        "metrics": [
+          "Grading Note"
+        ],
+        "sections": [
+          "General",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "response_structure",
+          "tone",
+          "humor_level",
+          "system_prompt",
+          "predefined_prompt"
+        ]
+      }
+    ]
+  },
+  "prompt": {
+    "insights": {
+      "context_relevancy": {
+        "analysis": "The average Context Relevancy score of 0.7 indicates moderate performance, suggesting that while the retrieved context is often relevant, there are notable gaps. Analysis of examples shows that high-scoring cases provide direct, specific answers closely aligned with the question, whereas lower scores stem from retrieved context that only tangentially relates or misses key aspects of the query. To improve, the retrieval component should be refined to better capture the precise intent and scope of user questions, possibly by enhancing query formulation or using more context-aware retrieval models. Additionally, filtering or re-ranking retrieved documents to prioritize those with explicit, focused relevance can help increase overall context relevancy.",
+        "metric_name": "Context Relevancy",
+        "metric_description": "How relevant retrieved context is to the question.",
+        "avg_score": 0.7,
+        "min_score": 0.4,
+        "max_score": 1.0
+      },
+      "context_adherence": {
+        "analysis": "The average Context Adherence score of 0.6 indicates moderate performance, suggesting the model sometimes includes information not strictly supported by the retrieved context. Analysis of stratified examples reveals that high-scoring answers closely follow the retrieved content without adding external assumptions, while low-scoring answers introduce unsupported details or generalizations beyond the context. To improve, the system should enhance strict grounding by refining retrieval quality to ensure relevant context and implementing stronger generation constraints or post-processing filters to prevent hallucination or unwarranted extrapolation. Focusing on tighter alignment between retrieved passages and generated text will boost faithfulness and reduce off-context content.",
+        "metric_name": "Context Adherence",
+        "metric_description": "How faithfully the answer uses only retrieved context.",
+        "avg_score": 0.6,
+        "min_score": 0.2,
+        "max_score": 1.0
+      },
+      "answer_relevancy": {
+        "analysis": "The overall Answer Relevancy metric shows high performance with an average score of 0.9, indicating that the model generally produces responses that effectively address user questions. The top-scoring examples demonstrate clear, direct answers with relevant details that help users make informed decisions. The slightly lower-scoring examples reveal some gaps in coverage, such as assumptions about specific email types and incomplete guidance on alternative scenarios. To further improve, the system could incorporate broader context handling and more comprehensive answer coverage, especially for questions involving multiple possible cases or nuanced procedures. Given the strong current performance, improvements should focus on edge cases and expanding answer completeness rather than fundamental changes.",
+        "metric_name": "Answer Relevancy",
+        "metric_description": "How well the answer addresses the question.",
+        "avg_score": 0.9,
+        "min_score": 0.8,
+        "max_score": 1.0
+      },
+      "context_recall": {
+        "analysis": "The Context Recall metric shows moderate performance with an average score of 0.5, indicating that retrieved contexts sometimes contain essential information but often miss key details. Common issues include incomplete coverage of critical facts—such as omitting specific procedural steps in email transfer or failing to explicitly state platform restrictions for Premium Plans—leading to partial or inaccurate grounding of answers. To improve, focus on enhancing retrieval precision by refining query formulation and expanding the knowledge base to include more comprehensive, explicit statements of key facts. Additionally, integrating better context filtering or reranking methods could help prioritize passages that fully address the ground truth requirements.",
+        "metric_name": "Context Recall",
+        "metric_description": "Whether retrieved context contains information needed for ground truth.",
+        "avg_score": 0.5,
+        "min_score": 0.2,
+        "max_score": 0.8
+      },
+      "factuality": {
+        "analysis": "The overall factuality metric shows moderate performance with an average score of 0.6, indicating that the system often provides generally correct answers but misses or distorts some key details. Common issues include omission of important procedural steps (e.g., disabling auto-renewal in email transfer) and presenting misleading or inaccurate claims (e.g., suggesting Wix Premium plans can be used on other platforms). To improve, focus on enhancing the retrieval of precise, critical facts from the knowledge base and refining the generation stage to better verify and align responses with ground truth, possibly by integrating stronger fact-checking or constraint mechanisms. Addressing these gaps will reduce misinformation and increase answer correctness.",
+        "metric_name": "Factuality",
+        "metric_description": "Answer correctness vs ground truth reference.",
+        "avg_score": 0.6000000000000001,
+        "min_score": 0.4,
+        "max_score": 0.8
+      },
+      "grading_note": {
+        "analysis": "The average score of 0.8 indicates moderate to strong performance in grading note generation, showing the system generally produces relevant and accurate responses. High-scoring examples demonstrate clear, detailed answers that directly address user questions with precise conditions, while moderate scores reveal issues such as incomplete procedural details and lack of step-by-step guidance. To improve, focus on enhancing the completeness and clarity of instructions in responses, especially for procedural queries, by incorporating more explicit steps and prerequisites. Overall, the system performs well but can benefit from targeted refinements to ensure thoroughness and user clarity in complex informational answers.",
+        "metric_name": "Grading Note",
+        "metric_description": "Two-stage grading note generation then scoring.",
+        "avg_score": 0.8,
+        "min_score": 0.6,
+        "max_score": 1.0
+      }
+    },
+    "examples": {
+      "example_0": {
+        "question": "how to transfer a business email away from Wix",
+        "candidate_answer": "To transfer a Google Workspace business email away from Wix:\n\n- Contact Wix Customer Care to initiate the transfer process.\n- This action will disconnect your Google Workspace business email from your Wix account.\n- Note that the transfer is irreversible; once moved to Google directly, you cannot repurchase the business email through Wix.\n\nFor assistance, reach out to Wix support as they handle the transfer procedure [S1].",
+        "gt_answer": "To transfer a business email away from Wix, ensure access to your Google Admin Console, disable the email's auto-renewal, and contact a Customer Care Expert for assistance",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.6744186046511621,
+        "answer_overlap": 0.6153846153846151,
+        "token_f1": 0.38297872340425504,
+        "bleu": 0.11329656976362601,
+        "rouge_1": 0.38297872340425504,
+        "rouge_2": 0.19565217391304301,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 0.8,
+        "context_recall_score": 0.8,
+        "factuality_score": 0.8,
+        "grading_note_score": 0.6
+      },
+      "example_1": {
+        "question": "can I buy a premium plan but build my website on other platforms",
+        "candidate_answer": "- Yes, you can purchase a Wix Premium plan but build your website on other platforms; however, Wix Premium plans and their features are designed specifically for Wix-hosted websites.\n- Premium plan benefits such as custom domains, increased bandwidth, and Wix Analytics advanced features apply only to websites hosted on Wix.\n- If your website is built on another platform, Wix Premium plans will not provide those platform-specific hosting or site management benefits [S1].",
+        "gt_answer": "Wix Premium Plans are designed to be used with websites built on the Wix platform. If you purchase a Premium Plan, it will apply to your Wix site, and you cannot use Wix Premium Plans for a site built on another platform.",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.471698113207547,
+        "answer_overlap": 0.758620689655172,
+        "token_f1": 0.521739130434782,
+        "bleu": 0.10541495762076301,
+        "rouge_1": 0.521739130434782,
+        "rouge_2": 0.176991150442477,
+        "context_relevancy_score": 0.4,
+        "context_adherence_score": 0.2,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 0.2,
+        "factuality_score": 0.4,
+        "grading_note_score": 1.0
+      }
+    },
+    "configs": {
+      "rag_configs": {
+        "run_id": "eval-9593c0d38509f7f3b05ccfc6e9441f80",
+        "name": "Adaptive with T5-small - WixQA Simulated",
+        "dataset_name": "WixQA Simulated",
+        "knowledge_base_id": "kb-d4069abadfb54ef39af3f49153145532",
+        "knowledge_base_name": "WixQA Curpus 100",
+        "chat_configuration_id": "cfg-8d6d02b430344e56a17ddb1cffca2927",
+        "chat_configuration": {
+          "id": "cfg-8d6d02b430344e56a17ddb1cffca2927",
+          "name": "Adaptive with T5-small",
+          "tone": "Professional",
+          "metadata": {
+            "top_k": 1,
+            "runtime": "model-farm",
+            "classifier": "query_classifier_t5_v2",
+            "route_mode": "adaptive",
+            "retrieval_mode": "hybrid",
+            "route_strategy": "Adaptive",
+            "welcome_message": "Welcome to Adaptive RAG Studio. Workflow assistant 2 (Adaptive with T5-small) will help you.",
+            "actual_generator": "deployment",
+            "configuration_id": "fgc8mE9Cz6tF",
+            "reranker_enabled": false,
+            "citations_enabled": true,
+            "agent_max_iterations": 5,
+            "agent_max_tool_calls": 8,
+            "retrieval_mode_label": "Hybrid",
+            "agent_timeout_seconds": 90,
+            "conversation_starters": [
+              "What are the main steps in this workflow?"
+            ],
+            "generation_parameters": {},
+            "planner_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+            "reranker_deployment_id": "",
+            "fallback_deployment_ids": [
+              "model-e7c1d1c6dfbb455e8951ec7d7d6c6e8d"
+            ],
+            "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+            "agent_public_web_enabled": false,
+            "classifier_deployment_id": "model-local-t5-classifier-v2",
+            "classifier_margin_threshold": 0,
+            "conversation_awareness_enabled": false,
+            "conversation_history_exchanges": 3,
+            "classifier_confidence_threshold": 0,
+            "conversation_history_characters": 4000
+          },
+          "description": "Default configuration for concise business workflow answers.",
+          "humor_level": 0,
+          "system_prompt": "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
+          "generator_model": "gpt-4.1-mini",
+          "citations_enabled": true,
+          "predefined_prompt": "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.",
+          "generator_provider": "openai",
+          "response_structure": "Concise answer with bullets and cited workflow context",
+          "generation_parameters": {},
+          "planner_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+          "reranker_deployment_id": "",
+          "fallback_deployment_ids": [
+            "model-e7c1d1c6dfbb455e8951ec7d7d6c6e8d"
+          ],
+          "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+          "agent_public_web_enabled": false,
+          "conversation_awareness_enabled": false
+        },
+        "retrieval_mode": "hybrid",
+        "top_k": 1,
+        "route_distribution": {
+          "l2_simple_rag": 2
+        },
+        "wixqa_metrics": {
+          "mrr": 0.5,
+          "bleu": 0.10078640395161603,
+          "rouge_1": 0.45235892691951896,
+          "rouge_2": 0.1863216621777607,
+          "hit_at_k": 0.5,
+          "token_f1": 0.45235892691951896,
+          "ndcg_at_k": 0.5,
+          "factuality": 0.45,
+          "recall_at_k": 0.5,
+          "context_recall": 0.45,
+          "judge_coverage": 1.0,
+          "precision_at_k": 0.5,
+          "retrieval_coverage": 1.0
+        }
+      }
+    },
+    "rag_traditional_metrics": {
+      "routing_match": 1.0,
+      "context_relevance_proxy": 0.0,
+      "faithfulness_proxy": 0.5730583589293545,
+      "answer_overlap": 0.6870026525198936,
+      "token_f1": 0.4523589269195185,
+      "bleu": 0.10935576369219452,
+      "rouge_1": 0.4523589269195185,
+      "rouge_2": 0.18632166217776003
+    }
+  }
+}

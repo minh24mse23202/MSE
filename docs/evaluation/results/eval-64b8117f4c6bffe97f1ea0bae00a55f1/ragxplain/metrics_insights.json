@@ -1,0 +1,602 @@
+{
+  "context_relevancy": {
+    "analysis": "The Context Relevancy metric shows a high average score of 0.93, indicating that the retrieved context is generally very relevant to user questions. All stratified examples scored a perfect 1.0, demonstrating consistent, complete, and directly applicable context without split or missing information. Given this strong performance, the system effectively retrieves precise and comprehensive context, leaving limited room for improvement. Future efforts can focus on maintaining this quality as the knowledge base grows or diversifies rather than major changes.",
+    "metric_name": "Context Relevancy",
+    "metric_description": "How relevant retrieved context is to the question.",
+    "avg_score": 0.9333333333333332,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The context directly explains how to review reports about members from the site's dashboard, including steps to access the reports, what information is shown, and actions that can be taken. The information is complete and not split, fully addressing the user query.",
+        "question": "How can I review reports about members from my site's dashboard?",
+        "candidate_answer": "To review reports about members from your site's dashboard:\n\n- Go to **Site Members** in your site's dashboard.\n- Click the **Reported** tab to see members who have been reported.\n- Click the **More Actions** icon next to the relevant member.\n- Choose **Review Reports** to see details such as the reporting member, date, and reason for the report.\n- Decide whether to dismiss the report or block the member from your Members Area.\n\nThis process helps maintain a safe environment by allowing you to manage reports effectively [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The context directly addresses the user query by explaining how to upload an image to the Wix Logo Maker, including steps like clicking the Upload icon and selecting an image from the Media Manager. It also mentions customization options such as adjusting size, position, shadows, and using the Wix Photo Studio, providing a complete and relevant answer without any split content.",
+        "question": "How can I upload my own image to the Wix Logo Maker and customize it?",
+        "candidate_answer": "To upload and customize your own image in the Wix Logo Maker:\n\n- Upload your image via the Media Manager by clicking the Upload icon on the left of the logo editor, then select Upload Image. You can upload from your computer or connect to social networks like Facebook, Instagram, or Google Drive.\n- Customize your image’s size, position, and shadows directly within the Logo Maker.\n- For advanced edits, use the Wix Photo Studio without leaving the Logo Maker interface.\n\nThis process allows you to create a unique logo with your own images efficiently [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The context directly addresses the user query by explaining how to add a Profile page to the Members Area using the Wix Editor. It provides step-by-step instructions and relevant tips, fully answering the question without any split content.",
+        "question": "How can I add a Profile page to my Members Area using the Wix Editor?",
+        "candidate_answer": "To add a Profile page to your Members Area using the Wix Editor, follow these steps:\n\n- Open the Wix Editor and go to the Pages and Menu section on the left side.\n- Click on Members Area.\n- Select Member Page.\n- Click on the Member Menu element, then choose Manage and Navigate.\n- Click + Add More Tabs.\n- Click + Add Tab under Profile to add the Profile page.\n\nThis allows members to customize their profiles with descriptions, images, videos, and more [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The context directly answers the user query by clearly stating that uploading your own fonts to ADI is currently not possible and provides an alternative method via the Editor. The information is complete and not split, fully addressing the question.",
+        "question": "Can I upload my own fonts to ADI?",
+        "candidate_answer": "- You cannot upload your own fonts directly to ADI.\n- To upload your own fonts, you need to use the Editor and follow the specific instructions provided there [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The context directly addresses the user query by stating that Wix Events is currently not integrated with Wix Table Reservations (part of Wix Restaurants), which means customers cannot see events and buy tickets when booking a table. This fully answers the query with clear and complete information.",
+        "question": "Can I integrate Wix Events with Wix Restaurants to allow customers to see events and buy tickets when they book a table?",
+        "candidate_answer": "Currently, Wix Events is not integrated with Wix Table Reservations in Wix Restaurants. Therefore, customers cannot see events or buy tickets directly when booking a table. The platform team is working on improvements, and user feedback is appreciated for future updates [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The context directly addresses the user query by stating that archived programs cannot be restored, but provides a clear alternative method to duplicate and publish a new draft of the archived program. The information is complete and not split, fully answering the query.",
+        "question": "How can I restore an archived program in Wix Online Programs?",
+        "candidate_answer": "You cannot directly restore an archived program in Wix Online Programs. Instead, you need to duplicate the archived program and publish the new draft. The steps are:\n\n- Go to Online Programs in your site's dashboard.\n- Click the Archived tab.\n- Click the More Actions icon next to the archived program.\n- Select Duplicate.\n- The duplicated program will appear in the Drafts tab.\n- From the Drafts tab, use the More Actions icon to publish or edit the new program.\n\nThis process effectively recreates the archived program as a new draft since restoration is not supported [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The context directly addresses how to change the main color in the site's color palette using ADI, providing step-by-step instructions and relevant details without any split content.",
+        "question": "How can I change the main color in my site's color palette using ADI?",
+        "candidate_answer": "To change the main color in your site's color palette using ADI:\n\n- Click **Design** on the top bar inside ADI.\n- Select **Colors**.\n- Click the **Design icon** in the Main Color box at the top.\n- This will allow you to change the main color and generate a new list of recommended color palettes.\n\nThis process updates your site's main color and suggests complementary palettes automatically [S1]."
+      }
+    ]
+  },
+  "context_adherence": {
+    "analysis": "The Context Adherence metric shows a high average score of 0.93, indicating that the model consistently generates answers strictly based on the retrieved context without introducing external or unsupported information. All stratified examples scored a perfect 1.0, demonstrating strong fidelity to source content across diverse queries. Given this strong performance, the system exhibits excellent context grounding with minimal risk of hallucination, so only routine monitoring is needed to maintain this level. Further improvements would likely yield marginal gains and are not a priority compared to other metrics with lower scores.",
+    "metric_name": "Context Adherence",
+    "metric_description": "How faithfully the answer uses only retrieved context.",
+    "avg_score": 0.9333333333333332,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately summarizes the steps to review reports from the site's dashboard as described in the context, including navigating to Site Members, clicking the Reported tab, using the More Actions icon, and reviewing report details. It also correctly mentions the options to dismiss the report or block the member, all of which are explicitly stated in the context. No external information or assumptions are introduced.",
+        "question": "How can I review reports about members from my site's dashboard?",
+        "candidate_answer": "To review reports about members from your site's dashboard:\n\n- Go to **Site Members** in your site's dashboard.\n- Click the **Reported** tab to see members who have been reported.\n- Click the **More Actions** icon next to the relevant member.\n- Choose **Review Reports** to see details such as the reporting member, date, and reason for the report.\n- Decide whether to dismiss the report or block the member from your Members Area.\n\nThis process helps maintain a safe environment by allowing you to manage reports effectively [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately summarizes the steps and features described in the context for uploading and customizing images in the Wix Logo Maker. All details, including uploading via Media Manager, options for image sources, customization features, and use of Wix Photo Studio, are directly supported by the context without introducing any external information or assumptions.",
+        "question": "How can I upload my own image to the Wix Logo Maker and customize it?",
+        "candidate_answer": "To upload and customize your own image in the Wix Logo Maker:\n\n- Upload your image via the Media Manager by clicking the Upload icon on the left of the logo editor, then select Upload Image. You can upload from your computer or connect to social networks like Facebook, Instagram, or Google Drive.\n- Customize your image’s size, position, and shadows directly within the Logo Maker.\n- For advanced edits, use the Wix Photo Studio without leaving the Logo Maker interface.\n\nThis process allows you to create a unique logo with your own images efficiently [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately and fully reflects the steps and information provided in the context without adding any external information or assumptions. It strictly follows the instructions given in the context for adding a Profile page to the Members Area and mentions the customization options exactly as stated.",
+        "question": "How can I add a Profile page to my Members Area using the Wix Editor?",
+        "candidate_answer": "To add a Profile page to your Members Area using the Wix Editor, follow these steps:\n\n- Open the Wix Editor and go to the Pages and Menu section on the left side.\n- Click on Members Area.\n- Select Member Page.\n- Click on the Member Menu element, then choose Manage and Navigate.\n- Click + Add More Tabs.\n- Click + Add Tab under Profile to add the Profile page.\n\nThis allows members to customize their profiles with descriptions, images, videos, and more [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately reflects the information in the context without adding any external information or assumptions. It states that you cannot upload fonts directly to ADI and that you need to use the Editor with instructions, which is fully supported by the context.",
+        "question": "Can I upload my own fonts to ADI?",
+        "candidate_answer": "- You cannot upload your own fonts directly to ADI.\n- To upload your own fonts, you need to use the Editor and follow the specific instructions provided there [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately reflects the information in the context without adding any external information. It states that Wix Events is not integrated with Wix Table Reservations, that customers cannot see events or buy tickets when booking a table, and that improvements are being worked on with user feedback appreciated. All these points are directly supported by the context.",
+        "question": "Can I integrate Wix Events with Wix Restaurants to allow customers to see events and buy tickets when they book a table?",
+        "candidate_answer": "Currently, Wix Events is not integrated with Wix Table Reservations in Wix Restaurants. Therefore, customers cannot see events or buy tickets directly when booking a table. The platform team is working on improvements, and user feedback is appreciated for future updates [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately reflects the information provided in the context about not being able to restore an archived program directly, and instead duplicating it and publishing the new draft. All steps and details are strictly derived from the context without introducing any external information or assumptions.",
+        "question": "How can I restore an archived program in Wix Online Programs?",
+        "candidate_answer": "You cannot directly restore an archived program in Wix Online Programs. Instead, you need to duplicate the archived program and publish the new draft. The steps are:\n\n- Go to Online Programs in your site's dashboard.\n- Click the Archived tab.\n- Click the More Actions icon next to the archived program.\n- Select Duplicate.\n- The duplicated program will appear in the Drafts tab.\n- From the Drafts tab, use the More Actions icon to publish or edit the new program.\n\nThis process effectively recreates the archived program as a new draft since restoration is not supported [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response strictly follows the instructions given in the context for changing the main color in the palette using ADI. All steps and details are directly derived from the context without adding any external information or assumptions.",
+        "question": "How can I change the main color in my site's color palette using ADI?",
+        "candidate_answer": "To change the main color in your site's color palette using ADI:\n\n- Click **Design** on the top bar inside ADI.\n- Select **Colors**.\n- Click the **Design icon** in the Main Color box at the top.\n- This will allow you to change the main color and generate a new list of recommended color palettes.\n\nThis process updates your site's main color and suggests complementary palettes automatically [S1]."
+      }
+    ]
+  },
+  "answer_relevancy": {
+    "analysis": "The Answer Relevancy metric shows a very high average score of 0.98, indicating that the RAG system consistently produces answers that directly and comprehensively address user questions. The stratified examples confirm this strong performance, with most responses providing clear, step-by-step instructions or precise explanations fully aligned with user intent. Minor gaps appear only in a few moderate-score cases where answers lack detailed instructions or links, suggesting room for slight improvements in completeness and specificity. Overall, the system demonstrates excellent generation quality with limited need for improvement beyond ensuring all answers include thorough actionable details and references when applicable.",
+    "metric_name": "Answer Relevancy",
+    "metric_description": "How well the answer addresses the question.",
+    "avg_score": 0.9833333333333334,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The AI response directly addresses the user's question by providing a clear, step-by-step guide on how to review reports about members from the site's dashboard. It covers navigation, accessing reports, and actions to take, fully meeting the user's needs.",
+        "question": "How can I review reports about members from my site's dashboard?",
+        "candidate_answer": "To review reports about members from your site's dashboard:\n\n- Go to **Site Members** in your site's dashboard.\n- Click the **Reported** tab to see members who have been reported.\n- Click the **More Actions** icon next to the relevant member.\n- Choose **Review Reports** to see details such as the reporting member, date, and reason for the report.\n- Decide whether to dismiss the report or block the member from your Members Area.\n\nThis process helps maintain a safe environment by allowing you to manage reports effectively [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The response directly addresses the user's question by explaining how to upload an image to the Wix Logo Maker and customize it, including details about uploading methods and customization options, fully meeting the user's needs.",
+        "question": "How can I upload my own image to the Wix Logo Maker and customize it?",
+        "candidate_answer": "To upload and customize your own image in the Wix Logo Maker:\n\n- Upload your image via the Media Manager by clicking the Upload icon on the left of the logo editor, then select Upload Image. You can upload from your computer or connect to social networks like Facebook, Instagram, or Google Drive.\n- Customize your image’s size, position, and shadows directly within the Logo Maker.\n- For advanced edits, use the Wix Photo Studio without leaving the Logo Maker interface.\n\nThis process allows you to create a unique logo with your own images efficiently [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The response directly addresses the user's question by providing clear, step-by-step instructions on how to add a Profile page to the Members Area using the Wix Editor. It covers the necessary navigation and actions within the Wix Editor, fully meeting the user's needs.",
+        "question": "How can I add a Profile page to my Members Area using the Wix Editor?",
+        "candidate_answer": "To add a Profile page to your Members Area using the Wix Editor, follow these steps:\n\n- Open the Wix Editor and go to the Pages and Menu section on the left side.\n- Click on Members Area.\n- Select Member Page.\n- Click on the Member Menu element, then choose Manage and Navigate.\n- Click + Add More Tabs.\n- Click + Add Tab under Profile to add the Profile page.\n\nThis allows members to customize their profiles with descriptions, images, videos, and more [S1]."
+      },
+      {
+        "score": 0.8,
+        "explanation": "The response addresses the user's question by clarifying that fonts cannot be uploaded directly to ADI and provides an alternative method via the Editor. However, it lacks detailed instructions or a direct link, which could have made it fully comprehensive.",
+        "question": "Can I upload my own fonts to ADI?",
+        "candidate_answer": "- You cannot upload your own fonts directly to ADI.\n- To upload your own fonts, you need to use the Editor and follow the specific instructions provided there [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response directly addresses the user's question by confirming that Wix Events is not integrated with Wix Restaurants for table bookings, explaining the current limitation, and mentioning ongoing improvements. It fully answers the user's query about the integration and ticket purchasing capability.",
+        "question": "Can I integrate Wix Events with Wix Restaurants to allow customers to see events and buy tickets when they book a table?",
+        "candidate_answer": "Currently, Wix Events is not integrated with Wix Table Reservations in Wix Restaurants. Therefore, customers cannot see events or buy tickets directly when booking a table. The platform team is working on improvements, and user feedback is appreciated for future updates [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response directly addresses the user's question by explaining that restoring an archived program is not possible, and provides a clear, step-by-step alternative method to achieve the same goal by duplicating and publishing the program. This fully satisfies the user's intent.",
+        "question": "How can I restore an archived program in Wix Online Programs?",
+        "candidate_answer": "You cannot directly restore an archived program in Wix Online Programs. Instead, you need to duplicate the archived program and publish the new draft. The steps are:\n\n- Go to Online Programs in your site's dashboard.\n- Click the Archived tab.\n- Click the More Actions icon next to the archived program.\n- Select Duplicate.\n- The duplicated program will appear in the Drafts tab.\n- From the Drafts tab, use the More Actions icon to publish or edit the new program.\n\nThis process effectively recreates the archived program as a new draft since restoration is not supported [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response directly addresses the user's question by providing clear, step-by-step instructions on how to change the main color in the site's color palette using ADI, fully meeting the user's needs.",
+        "question": "How can I change the main color in my site's color palette using ADI?",
+        "candidate_answer": "To change the main color in your site's color palette using ADI:\n\n- Click **Design** on the top bar inside ADI.\n- Select **Colors**.\n- Click the **Design icon** in the Main Color box at the top.\n- This will allow you to change the main color and generate a new list of recommended color palettes.\n\nThis process updates your site's main color and suggests complementary palettes automatically [S1]."
+      }
+    ]
+  },
+  "grading_note": {
+    "analysis": "The overall metric performance is high with an average score of 0.93, indicating that the grading note generation and scoring process is generally effective and meets criteria well. Most examples show clear, logically ordered, and complete step-by-step instructions that fully satisfy grading requirements. The few moderate scores (0.8) reveal minor gaps such as missing detailed explanations, prerequisites, or contextual notes that could enhance completeness and user understanding. To further improve, focus on enriching responses with brief rationale for each step, explicit prerequisites, and any relevant limitations or alternative options to ensure thoroughness. Given the strong performance, only targeted refinements are needed rather than broad changes.",
+    "metric_name": "Grading Note",
+    "metric_description": "Two-stage grading note generation then scoring.",
+    "avg_score": 0.9333333333333332,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The response provides a clear, step-by-step process for uploading and customizing an image in the Wix Logo Maker. It logically orders the instructions starting from uploading via the Media Manager, then customizing size, position, and shadows, and finally mentions advanced edits with Wix Photo Studio. The instructions are easy to follow and fully satisfy the grading note criteria.",
+        "question": "How can I upload my own image to the Wix Logo Maker and customize it?",
+        "candidate_answer": "To upload and customize your own image in the Wix Logo Maker:\n\n- Upload your image via the Media Manager by clicking the Upload icon on the left of the logo editor, then select Upload Image. You can upload from your computer or connect to social networks like Facebook, Instagram, or Google Drive.\n- Customize your image’s size, position, and shadows directly within the Logo Maker.\n- For advanced edits, use the Wix Photo Studio without leaving the Logo Maker interface.\n\nThis process allows you to create a unique logo with your own images efficiently [S1]."
+      },
+      {
+        "score": 0.8,
+        "explanation": "The response clearly addresses the integration possibility by stating that Wix Events is not currently integrated with Wix Restaurants' table reservations, directly answering the user's question. It also mentions that the platform team is working on improvements, which provides some context about future possibilities. However, it lacks detailed steps or guidance on any workaround or alternative methods, which would have made the explanation more structured and complete as per the grading note criteria.",
+        "question": "Can I integrate Wix Events with Wix Restaurants to allow customers to see events and buy tickets when they book a table?",
+        "candidate_answer": "Currently, Wix Events is not integrated with Wix Table Reservations in Wix Restaurants. Therefore, customers cannot see events or buy tickets directly when booking a table. The platform team is working on improvements, and user feedback is appreciated for future updates [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The response clearly outlines a step-by-step procedure to restore an archived program by duplicating it and publishing the new draft, which is the correct method since direct restoration is not supported. The instructions are logically ordered and easy to follow. It also implicitly includes the prerequisite that direct restoration is not possible, explaining the alternative approach. Therefore, it fully satisfies the grading note criteria.",
+        "question": "How can I restore an archived program in Wix Online Programs?",
+        "candidate_answer": "You cannot directly restore an archived program in Wix Online Programs. Instead, you need to duplicate the archived program and publish the new draft. The steps are:\n\n- Go to Online Programs in your site's dashboard.\n- Click the Archived tab.\n- Click the More Actions icon next to the archived program.\n- Select Duplicate.\n- The duplicated program will appear in the Drafts tab.\n- From the Drafts tab, use the More Actions icon to publish or edit the new program.\n\nThis process effectively recreates the archived program as a new draft since restoration is not supported [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The response clearly states that connecting properties between different widgets in Wix Blocks is not currently supported and provides a concise explanation that this feature is under consideration for future updates. This fully satisfies the grading note criteria.",
+        "question": "Can I connect properties between different widgets in Wix Blocks?",
+        "candidate_answer": "- Currently, Wix Blocks only supports connecting properties within a single widget.\n- Connecting properties between different widgets is not supported yet but is a feature under consideration for future updates to enable seamless data exchange and event triggering across the app.\n\n[S1]"
+      },
+      {
+        "score": 0.8,
+        "explanation": "The response provides a clear, step-by-step process that is logically ordered and easy to follow, covering key navigation points within the Wix Editor relevant to adding a Profile page in the Members Area. However, it could be improved by briefly explaining what each step accomplishes or by including any necessary settings or configurations after adding the tab to ensure completeness.",
+        "question": "How can I add a Profile page to my Members Area using the Wix Editor?",
+        "candidate_answer": "To add a Profile page to your Members Area using the Wix Editor, follow these steps:\n\n- Open the Wix Editor and go to the Pages and Menu section on the left side.\n- Click on Members Area.\n- Select Member Page.\n- Click on the Member Menu element, then choose Manage and Navigate.\n- Click + Add More Tabs.\n- Click + Add Tab under Profile to add the Profile page.\n\nThis allows members to customize their profiles with descriptions, images, videos, and more [S1]."
+      },
+      {
+        "score": 0.8,
+        "explanation": "The response provides a clear, step-by-step procedure for uploading a document using the Wix Editor, covering the main actions a user needs to take. It also implicitly mentions necessary tools within the Wix platform, such as the 'Add' button and options for adding documents or files. However, it lacks explicit mention of any prerequisites or detailed notes on supported file types or limitations, which were part of the grading note criteria. The inclusion of a disclaimer about the context and an offer for further help is a positive aspect but does not fully compensate for the missing prerequisites information.",
+        "question": "How can I upload a document to my Wix site using the Wix Editor?",
+        "candidate_answer": "To upload a document to your Wix site using the Wix Editor, follow these steps:\n\n- Open the Wix Editor and go to the page where you want to add the document.\n- Use the \"Add\" (+) button, then select \"Document\" or \"File\" from the options (often under \"More\" or \"Embed\").\n- Upload your document file (PDF, Word, etc.) from your computer.\n- Once uploaded, you can add a download button or link that visitors can click to access the document.\n\nNote: The retrieved context specifically addresses image uploads and logo customization but does not detail document uploads in Wix Editor, so this answer is based on standard Wix Editor functionality and may vary slightly depending on your site setup [S1].\n\nIf you need detailed steps or options for file types, please let me know!"
+      },
+      {
+        "score": 1.0,
+        "explanation": "The response clearly states the refund policy for the Wix Logo Maker logo files and the Logo + Website plan, specifying that logo files are non-refundable even if the plan is canceled within 14 days. It also mentions the refund eligibility for the site subscription portion, the revocation of discounts on logo files, and conditions where no refund is issued. All relevant conditions and timeframes are addressed, fully satisfying the grading note criteria.",
+        "question": "Can I get a refund for a logo purchased from Wix Logo Maker if I cancel my Logo + Website plan within 14 days?",
+        "candidate_answer": "No, you cannot get a refund for the logo files if you cancel your Logo + Website plan within 14 days. You are only entitled to a refund for the site subscription portion. Additionally, any discount applied to the logo files will be revoked and deducted from your subscription refund. In some cases where the logo price exceeds the plan price, no refund will be issued at all [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The response provides a clear, step-by-step procedure to change the main color in the site's color palette using ADI. The instructions are logically ordered and easy to follow, fully satisfying the grading note criteria.",
+        "question": "How can I change the main color in my site's color palette using ADI?",
+        "candidate_answer": "To change the main color in your site's color palette using ADI:\n\n- Click **Design** on the top bar inside ADI.\n- Select **Colors**.\n- Click the **Design icon** in the Main Color box at the top.\n- This will allow you to change the main color and generate a new list of recommended color palettes.\n\nThis process updates your site's main color and suggests complementary palettes automatically [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The response provides a clear, step-by-step process to access the Orders tab in Wix, starting from the site dashboard and including navigation through the Sales section. It logically orders the steps and mentions managing subscription orders within the Orders tab, including how to view and update subscription-specific information. The instructions are easy to follow and cover necessary navigation details, fully satisfying the grading note criteria.",
+        "question": "How can I access the Orders tab in Wix to manage subscription orders?",
+        "candidate_answer": "To access the Orders tab in Wix to manage subscription orders:\n\n- Go to your site's dashboard.\n- Click on **Sales**.\n- Select the **Orders** tab.\n\nIn this tab, you can manage subscription orders just like one-time orders, including fulfilling orders, adding tracking numbers, or canceling them. Subscription details are available on the order page, where you can also click **View Subscription** to update subscription-specific information such as the address [S1]."
+      },
+      {
+        "score": 0.8,
+        "explanation": "The response provides a clear, step-by-step process for adding and configuring a range slider within a CMS, including setup and integration steps. It is logically structured and guides the user through implementation effectively. However, it could be improved by including more context about where to find the range slider element initially or any prerequisites, which would make the guidance more comprehensive.",
+        "question": "How can I add and set up a range slider in my CMS to filter content by a number value?",
+        "candidate_answer": "To add and set up a range slider in your CMS to filter content by a number value, follow these steps:\n\n- Click the **Connect to CMS** icon on the range slider element.\n- In the **Connect Range Slider** panel, select **Filter content**.\n- Choose the dataset connected to the elements you want to filter (e.g., repeater, gallery, table) from the **Choose a dataset** drop-down.\n- From the **Filter content by** drop-down, select the number field that visitors will use for filtering.\n- If the number field does not exist, select **Add new field**, enter the field name, and click **Add**. You can then add content to this field in your CMS collection.\n- Set the filtering condition by selecting from the **Condition** drop-down:\n  - **Between**: shows items with values between the range slider handles.\n  - **Outside of**: shows items with values outside the range slider handles.\n\nThis setup allows visitors to filter content dynamically based on the number value range they select with the slider [S1]."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The response directly answers the user's question with a clear 'no' and provides a brief explanation on how to upload fonts using the Editor, aligning perfectly with the grading note criteria.",
+        "question": "Can I upload my own fonts to ADI?",
+        "candidate_answer": "- You cannot upload your own fonts directly to ADI.\n- To upload your own fonts, you need to use the Editor and follow the specific instructions provided there [S1]."
+      }
+    ]
+  },
+  "factuality": {
+    "analysis": "The overall factuality metric shows a strong average score of 0.83, indicating generally accurate and correct answers compared to ground truth references. Most high-scoring examples demonstrate comprehensive and precise responses that cover essential steps and key details, though some omit minor specifics or additional helpful notes. Moderate-scoring cases commonly miss finer-grained instructions, exact UI element names/icons, or complete step sequences, which can reduce completeness and user clarity. To improve, focus on enhancing retrieval and integration of detailed procedural content, including exact UI labels and optional tips, and refining prompt engineering to encourage fuller, step-by-step answers. Since the metric is already high, incremental gains can be achieved by targeting these minor omissions and ensuring the generative model better leverages retrieved context for completeness without sacrificing conciseness.",
+    "metric_name": "Factuality",
+    "metric_description": "Answer correctness vs ground truth reference.",
+    "avg_score": 0.8333333333333334,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately conveys that archived programs cannot be restored directly and must be duplicated and published as a new draft. It includes all essential steps: accessing the Online Programs dashboard, navigating to the Archived tab, duplicating the program, and then publishing or editing the duplicate from the Drafts tab. Although the AI response is more concise and omits some minor details like the exact icons and links, it provides a complete and correct solution to the user's query.",
+        "question": "How can I restore an archived program in Wix Online Programs?",
+        "candidate_answer": "You cannot directly restore an archived program in Wix Online Programs. Instead, you need to duplicate the archived program and publish the new draft. The steps are:\n\n- Go to Online Programs in your site's dashboard.\n- Click the Archived tab.\n- Click the More Actions icon next to the archived program.\n- Select Duplicate.\n- The duplicated program will appear in the Drafts tab.\n- From the Drafts tab, use the More Actions icon to publish or edit the new program.\n\nThis process effectively recreates the archived program as a new draft since restoration is not supported [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.6296296296296291,
+        "answer_overlap": 0.304761904761904,
+        "token_f1": 0.44217687074829903,
+        "bleu": 0.102425640319022,
+        "rouge_1": 0.44217687074829903,
+        "rouge_2": 0.23972602739726,
+        "gt_answer": "Archived programs cannot be restored. However, you can duplicate the archived program and publish the new draft. \n\n**To duplicate an archived program:**\n1. [Go to Online Programs](https://www.wix.com/my-account/site-selector/?buttonText=Manage%20Online%20Programs&title=Select%20a%20Site&autoSelectOnSingleSite=true&actionUrl=https://www.wix.com/dashboard/%7B%7BmetaSiteId%7D%7D/challenges/list) in your site's dashboard.\n2. Click the **Archived** tab.\n3. Click the More Actions icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/8696077d-830a-4b1e-bd86-9df98f89994a/2020/01/26/b3736435-0d71-4f7d-89d4-6c2cc9a3259c/ede58fab-ed86-4013-9da2-512fe658aef6.png) next to the relevant program.\n4. Click **Duplicate**. \n\n**Tip:** The new duplicate program is in your **Drafts** tab.\n5. Click the **Drafts** tab.\n6. Click the More Actions icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/8696077d-830a-4b1e-bd86-9df98f89994a/2020/01/26/b3736435-0d71-4f7d-89d4-6c2cc9a3259c/ede58fab-ed86-4013-9da2-512fe658aef6.png) next to the duplicate program.\n7. Choose to do one of the following:\n   1. **Publish:** Click **Publish** to set your program live.\n   2. **Edit Settings:** [Update or change your program settings](https://support.wix.com/en/article/online-programs-managing-your-programs)."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately states that Wix Blocks currently only supports connecting properties within a single widget and that connecting properties between different widgets is not yet supported but is a planned feature. This matches the essential information in the ground truth answer, providing a complete and correct solution to the user's query.",
+        "question": "Can I connect properties between different widgets in Wix Blocks?",
+        "candidate_answer": "- Currently, Wix Blocks only supports connecting properties within a single widget.\n- Connecting properties between different widgets is not supported yet but is a feature under consideration for future updates to enable seamless data exchange and event triggering across the app.\n\n[S1]",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.648648648648648,
+        "answer_overlap": 0.55,
+        "token_f1": 0.522727272727272,
+        "bleu": 0.170033856260894,
+        "rouge_1": 0.522727272727272,
+        "rouge_2": 0.255813953488372,
+        "gt_answer": "Currently, Wix Blocks properties only connect elements within a single widget. This feature would allow you to create more cohesive and interactive experiences by connecting widget properties to app-level properties; enabling seamless data exchange between different widgets and allowing events to be triggered across the app."
+      },
+      {
+        "score": 0.8,
+        "explanation": "The AI response includes most essential steps from the GT answer: clicking Design, selecting Colors, and clicking the Design icon in the Main Color box. It also mentions changing the main color and generating recommended palettes, which aligns with the GT's mention of choosing suggested colors or adding a custom color. However, it omits the specific detail about the Add icon for custom colors and the exact icons shown in the GT answer. These minor omissions do not significantly impact the user's ability to change the main color, so the response is a strong match but not fully complete.",
+        "question": "How can I change the main color in my site's color palette using ADI?",
+        "candidate_answer": "To change the main color in your site's color palette using ADI:\n\n- Click **Design** on the top bar inside ADI.\n- Select **Colors**.\n- Click the **Design icon** in the Main Color box at the top.\n- This will allow you to change the main color and generate a new list of recommended color palettes.\n\nThis process updates your site's main color and suggests complementary palettes automatically [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.8048780487804871,
+        "answer_overlap": 0.32835820895522305,
+        "token_f1": 0.42944785276073605,
+        "bleu": 0.22600063607146803,
+        "rouge_1": 0.42944785276073605,
+        "rouge_2": 0.29813664596273204,
+        "gt_answer": "To change the main color in your palette:\n\n1. Click **Design** on the top bar inside ADI.\n2. Select **Colors**.\n3. Click the Design icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/2017/01/04/9faf2831-3a10-405e-bf82-abdd3c3db13e.jpg) in the **Main Color** box at the top.\n4. Choose one of the suggested colors, or click the Add icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/d6b40156-9694-4cfe-9209-54815ef9d6dc/2022/02/24/0415e843-44e7-49e8-83ae-a3c567bb6483/9bda7b85-add0-4678-9f54-254a3a163b20.png) to choose a custom color."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response includes all essential steps to access the Orders tab in Wix and manage subscription orders, matching the ground truth answer. It correctly mentions going to the site's dashboard, clicking Sales, selecting Orders, and managing subscription orders similarly to one-time orders, including viewing and updating subscription details. The response is complete and accurate.",
+        "question": "How can I access the Orders tab in Wix to manage subscription orders?",
+        "candidate_answer": "To access the Orders tab in Wix to manage subscription orders:\n\n- Go to your site's dashboard.\n- Click on **Sales**.\n- Select the **Orders** tab.\n\nIn this tab, you can manage subscription orders just like one-time orders, including fulfilling orders, adding tracking numbers, or canceling them. Subscription details are available on the order page, where you can also click **View Subscription** to update subscription-specific information such as the address [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.645833333333333,
+        "answer_overlap": 0.4,
+        "token_f1": 0.5,
+        "bleu": 0.128971636312743,
+        "rouge_1": 0.5,
+        "rouge_2": 0.25742574257425704,
+        "gt_answer": "To access the Orders tab in Wix and manage your subscription orders, follow these steps:\n\n1. [Go to your site's dashboard](https://www.wix.com/my-account/site-selector/?buttonText=Go%20to%20Dashboard&title=Select%20a%20Site&autoSelectOnSingleSite=true&actionUrl=https://www.wix.com/dashboard/{{metaSiteId}}/home/).\n2. Click **Sales**.\n3. Select the **Orders** tab.\n\nOnce you are in the Orders tab, you can perform all the actions on a subscription order (fulfill the order, add a tracking number, cancel it, etc.) just as you would a one-time order. Information about the subscription appears on the order page. Click **View Subscription** in the order to manage the subscription, such as updating the address. Learn more about [managing a product subscription](https://support.wix.com/en/article/wix-stores-managing-product-subscriptions)."
+      },
+      {
+        "score": 0.4,
+        "explanation": "The AI response provides a general approach to uploading documents in Wix Editor but misses the specific steps from the GT answer, such as using the Media icon and Upload Media icon. It also introduces the 'Add' (+) button and options like 'Document' or 'File,' which are not mentioned in the GT answer. The AI notes the lack of specific context but does not provide the precise method detailed in the GT answer, resulting in limited match and missing essential elements for a complete solution.",
+        "question": "How can I upload a document to my Wix site using the Wix Editor?",
+        "candidate_answer": "To upload a document to your Wix site using the Wix Editor, follow these steps:\n\n- Open the Wix Editor and go to the page where you want to add the document.\n- Use the \"Add\" (+) button, then select \"Document\" or \"File\" from the options (often under \"More\" or \"Embed\").\n- Upload your document file (PDF, Word, etc.) from your computer.\n- Once uploaded, you can add a download button or link that visitors can click to access the document.\n\nNote: The retrieved context specifically addresses image uploads and logo customization but does not detail document uploads in Wix Editor, so this answer is based on standard Wix Editor functionality and may vary slightly depending on your site setup [S1].\n\nIf you need detailed steps or options for file types, please let me know!",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.409638554216867,
+        "answer_overlap": 0.38356164383561603,
+        "token_f1": 0.421875,
+        "bleu": 0.17296514462984203,
+        "rouge_1": 0.421875,
+        "rouge_2": 0.165354330708661,
+        "gt_answer": "To upload a document to your Wix site using the Wix Editor, follow these steps:\n\n1. Click the **Media** icon ![](https://lh4.googleusercontent.com/BXNb33YHdV1YVOl6x53HWxYlbCJjbQYPUNQhfeBRMZ3pbrDcFMXRtiGg_fi4nL40hqEfSQdWNag99l1MKxbPQaelz8jR59OMPmorRRF9Xapk6K__y-zhuAOjPcc_wS6W_fy44aeY) on the left side of the editor.\n2. Click the **Upload Media** icon ![](https://lh3.googleusercontent.com/G_5iGn3FqIhWY2HCdwNmDOmdMpHFUsk38-ywwhmW1mgMh83q2N397YR7ku5Corkpr7byNVY0dVR0w9FDiPGuzuEC8nHCcFu6_iKkgSR09XvzcGADwnuzlix3ZbOnsKq3cfxso6Ae).\n3. Choose your file(s) from your computer.\n4. (Optional) Select the file and click **Add to Page** to add it to your site.\n\nFor more information, you can learn about [sharing documents on your site](https://support.wix.com/en/article/wix-editor-sharing-documents-on-your-site) or display PDF files directly using the [PDF Viewer App](https://support.wix.com/en/article/wix-apps-adding-and-setting-up-the-pdf-viewer-app)."
+      },
+      {
+        "score": 0.8,
+        "explanation": "The AI response includes most essential steps from the ground truth, such as navigating to Site Members, clicking the Reported tab, accessing More Actions, reviewing report details, and deciding to dismiss or block the member. However, it omits some specific options like 'Remove Reports' as a separate action, 'View member' to see the Contact Card, and the note about report removal being permanent. These minor omissions do not significantly impact the user's ability to review reports, so the response is a strong match but not fully complete.",
+        "question": "How can I review reports about members from my site's dashboard?",
+        "candidate_answer": "To review reports about members from your site's dashboard:\n\n- Go to **Site Members** in your site's dashboard.\n- Click the **Reported** tab to see members who have been reported.\n- Click the **More Actions** icon next to the relevant member.\n- Choose **Review Reports** to see details such as the reporting member, date, and reason for the report.\n- Decide whether to dismiss the report or block the member from your Members Area.\n\nThis process helps maintain a safe environment by allowing you to manage reports effectively [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.745454545454545,
+        "answer_overlap": 0.348623853211009,
+        "token_f1": 0.5,
+        "bleu": 0.11957849810942701,
+        "rouge_1": 0.5,
+        "rouge_2": 0.281481481481481,
+        "gt_answer": "To review reports from your site's dashboard:\n\n1. [Go to Site Members](https://www.wix.com/my-account/site-selector/?buttonText=Manage%20Members%20List&title=Select%20a%20Site&autoSelectOnSingleSite=true&actionUrl=https://www.wix.com/dashboard/%7B%7BmetaSiteId%7D%7D/member-permissions/members) in your site's dashboard.\n2. Click the **Reported** tab.\n3. Click the More Actions icon next to the relevant member.\n4. Choose what to do with this member:\n   \n   * **Review Reports:** See the report details, including the member who submitted the report, the date and the reason, if the member specified it.\n     \n     + According to how you want to handle this report, click **Block Member** or **Remove Reports**.\n   * **Remove Reports:** Delete and dismiss the report that was submitted about this member.\n   * **View member:** Before making your decision, open the reported member's Contact Card to see more details about them.\n   * **Block member:** Block this member from your Members Area, so they can't access it nor sign up again using the same email address.\n\n### Note\nWhen removing a report, it gets automatically deleted with no option to see it again in the future."
+      },
+      {
+        "score": 0.8,
+        "explanation": "The AI response includes all the essential steps from the GT answer to add a Profile page to the Members Area using the Wix Editor, providing a clear and accurate procedure. However, it omits the note about social apps automatically adding the Profile page and checking the Pages panel, which is additional but helpful information. The extra detail about members customizing profiles does not detract from the solution.",
+        "question": "How can I add a Profile page to my Members Area using the Wix Editor?",
+        "candidate_answer": "To add a Profile page to your Members Area using the Wix Editor, follow these steps:\n\n- Open the Wix Editor and go to the Pages and Menu section on the left side.\n- Click on Members Area.\n- Select Member Page.\n- Click on the Member Menu element, then choose Manage and Navigate.\n- Click + Add More Tabs.\n- Click + Add Tab under Profile to add the Profile page.\n\nThis allows members to customize their profiles with descriptions, images, videos, and more [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7391304347826081,
+        "answer_overlap": 0.453125,
+        "token_f1": 0.569832402234636,
+        "bleu": 0.17969767953031102,
+        "rouge_1": 0.569832402234636,
+        "rouge_2": 0.305084745762711,
+        "gt_answer": "If the Profile page isn't already part of your Members Area, you can add it directly from the Pages panel in your Editor by following these steps:\n\n1. Click **Pages and Menu** on the left side of the editor.\n2. Click **Members Area**.\n3. Click **Member Page**.\n4. Select the Member Menu element and click **Manage and Navigate**.\n5. Click **\\+ Add More Tabs**.\n6. Click **\\+ Add Tab** under **Profile**.\n\nWhen using social apps (e.g. Wix Blog, Wix Forum, Fileshare), the Profile page is automatically added to your site. You can check if it already exists in the Pages panel."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately states that Wix Events is not integrated with Wix Table Reservations in Wix Restaurants, which directly answers the user's query. It also correctly notes that customers cannot see events or buy tickets when booking a table, matching the essential information in the ground truth answer. The additional mention of ongoing improvements and user feedback does not detract from the factual accuracy.",
+        "question": "Can I integrate Wix Events with Wix Restaurants to allow customers to see events and buy tickets when they book a table?",
+        "candidate_answer": "Currently, Wix Events is not integrated with Wix Table Reservations in Wix Restaurants. Therefore, customers cannot see events or buy tickets directly when booking a table. The platform team is working on improvements, and user feedback is appreciated for future updates [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.6388888888888881,
+        "answer_overlap": 0.5483870967741931,
+        "token_f1": 0.5121951219512191,
+        "bleu": 0.294157824338245,
+        "rouge_1": 0.5121951219512191,
+        "rouge_2": 0.324999999999999,
+        "gt_answer": "Currently, Wix Events is not integrated with [Wix Table Reservations](https://support.wix.com/en/article/wix-restaurants-adding-and-setting-up-wix-table-reservations). This would let restaurant customers see events and buy tickets when they book a table."
+      },
+      {
+        "score": 0.6,
+        "explanation": "The AI response correctly mentions uploading an image via the Upload icon and customizing size, position, and shadows, which are core elements from the GT answer. However, it omits detailed step-by-step instructions for uploading (such as selecting from Site Files or the exact upload steps) and the comprehensive customization options like opacity, flip, rotate, shadow color, blur, and shadow positioning. It also adds information about Wix Photo Studio, which is not in the GT answer but not misleading. Overall, the AI provides a partial but not complete solution.",
+        "question": "How can I upload my own image to the Wix Logo Maker and customize it?",
+        "candidate_answer": "To upload and customize your own image in the Wix Logo Maker:\n\n- Upload your image via the Media Manager by clicking the Upload icon on the left of the logo editor, then select Upload Image. You can upload from your computer or connect to social networks like Facebook, Instagram, or Google Drive.\n- Customize your image’s size, position, and shadows directly within the Logo Maker.\n- For advanced edits, use the Wix Photo Studio without leaving the Logo Maker interface.\n\nThis process allows you to create a unique logo with your own images efficiently [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7741935483870961,
+        "answer_overlap": 0.349397590361445,
+        "token_f1": 0.27469879518072204,
+        "bleu": 0.022103911965723002,
+        "rouge_1": 0.27469879518072204,
+        "rouge_2": 0.13075060532687602,
+        "gt_answer": "To upload an image to your logo in the Wix Logo Maker, follow these steps:\n\n1. Click the Upload icon on the left of the logo editor.\n2. Click **Upload Image**.\n3. Upload an image or select an image from your Site Files.\n   \n   1. **Upload an image:**\n      1. Click **\\+ Upload Media.**\n      2. Select the location you want to upload your image from (from your computer or a social network).\n      3. Click the image(s) you want to upload.\n      4. Click **Upload Selection**.\n      5. Click **Add to Logo**.\n   2. **Use a site file:**\n      1. Select the image you want to add to your logo.\n      2. Click **Add to Logo**.\n\nAfter uploading, you can customize your image using the Customize Image panel:\n\n1. Click the Upload icon on the left of the logo editor.\n2. Hover over the image you want to edit in Customize Image panel and click **Customize**.\n3. Customize the following aspects of your image:\n   * **Size:** Drag the slider to increase or decrease the size of your image.\n   * **Image opacity:** Drag the slider to increase or decrease the transparency of your image.\n   * **Flip:** Flip your image horizontally or vertically.\n   * **Rotate:** Drag the slider to rotate your image.\n   * **Horizontal position:** Drag the slider to move your image left or right.\n   * **Vertical position:** Drag the slider to move your image up or down.\n   * **Shadow:** Click the toggle to enable a shadow around your image and customize the following:\n     + **Shadow color:** Click the color box to select the shadow's color or enter a hex code.\n     + **Shadow opacity:** Drag the slider to increase or decrease the transparency of your shadow.\n     + **Shadow horizontal position:** Drag the slider to move your shadow left or right.\n     + **Shadow vertical position:** Drag the slider to move your shadow up or down.\n     + **Shadow blur:** Drag the slider to increase or decrease the blurriness of your shadow.\n   * **Blur:** Drag the slider to increase or decrease the blurriness of your image."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately conveys all essential information from the ground truth: logos are non-refundable, cancellation within 14 days only entitles a refund for the site subscription, discounts on logo files are revoked and deducted from the refund, and if the logo price exceeds the plan price, no refund is issued. The response is complete and factually aligned.",
+        "question": "Can I get a refund for a logo purchased from Wix Logo Maker if I cancel my Logo + Website plan within 14 days?",
+        "candidate_answer": "No, you cannot get a refund for the logo files if you cancel your Logo + Website plan within 14 days. You are only entitled to a refund for the site subscription portion. Additionally, any discount applied to the logo files will be revoked and deducted from your subscription refund. In some cases where the logo price exceeds the plan price, no refund will be issued at all [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.8,
+        "answer_overlap": 0.557377049180327,
+        "token_f1": 0.626506024096385,
+        "bleu": 0.25564796331766004,
+        "rouge_1": 0.626506024096385,
+        "rouge_2": 0.365853658536585,
+        "gt_answer": "Logos purchased from Wix Logo are **non-refundable** as they are digital goods, and we cannot monitor their use after download. If you cancel your Logo + Website plan within 14 days of purchase, you will only be entitled to a refund for your site subscription and not for your Logo files. Any discount you received with your plan for your Logo files will be revoked and deducted from the amount refunded to you for your subscription. In some cases, the logo files price is higher than the plan price. In these cases, you will not receive a refund."
+      },
+      {
+        "score": 0.6,
+        "explanation": "The AI response includes the core steps for connecting the range slider to the CMS and setting up filtering by a number field, including adding a new field and choosing filter conditions. However, it omits the initial steps of adding the range slider element to the page, detailed customization options (such as slider type, layout, and design), and the final steps of previewing and publishing. These missing details are important for a complete setup, so the response provides a partial but not comprehensive solution.",
+        "question": "How can I add and set up a range slider in my CMS to filter content by a number value?",
+        "candidate_answer": "To add and set up a range slider in your CMS to filter content by a number value, follow these steps:\n\n- Click the **Connect to CMS** icon on the range slider element.\n- In the **Connect Range Slider** panel, select **Filter content**.\n- Choose the dataset connected to the elements you want to filter (e.g., repeater, gallery, table) from the **Choose a dataset** drop-down.\n- From the **Filter content by** drop-down, select the number field that visitors will use for filtering.\n- If the number field does not exist, select **Add new field**, enter the field name, and click **Add**. You can then add content to this field in your CMS collection.\n- Set the filtering condition by selecting from the **Condition** drop-down:\n  - **Between**: shows items with values between the range slider handles.\n  - **Outside of**: shows items with values outside the range slider handles.\n\nThis setup allows visitors to filter content dynamically based on the number value range they select with the slider [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7333333333333331,
+        "answer_overlap": 0.257142857142857,
+        "token_f1": 0.347509113001215,
+        "bleu": 0.025650608383569,
+        "rouge_1": 0.347509113001215,
+        "rouge_2": 0.24604141291108403,
+        "gt_answer": "To add and set up a range slider in your CMS to filter content by a number value, follow these steps:\n\n1. **Go to your editor**: [Access your editor](https://manage.wix.com/account/site-selector/?actionUrl=https%3A%2F%2Fwww.wix.com%2Feditor%2F%7BmetaSiteId%7D%3FeditorSessionId%3D%7Besi%7D%26).\n\n2. **Add the range slider input element**:\n   \n   1. Go to the page or section where you want visitors to filter content by a number value.\n   2. Click **Add Elements** ![](https://d2x3xhvgiqkx42.cloudfront.net/65d5031a-8d20-483c-b08f-0a758e1cf2fd/68a0236f-77f4-43c6-931f-8298ae691a9e/2022/11/17/01f24c8b-2ea3-4d06-a26d-9975a43d617e/a79e245b-4870-4444-ba82-248eca4eb9a7.png) on the left side of the editor.\n   3. Click **Input**.\n   4. Click **Slider**.\n   5. Scroll down to **Range Sliders**, then click and drag the relevant range slider onto the page.\n\n3. **Connect the range slider to the CMS**:\n   \n   1. Click the **Connect to CMS** icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/d6b40156-9694-4cfe-9209-54815ef9d6dc/2023/06/16/2d484f5d-e1bf-4d48-9e42-82216e8b88de/08e74518-edad-42f8-b007-c974ba767eb6.png) on the range slider.\n   2. Select **Filter content** in the **Connect Range Slider** panel on the right.\n   3. Click the **Choose a dataset** drop-down and select the same dataset that connects to the elements (e.g., repeater, gallery, table) that you want visitors to filter.\n   4. Click the **Filter content by** drop-down and choose the number field that visitors will use to filter the content.\n\n   **Tip:** To add a new field to your collection and use it for filtering content, select **Add new field**, then enter the field name and click **Add**. You can add content to the field in your CMS collection later.\n   5. Click the **Condition** drop-down and select the relevant condition:\n      \n      * **Between:** Show items that have a connected number field value that is between the range slider handles.\n      * **Outside of:** Show items that have a connected number field value that is outside of the range slider handles.\n\n4. **Customize the range slider element**:\n   \n   * Click **Settings** to customize the following:\n     \n     + **Field title:** Edit the name that displays on the range slider and lets visitors know what it does.\n     + **Slider type:** Choose a continuous or stepped slider type:\n       \n       - **Continuous:** Visitors can select any value within the set range.\n       - **Stepped:** Visitors can select specific, incremental values within the set range. Set up the following options:\n         \n         * **Set steps by:** Click the drop-down and choose how you want to set the steps:\n           \n           + **Number of steps:** You choose how many steps appear in the range slider. Enter the number of steps in the **Steps** field.\n           + **Step value:** You choose the value increments of each step, up to 100. Enter the value of the increments in the **Value** field.\n         * **Value labels:** (Optional) Enter a prefix in the **Prefix** field to have it appear before the value (e.g., $). You can also enter a suffix in the **Suffix** field to have it appear after the value.\n   * Click the **Layout** icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/d6b40156-9694-4cfe-9209-54815ef9d6dc/2024/04/24/1e3a7616-1ca3-40ad-9e94-d2e18bfd4b98/33c4ffdc-7138-462f-b6e2-4d6505f6f8f6.png) to adjust the following:\n     \n     + The size and shape of your range slider handles.\n     + The track height (thickness) of the track that the handles slide on.\n     + Choose a **Left to right** or **Right to left** range display direction.\n     + Adjust the alignment, offset, and spacing around the field title.\n     + (Steps only) Choose a layout: **Lines** or **Dots**.\n   * Click the **Design** icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/d6b40156-9694-4cfe-9209-54815ef9d6dc/2024/04/24/d44e4657-75f7-476b-a92f-c0ed3bc775bc/4d1470bd-bd1d-4d8b-ac9d-5015333e2742.png) to choose a preset design and customize it further.\n\n5. **Click Preview** to test your range slider.\n6. **Click Publish** if you are ready to make the changes go live.\n\n**Important:** The range slider is not available in Editor X or the Studio Editor."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The AI response accurately states that you cannot upload your own fonts directly to ADI and correctly advises to use the Editor with specific instructions, matching the essential information from the ground truth answer.",
+        "question": "Can I upload my own fonts to ADI?",
+        "candidate_answer": "- You cannot upload your own fonts directly to ADI.\n- To upload your own fonts, you need to use the Editor and follow the specific instructions provided there [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7000000000000001,
+        "answer_overlap": 0.482758620689655,
+        "token_f1": 0.5238095238095231,
+        "bleu": 0.21564171256126302,
+        "rouge_1": 0.5238095238095231,
+        "rouge_2": 0.43902439024390205,
+        "gt_answer": "Currently, you cannot upload your own fonts to ADI. If you want to upload your own fonts, you need to [head to the Editor](https://support.wix.com/en/article/adi-moving-from-adi-to-the-editor) and follow the instructions [here](https://support.wix.com/en/article/wix-editor-uploading-and-using-your-own-fonts)."
+      }
+    ]
+  },
+  "context_recall": {
+    "analysis": "The Context Recall metric shows a strong overall performance with an average score of 0.83, indicating that the retrieved context generally contains the essential information needed to answer user queries. High-scoring examples demonstrate complete and faithful coverage of key facts, enabling accurate and comprehensive answers. However, moderate scores (around 0.6-0.8) reveal common issues such as missing initial setup steps, detailed customization options, or minor procedural details, while low scores (e.g., 0.2) stem from retrieval of irrelevant or off-topic context. To improve, focus on enhancing retrieval precision by refining query formulation and indexing to better capture all critical facets of complex or multi-step answers, and consider augmenting the knowledge base with more detailed procedural content. Additionally, incorporating feedback loops to identify and prioritize missing information in retrieved passages can help boost completeness and relevance, especially for nuanced or multi-part user questions.",
+    "metric_name": "Context Recall",
+    "metric_description": "Whether retrieved context contains information needed for ground truth.",
+    "avg_score": 0.8333333333333334,
+    "stratified_examples": [
+      {
+        "score": 1.0,
+        "explanation": "The retrieved context fully contains the essential information from the ground truth answer: it states that Wix Blocks properties only connect elements within a single widget, and it explains the potential feature allowing connection of widget properties to app-level properties for seamless data exchange and event triggering across different widgets. Thus, it completely enables answering the user's question.",
+        "question": "Can I connect properties between different widgets in Wix Blocks?",
+        "candidate_answer": "- Currently, Wix Blocks only supports connecting properties within a single widget.\n- Connecting properties between different widgets is not supported yet but is a feature under consideration for future updates to enable seamless data exchange and event triggering across the app.\n\n[S1]",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.648648648648648,
+        "answer_overlap": 0.55,
+        "token_f1": 0.522727272727272,
+        "bleu": 0.170033856260894,
+        "rouge_1": 0.522727272727272,
+        "rouge_2": 0.255813953488372,
+        "gt_answer": "Currently, Wix Blocks properties only connect elements within a single widget. This feature would allow you to create more cohesive and interactive experiences by connecting widget properties to app-level properties; enabling seamless data exchange between different widgets and allowing events to be triggered across the app."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The retrieved context explicitly states that Wix Events is not integrated with Wix Table Reservations, which is the essential information from the ground truth answer. It also mentions the potential benefit of such integration, allowing customers to see events and buy tickets when booking a table, fully covering the GT answer.",
+        "question": "Can I integrate Wix Events with Wix Restaurants to allow customers to see events and buy tickets when they book a table?",
+        "candidate_answer": "Currently, Wix Events is not integrated with Wix Table Reservations in Wix Restaurants. Therefore, customers cannot see events or buy tickets directly when booking a table. The platform team is working on improvements, and user feedback is appreciated for future updates [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.6388888888888881,
+        "answer_overlap": 0.5483870967741931,
+        "token_f1": 0.5121951219512191,
+        "bleu": 0.294157824338245,
+        "rouge_1": 0.5121951219512191,
+        "rouge_2": 0.324999999999999,
+        "gt_answer": "Currently, Wix Events is not integrated with [Wix Table Reservations](https://support.wix.com/en/article/wix-restaurants-adding-and-setting-up-wix-table-reservations). This would let restaurant customers see events and buy tickets when they book a table."
+      },
+      {
+        "score": 0.6,
+        "explanation": "The retrieved context includes the key steps for connecting the range slider to the CMS and setting filter conditions, which are essential parts of setting up the range slider to filter content by a number value. However, it lacks the initial steps of adding the range slider element, detailed customization options, previewing, and publishing instructions. Therefore, it partially covers the essential information from the ground truth answer.",
+        "question": "How can I add and set up a range slider in my CMS to filter content by a number value?",
+        "candidate_answer": "To add and set up a range slider in your CMS to filter content by a number value, follow these steps:\n\n- Click the **Connect to CMS** icon on the range slider element.\n- In the **Connect Range Slider** panel, select **Filter content**.\n- Choose the dataset connected to the elements you want to filter (e.g., repeater, gallery, table) from the **Choose a dataset** drop-down.\n- From the **Filter content by** drop-down, select the number field that visitors will use for filtering.\n- If the number field does not exist, select **Add new field**, enter the field name, and click **Add**. You can then add content to this field in your CMS collection.\n- Set the filtering condition by selecting from the **Condition** drop-down:\n  - **Between**: shows items with values between the range slider handles.\n  - **Outside of**: shows items with values outside the range slider handles.\n\nThis setup allows visitors to filter content dynamically based on the number value range they select with the slider [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7333333333333331,
+        "answer_overlap": 0.257142857142857,
+        "token_f1": 0.347509113001215,
+        "bleu": 0.025650608383569,
+        "rouge_1": 0.347509113001215,
+        "rouge_2": 0.24604141291108403,
+        "gt_answer": "To add and set up a range slider in your CMS to filter content by a number value, follow these steps:\n\n1. **Go to your editor**: [Access your editor](https://manage.wix.com/account/site-selector/?actionUrl=https%3A%2F%2Fwww.wix.com%2Feditor%2F%7BmetaSiteId%7D%3FeditorSessionId%3D%7Besi%7D%26).\n\n2. **Add the range slider input element**:\n   \n   1. Go to the page or section where you want visitors to filter content by a number value.\n   2. Click **Add Elements** ![](https://d2x3xhvgiqkx42.cloudfront.net/65d5031a-8d20-483c-b08f-0a758e1cf2fd/68a0236f-77f4-43c6-931f-8298ae691a9e/2022/11/17/01f24c8b-2ea3-4d06-a26d-9975a43d617e/a79e245b-4870-4444-ba82-248eca4eb9a7.png) on the left side of the editor.\n   3. Click **Input**.\n   4. Click **Slider**.\n   5. Scroll down to **Range Sliders**, then click and drag the relevant range slider onto the page.\n\n3. **Connect the range slider to the CMS**:\n   \n   1. Click the **Connect to CMS** icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/d6b40156-9694-4cfe-9209-54815ef9d6dc/2023/06/16/2d484f5d-e1bf-4d48-9e42-82216e8b88de/08e74518-edad-42f8-b007-c974ba767eb6.png) on the range slider.\n   2. Select **Filter content** in the **Connect Range Slider** panel on the right.\n   3. Click the **Choose a dataset** drop-down and select the same dataset that connects to the elements (e.g., repeater, gallery, table) that you want visitors to filter.\n   4. Click the **Filter content by** drop-down and choose the number field that visitors will use to filter the content.\n\n   **Tip:** To add a new field to your collection and use it for filtering content, select **Add new field**, then enter the field name and click **Add**. You can add content to the field in your CMS collection later.\n   5. Click the **Condition** drop-down and select the relevant condition:\n      \n      * **Between:** Show items that have a connected number field value that is between the range slider handles.\n      * **Outside of:** Show items that have a connected number field value that is outside of the range slider handles.\n\n4. **Customize the range slider element**:\n   \n   * Click **Settings** to customize the following:\n     \n     + **Field title:** Edit the name that displays on the range slider and lets visitors know what it does.\n     + **Slider type:** Choose a continuous or stepped slider type:\n       \n       - **Continuous:** Visitors can select any value within the set range.\n       - **Stepped:** Visitors can select specific, incremental values within the set range. Set up the following options:\n         \n         * **Set steps by:** Click the drop-down and choose how you want to set the steps:\n           \n           + **Number of steps:** You choose how many steps appear in the range slider. Enter the number of steps in the **Steps** field.\n           + **Step value:** You choose the value increments of each step, up to 100. Enter the value of the increments in the **Value** field.\n         * **Value labels:** (Optional) Enter a prefix in the **Prefix** field to have it appear before the value (e.g., $). You can also enter a suffix in the **Suffix** field to have it appear after the value.\n   * Click the **Layout** icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/d6b40156-9694-4cfe-9209-54815ef9d6dc/2024/04/24/1e3a7616-1ca3-40ad-9e94-d2e18bfd4b98/33c4ffdc-7138-462f-b6e2-4d6505f6f8f6.png) to adjust the following:\n     \n     + The size and shape of your range slider handles.\n     + The track height (thickness) of the track that the handles slide on.\n     + Choose a **Left to right** or **Right to left** range display direction.\n     + Adjust the alignment, offset, and spacing around the field title.\n     + (Steps only) Choose a layout: **Lines** or **Dots**.\n   * Click the **Design** icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/d6b40156-9694-4cfe-9209-54815ef9d6dc/2024/04/24/d44e4657-75f7-476b-a92f-c0ed3bc775bc/4d1470bd-bd1d-4d8b-ac9d-5015333e2742.png) to choose a preset design and customize it further.\n\n5. **Click Preview** to test your range slider.\n6. **Click Publish** if you are ready to make the changes go live.\n\n**Important:** The range slider is not available in Editor X or the Studio Editor."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The retrieved context fully contains all essential information from the ground truth answer: logos purchased from Wix Logo are non-refundable digital goods; cancelling the Logo + Website plan within 14 days entitles a refund only for the site subscription, not the logo files; any discount on logo files is revoked and deducted from the refund; and if the logo price exceeds the plan price, no refund is given. Additional details about plan benefits do not affect the completeness of the essential information.",
+        "question": "Can I get a refund for a logo purchased from Wix Logo Maker if I cancel my Logo + Website plan within 14 days?",
+        "candidate_answer": "No, you cannot get a refund for the logo files if you cancel your Logo + Website plan within 14 days. You are only entitled to a refund for the site subscription portion. Additionally, any discount applied to the logo files will be revoked and deducted from your subscription refund. In some cases where the logo price exceeds the plan price, no refund will be issued at all [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.8,
+        "answer_overlap": 0.557377049180327,
+        "token_f1": 0.626506024096385,
+        "bleu": 0.25564796331766004,
+        "rouge_1": 0.626506024096385,
+        "rouge_2": 0.365853658536585,
+        "gt_answer": "Logos purchased from Wix Logo are **non-refundable** as they are digital goods, and we cannot monitor their use after download. If you cancel your Logo + Website plan within 14 days of purchase, you will only be entitled to a refund for your site subscription and not for your Logo files. Any discount you received with your plan for your Logo files will be revoked and deducted from the amount refunded to you for your subscription. In some cases, the logo files price is higher than the plan price. In these cases, you will not receive a refund."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The retrieved context fully contains the essential information from the ground truth answer: it states that you cannot upload your own fonts to ADI and directs the user to the Editor with instructions on how to upload fonts there. All key points are present, enabling a complete answer to the user's question.",
+        "question": "Can I upload my own fonts to ADI?",
+        "candidate_answer": "- You cannot upload your own fonts directly to ADI.\n- To upload your own fonts, you need to use the Editor and follow the specific instructions provided there [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7000000000000001,
+        "answer_overlap": 0.482758620689655,
+        "token_f1": 0.5238095238095231,
+        "bleu": 0.21564171256126302,
+        "rouge_1": 0.5238095238095231,
+        "rouge_2": 0.43902439024390205,
+        "gt_answer": "Currently, you cannot upload your own fonts to ADI. If you want to upload your own fonts, you need to [head to the Editor](https://support.wix.com/en/article/adi-moving-from-adi-to-the-editor) and follow the instructions [here](https://support.wix.com/en/article/wix-editor-uploading-and-using-your-own-fonts)."
+      },
+      {
+        "score": 0.2,
+        "explanation": "The retrieved context does not contain any information about uploading a document to a Wix site using the Wix Editor. It only discusses uploading images to the Wix Logo Maker and related features, which is unrelated to the user's query and the ground truth answer.",
+        "question": "How can I upload a document to my Wix site using the Wix Editor?",
+        "candidate_answer": "To upload a document to your Wix site using the Wix Editor, follow these steps:\n\n- Open the Wix Editor and go to the page where you want to add the document.\n- Use the \"Add\" (+) button, then select \"Document\" or \"File\" from the options (often under \"More\" or \"Embed\").\n- Upload your document file (PDF, Word, etc.) from your computer.\n- Once uploaded, you can add a download button or link that visitors can click to access the document.\n\nNote: The retrieved context specifically addresses image uploads and logo customization but does not detail document uploads in Wix Editor, so this answer is based on standard Wix Editor functionality and may vary slightly depending on your site setup [S1].\n\nIf you need detailed steps or options for file types, please let me know!",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.409638554216867,
+        "answer_overlap": 0.38356164383561603,
+        "token_f1": 0.421875,
+        "bleu": 0.17296514462984203,
+        "rouge_1": 0.421875,
+        "rouge_2": 0.165354330708661,
+        "gt_answer": "To upload a document to your Wix site using the Wix Editor, follow these steps:\n\n1. Click the **Media** icon ![](https://lh4.googleusercontent.com/BXNb33YHdV1YVOl6x53HWxYlbCJjbQYPUNQhfeBRMZ3pbrDcFMXRtiGg_fi4nL40hqEfSQdWNag99l1MKxbPQaelz8jR59OMPmorRRF9Xapk6K__y-zhuAOjPcc_wS6W_fy44aeY) on the left side of the editor.\n2. Click the **Upload Media** icon ![](https://lh3.googleusercontent.com/G_5iGn3FqIhWY2HCdwNmDOmdMpHFUsk38-ywwhmW1mgMh83q2N397YR7ku5Corkpr7byNVY0dVR0w9FDiPGuzuEC8nHCcFu6_iKkgSR09XvzcGADwnuzlix3ZbOnsKq3cfxso6Ae).\n3. Choose your file(s) from your computer.\n4. (Optional) Select the file and click **Add to Page** to add it to your site.\n\nFor more information, you can learn about [sharing documents on your site](https://support.wix.com/en/article/wix-editor-sharing-documents-on-your-site) or display PDF files directly using the [PDF Viewer App](https://support.wix.com/en/article/wix-apps-adding-and-setting-up-the-pdf-viewer-app)."
+      },
+      {
+        "score": 0.8,
+        "explanation": "The retrieved context includes all the essential steps to review reports from the site's dashboard: going to Site Members, clicking the Reported tab, clicking the More Actions icon, and choosing what to do with the member, including reviewing report details. However, it does not explicitly mention all the options such as 'Remove Reports,' 'View member,' or 'Block member' in detail, nor the note about removing reports being permanent. Thus, it is a strong match but missing some minor details.",
+        "question": "How can I review reports about members from my site's dashboard?",
+        "candidate_answer": "To review reports about members from your site's dashboard:\n\n- Go to **Site Members** in your site's dashboard.\n- Click the **Reported** tab to see members who have been reported.\n- Click the **More Actions** icon next to the relevant member.\n- Choose **Review Reports** to see details such as the reporting member, date, and reason for the report.\n- Decide whether to dismiss the report or block the member from your Members Area.\n\nThis process helps maintain a safe environment by allowing you to manage reports effectively [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.745454545454545,
+        "answer_overlap": 0.348623853211009,
+        "token_f1": 0.5,
+        "bleu": 0.11957849810942701,
+        "rouge_1": 0.5,
+        "rouge_2": 0.281481481481481,
+        "gt_answer": "To review reports from your site's dashboard:\n\n1. [Go to Site Members](https://www.wix.com/my-account/site-selector/?buttonText=Manage%20Members%20List&title=Select%20a%20Site&autoSelectOnSingleSite=true&actionUrl=https://www.wix.com/dashboard/%7B%7BmetaSiteId%7D%7D/member-permissions/members) in your site's dashboard.\n2. Click the **Reported** tab.\n3. Click the More Actions icon next to the relevant member.\n4. Choose what to do with this member:\n   \n   * **Review Reports:** See the report details, including the member who submitted the report, the date and the reason, if the member specified it.\n     \n     + According to how you want to handle this report, click **Block Member** or **Remove Reports**.\n   * **Remove Reports:** Delete and dismiss the report that was submitted about this member.\n   * **View member:** Before making your decision, open the reported member's Contact Card to see more details about them.\n   * **Block member:** Block this member from your Members Area, so they can't access it nor sign up again using the same email address.\n\n### Note\nWhen removing a report, it gets automatically deleted with no option to see it again in the future."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The retrieved context fully includes all essential steps and details from the ground truth answer: accessing the Orders tab via the site's dashboard and Sales menu, managing subscription orders similarly to one-time orders, and using the View Subscription option to manage subscriptions. Thus, it completely enables answering the user's question.",
+        "question": "How can I access the Orders tab in Wix to manage subscription orders?",
+        "candidate_answer": "To access the Orders tab in Wix to manage subscription orders:\n\n- Go to your site's dashboard.\n- Click on **Sales**.\n- Select the **Orders** tab.\n\nIn this tab, you can manage subscription orders just like one-time orders, including fulfilling orders, adding tracking numbers, or canceling them. Subscription details are available on the order page, where you can also click **View Subscription** to update subscription-specific information such as the address [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.645833333333333,
+        "answer_overlap": 0.4,
+        "token_f1": 0.5,
+        "bleu": 0.128971636312743,
+        "rouge_1": 0.5,
+        "rouge_2": 0.25742574257425704,
+        "gt_answer": "To access the Orders tab in Wix and manage your subscription orders, follow these steps:\n\n1. [Go to your site's dashboard](https://www.wix.com/my-account/site-selector/?buttonText=Go%20to%20Dashboard&title=Select%20a%20Site&autoSelectOnSingleSite=true&actionUrl=https://www.wix.com/dashboard/{{metaSiteId}}/home/).\n2. Click **Sales**.\n3. Select the **Orders** tab.\n\nOnce you are in the Orders tab, you can perform all the actions on a subscription order (fulfill the order, add a tracking number, cancel it, etc.) just as you would a one-time order. Information about the subscription appears on the order page. Click **View Subscription** in the order to manage the subscription, such as updating the address. Learn more about [managing a product subscription](https://support.wix.com/en/article/wix-stores-managing-product-subscriptions)."
+      },
+      {
+        "score": 0.6,
+        "explanation": "The retrieved context includes the basic steps to upload an image to the Wix Logo Maker, such as clicking the Upload icon, selecting Upload Image, and choosing an image from the computer or site files. However, it lacks detailed step-by-step instructions for uploading media, adding the image to the logo, and the comprehensive customization options (size, opacity, flip, rotate, position, shadow settings, blur) described in the ground truth answer. Therefore, it partially covers the essential information but misses important details for full customization guidance.",
+        "question": "How can I upload my own image to the Wix Logo Maker and customize it?",
+        "candidate_answer": "To upload and customize your own image in the Wix Logo Maker:\n\n- Upload your image via the Media Manager by clicking the Upload icon on the left of the logo editor, then select Upload Image. You can upload from your computer or connect to social networks like Facebook, Instagram, or Google Drive.\n- Customize your image’s size, position, and shadows directly within the Logo Maker.\n- For advanced edits, use the Wix Photo Studio without leaving the Logo Maker interface.\n\nThis process allows you to create a unique logo with your own images efficiently [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7741935483870961,
+        "answer_overlap": 0.349397590361445,
+        "token_f1": 0.27469879518072204,
+        "bleu": 0.022103911965723002,
+        "rouge_1": 0.27469879518072204,
+        "rouge_2": 0.13075060532687602,
+        "gt_answer": "To upload an image to your logo in the Wix Logo Maker, follow these steps:\n\n1. Click the Upload icon on the left of the logo editor.\n2. Click **Upload Image**.\n3. Upload an image or select an image from your Site Files.\n   \n   1. **Upload an image:**\n      1. Click **\\+ Upload Media.**\n      2. Select the location you want to upload your image from (from your computer or a social network).\n      3. Click the image(s) you want to upload.\n      4. Click **Upload Selection**.\n      5. Click **Add to Logo**.\n   2. **Use a site file:**\n      1. Select the image you want to add to your logo.\n      2. Click **Add to Logo**.\n\nAfter uploading, you can customize your image using the Customize Image panel:\n\n1. Click the Upload icon on the left of the logo editor.\n2. Hover over the image you want to edit in Customize Image panel and click **Customize**.\n3. Customize the following aspects of your image:\n   * **Size:** Drag the slider to increase or decrease the size of your image.\n   * **Image opacity:** Drag the slider to increase or decrease the transparency of your image.\n   * **Flip:** Flip your image horizontally or vertically.\n   * **Rotate:** Drag the slider to rotate your image.\n   * **Horizontal position:** Drag the slider to move your image left or right.\n   * **Vertical position:** Drag the slider to move your image up or down.\n   * **Shadow:** Click the toggle to enable a shadow around your image and customize the following:\n     + **Shadow color:** Click the color box to select the shadow's color or enter a hex code.\n     + **Shadow opacity:** Drag the slider to increase or decrease the transparency of your shadow.\n     + **Shadow horizontal position:** Drag the slider to move your shadow left or right.\n     + **Shadow vertical position:** Drag the slider to move your shadow up or down.\n     + **Shadow blur:** Drag the slider to increase or decrease the blurriness of your shadow.\n   * **Blur:** Drag the slider to increase or decrease the blurriness of your image."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The retrieved context fully contains all essential information from the ground truth answer, including that archived programs cannot be restored, the option to duplicate the archived program, and the detailed step-by-step instructions on how to duplicate and publish the new draft program. This enables a complete and accurate response to the user's query.",
+        "question": "How can I restore an archived program in Wix Online Programs?",
+        "candidate_answer": "You cannot directly restore an archived program in Wix Online Programs. Instead, you need to duplicate the archived program and publish the new draft. The steps are:\n\n- Go to Online Programs in your site's dashboard.\n- Click the Archived tab.\n- Click the More Actions icon next to the archived program.\n- Select Duplicate.\n- The duplicated program will appear in the Drafts tab.\n- From the Drafts tab, use the More Actions icon to publish or edit the new program.\n\nThis process effectively recreates the archived program as a new draft since restoration is not supported [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.6296296296296291,
+        "answer_overlap": 0.304761904761904,
+        "token_f1": 0.44217687074829903,
+        "bleu": 0.102425640319022,
+        "rouge_1": 0.44217687074829903,
+        "rouge_2": 0.23972602739726,
+        "gt_answer": "Archived programs cannot be restored. However, you can duplicate the archived program and publish the new draft. \n\n**To duplicate an archived program:**\n1. [Go to Online Programs](https://www.wix.com/my-account/site-selector/?buttonText=Manage%20Online%20Programs&title=Select%20a%20Site&autoSelectOnSingleSite=true&actionUrl=https://www.wix.com/dashboard/%7B%7BmetaSiteId%7D%7D/challenges/list) in your site's dashboard.\n2. Click the **Archived** tab.\n3. Click the More Actions icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/8696077d-830a-4b1e-bd86-9df98f89994a/2020/01/26/b3736435-0d71-4f7d-89d4-6c2cc9a3259c/ede58fab-ed86-4013-9da2-512fe658aef6.png) next to the relevant program.\n4. Click **Duplicate**. \n\n**Tip:** The new duplicate program is in your **Drafts** tab.\n5. Click the **Drafts** tab.\n6. Click the More Actions icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/8696077d-830a-4b1e-bd86-9df98f89994a/2020/01/26/b3736435-0d71-4f7d-89d4-6c2cc9a3259c/ede58fab-ed86-4013-9da2-512fe658aef6.png) next to the duplicate program.\n7. Choose to do one of the following:\n   1. **Publish:** Click **Publish** to set your program live.\n   2. **Edit Settings:** [Update or change your program settings](https://support.wix.com/en/article/online-programs-managing-your-programs)."
+      },
+      {
+        "score": 0.8,
+        "explanation": "The retrieved context includes all the essential steps to change the main color in the palette using ADI: clicking Design on the top bar, selecting Colors, and clicking the Design icon in the Main Color box. However, it does not mention the option to choose one of the suggested colors or to click the Add icon to select a custom color, which are minor details missing from the context.",
+        "question": "How can I change the main color in my site's color palette using ADI?",
+        "candidate_answer": "To change the main color in your site's color palette using ADI:\n\n- Click **Design** on the top bar inside ADI.\n- Select **Colors**.\n- Click the **Design icon** in the Main Color box at the top.\n- This will allow you to change the main color and generate a new list of recommended color palettes.\n\nThis process updates your site's main color and suggests complementary palettes automatically [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.8048780487804871,
+        "answer_overlap": 0.32835820895522305,
+        "token_f1": 0.42944785276073605,
+        "bleu": 0.22600063607146803,
+        "rouge_1": 0.42944785276073605,
+        "rouge_2": 0.29813664596273204,
+        "gt_answer": "To change the main color in your palette:\n\n1. Click **Design** on the top bar inside ADI.\n2. Select **Colors**.\n3. Click the Design icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/2017/01/04/9faf2831-3a10-405e-bf82-abdd3c3db13e.jpg) in the **Main Color** box at the top.\n4. Choose one of the suggested colors, or click the Add icon ![](https://d2x3xhvgiqkx42.cloudfront.net/12345678-1234-1234-1234-1234567890ab/d6b40156-9694-4cfe-9209-54815ef9d6dc/2022/02/24/0415e843-44e7-49e8-83ae-a3c567bb6483/9bda7b85-add0-4678-9f54-254a3a163b20.png) to choose a custom color."
+      },
+      {
+        "score": 1.0,
+        "explanation": "The retrieved context fully includes all the essential steps from the ground truth answer on how to add a Profile page to the Members Area using the Wix Editor. It also contains the note about social apps automatically adding the Profile page, matching the GT answer completely.",
+        "question": "How can I add a Profile page to my Members Area using the Wix Editor?",
+        "candidate_answer": "To add a Profile page to your Members Area using the Wix Editor, follow these steps:\n\n- Open the Wix Editor and go to the Pages and Menu section on the left side.\n- Click on Members Area.\n- Select Member Page.\n- Click on the Member Menu element, then choose Manage and Navigate.\n- Click + Add More Tabs.\n- Click + Add Tab under Profile to add the Profile page.\n\nThis allows members to customize their profiles with descriptions, images, videos, and more [S1].",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.7391304347826081,
+        "answer_overlap": 0.453125,
+        "token_f1": 0.569832402234636,
+        "bleu": 0.17969767953031102,
+        "rouge_1": 0.569832402234636,
+        "rouge_2": 0.305084745762711,
+        "gt_answer": "If the Profile page isn't already part of your Members Area, you can add it directly from the Pages panel in your Editor by following these steps:\n\n1. Click **Pages and Menu** on the left side of the editor.\n2. Click **Members Area**.\n3. Click **Member Page**.\n4. Select the Member Menu element and click **Manage and Navigate**.\n5. Click **\\+ Add More Tabs**.\n6. Click **\\+ Add Tab** under **Profile**.\n\nWhen using social apps (e.g. Wix Blog, Wix Forum, Fileshare), the Profile page is automatically added to your site. You can check if it already exists in the Pages panel."
+      }
+    ]
+  }
+}

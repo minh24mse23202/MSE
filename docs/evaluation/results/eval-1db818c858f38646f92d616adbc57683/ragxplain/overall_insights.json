@@ -1,0 +1,311 @@
+{
+  "analysis": {
+    "executive_summary": "The RAG system demonstrates strong faithfulness to retrieved context, with perfect Context Adherence scores ensuring answers are grounded and trustworthy. However, retrieval quality and answer relevancy are moderate, with average scores around 0.5 to 0.7, indicating frequent retrieval of incomplete or partially relevant information that limits answer completeness and factuality. The grading note generation is notably weak, reflecting poor structural and content coverage in final outputs. Prioritizing improvements in retrieval precision and recall, alongside generation prompt refinement, will substantially enhance overall answer quality and user satisfaction.",
+    "executive_summary_gist": "The system excels at grounding answers strictly in retrieved context but struggles with retrieving fully relevant and complete information, leading to moderate answer relevancy and factuality. Grading note generation is particularly weak, requiring focused improvements in retrieval and generation strategies.",
+    "insights": [
+      {
+        "title": "Enhance Retriever Precision and Recall to Improve Context Quality",
+        "priority": "critical",
+        "problem_detection": "The retriever provides moderately relevant context (avg 0.7) but often misses key information (context recall avg 0.5), resulting in incomplete or partially off-target context passages.",
+        "problem_detection_gist": "Retriever returns somewhat relevant but incomplete context, missing essential details needed for accurate answers.",
+        "root_cause_analysis": "The current hybrid retrieval with top_k=1 and reranker disabled limits the system's ability to surface multiple, diverse relevant passages. The retrieval strategy may rely heavily on keyword matching without sufficient semantic understanding or query reformulation, causing partial overlap but missing critical facts. Lack of reranking further reduces precision, allowing noisy or tangential documents to be selected.",
+        "root_cause_analysis_gist": "Limited top_k and no reranking in hybrid retrieval cause incomplete and noisy context selection.",
+        "evidence_trace": "Metrics show average Context Relevancy at 0.7 and Context Recall at 0.5, indicating moderate but insufficient retrieval quality. Examples illustrate this: the question \"can I buy a premium plan but build my website on other platforms\" retrieved mostly irrelevant Wix Analytics FAQs, scoring low (0.4 relevancy, 0.2 recall). Conversely, \"how to transfer a business email away from Wix\" had better retrieval (1.0 relevancy, 0.8 recall) and correspondingly higher answer quality. This pattern confirms retrieval inconsistency and incomplete coverage.",
+        "evidence_trace_gist": "Context Relevancy and Recall metrics reveal moderate retrieval quality with examples showing both relevant and off-topic retrieved passages.",
+        "recommended_protocol": "### 1. Increase `top_k` in retrieval from 1 to at least 3-5 to capture more potentially relevant passages, improving recall.\n\n### 2. Enable and fine-tune a reranker module to reorder retrieved documents based on semantic relevance and query intent alignment.\n\n### 3. Incorporate query expansion or reformulation techniques (e.g., synonyms, paraphrasing) to better capture user intent and improve matching.\n\n> Note: Increasing `top_k` and enabling reranking will increase latency and computational cost but will significantly improve context completeness and precision.",
+        "recommended_protocol_gist": "- Increase retrieval `top_k` to 3-5\n- Enable and tune reranker for better passage ordering\n- Add query expansion/reformulation to capture intent"
+      },
+      {
+        "title": "Refine Generation Prompts to Improve Answer Relevancy and Completeness",
+        "priority": "high",
+        "problem_detection": "Answer Relevancy averages only 0.5, with many answers partially addressing questions or lacking detail, often due to incomplete or off-topic retrieved context.",
+        "problem_detection_gist": "Generated answers frequently lack completeness or direct relevance to user queries.",
+        "root_cause_analysis": "The generation model is extractive and strictly adheres to retrieved context (Context Adherence = 1.0), but the retrieved context is often insufficient or tangential. The generation prompt and configuration do not sufficiently encourage comprehensive synthesis or clarification, leading to partial or vague answers. The current generation parameters are empty, indicating no tuning to balance conciseness with completeness.",
+        "root_cause_analysis_gist": "Strict extractive generation combined with limited prompt guidance leads to incomplete answers when retrieval is imperfect.",
+        "evidence_trace": "Despite perfect Context Adherence, the average Answer Relevancy is 0.5 and Factuality is 0.5, showing that faithful generation alone does not guarantee relevance or completeness. For example, the answer to \"can I buy a premium plan but build my website on other platforms\" is off-topic and incomplete, reflecting poor retrieval and insufficient generation prompting. Conversely, better retrieval examples yield more relevant answers, confirming generation depends heavily on retrieval quality and prompt design.",
+        "evidence_trace_gist": "Perfect context adherence contrasts with moderate answer relevancy, highlighting generation prompt and retrieval interplay issues.",
+        "recommended_protocol": "### 1. Enhance generation prompts to explicitly instruct the model to synthesize and summarize all relevant retrieved information comprehensively.\n\n### 2. Introduce generation parameters such as increased `max_tokens` and controlled temperature to allow more detailed, nuanced answers.\n\n### 3. Implement post-generation validation or reranking to filter out incomplete or off-topic answers, possibly using a relevance classifier.\n\n> Note: More detailed generation may increase response length and latency but will improve user satisfaction through completeness.",
+        "recommended_protocol_gist": "- Improve generation prompts for comprehensive synthesis\n- Adjust generation parameters for richer answers\n- Add post-generation relevance validation"
+      },
+      {
+        "title": "Activate and Optimize Reranking to Reduce Noise and Improve Passage Selection",
+        "priority": "high",
+        "problem_detection": "Reranking is currently disabled (`reranker_enabled: False`), contributing to retrieval of noisy or tangential passages that degrade answer quality.",
+        "problem_detection_gist": "Disabled reranking allows less relevant passages to be selected, reducing retrieval precision.",
+        "root_cause_analysis": "Without reranking, the hybrid retrieval returns top documents based on initial scoring that may not fully capture semantic relevance or query intent nuances. This leads to selection of passages that partially overlap topics but do not contain key facts, as seen in low context recall and answer relevancy scores.",
+        "root_cause_analysis_gist": "No reranking means initial retrieval scores dominate, allowing noisy passages to pass through.",
+        "evidence_trace": "The system's retrieval mode is hybrid with `top_k=1` and reranking disabled. Examples show that low scoring cases retrieve tangential documents, e.g., Wix Analytics FAQs for a question about Premium Plans on other platforms, resulting in low context relevancy (0.4) and recall (0.2). Enabling reranking would reprioritize passages more aligned with query intent.",
+        "evidence_trace_gist": "Disabled reranking combined with low top_k leads to noisy retrieval, as shown by off-topic example passages.",
+        "recommended_protocol": "### 1. Enable the reranker module in the retrieval pipeline to reorder candidate passages based on semantic similarity and query intent.\n\n### 2. Train or fine-tune the reranker on domain-specific data to improve its discrimination of relevant vs. irrelevant passages.\n\n### 3. Monitor reranker impact on retrieval metrics and tune thresholds to balance precision and recall.\n\n> Note: Reranking adds computational overhead but significantly improves retrieval precision and downstream answer quality.",
+        "recommended_protocol_gist": "- Enable reranker in retrieval pipeline\n- Fine-tune reranker on domain data\n- Tune reranker thresholds for precision/recall balance"
+      },
+      {
+        "title": "Improve Grading Note Generation via Retrieval and Prompt Engineering",
+        "priority": "critical",
+        "problem_detection": "Grading Note metric scores are very low (avg 0.4), indicating generated grading notes are incomplete, off-topic, or lack clear, actionable structure.",
+        "problem_detection_gist": "Generated grading notes fail to meet structural and content requirements, reducing usefulness.",
+        "root_cause_analysis": "Low retrieval recall and relevancy limit the generator’s access to comprehensive context needed for detailed grading notes. Additionally, generation prompts and instructions lack explicit guidance to produce structured, step-by-step grading notes with clear coverage of key points. The absence of reranking and low top_k exacerbate incomplete context retrieval, further degrading grading note quality.",
+        "root_cause_analysis_gist": "Insufficient retrieval and weak prompt instructions cause incomplete, unstructured grading notes.",
+        "evidence_trace": "The grading note average score is 0.4 with no variation, indicating consistent failure. Examples show grading notes missing key procedural steps or off-topic content, e.g., the email transfer question’s grading note scored 0.4 despite good retrieval. This suggests generation prompt and retrieval improvements are needed to meet grading criteria.",
+        "evidence_trace_gist": "Consistently low grading note scores reflect retrieval and prompt deficiencies limiting structured output.",
+        "recommended_protocol": "### 1. Increase retrieval `top_k` and enable reranking to ensure more complete and relevant context for grading note generation.\n\n### 2. Redesign generation prompts to explicitly require structured, step-by-step grading notes covering all key points.\n\n### 3. Implement automated checks for grading note completeness and adherence to format, feeding back into generation or retrieval adjustments.\n\n> Note: These changes will increase complexity but are essential to meet grading note quality standards.",
+        "recommended_protocol_gist": "- Increase retrieval depth and enable reranking\n- Redesign prompts for structured grading notes\n- Add automated completeness and format checks"
+      }
+    ],
+    "strategic_conclusion": "The RAG system’s core strength lies in its strict grounding of answers in retrieved context, ensuring high faithfulness. However, retrieval limitations—stemming from low top_k, disabled reranking, and limited query reformulation—are the primary bottlenecks reducing answer relevance, factuality, and grading note quality. Addressing these retrieval weaknesses alongside targeted generation prompt enhancements will yield the most impactful improvements, balancing precision, recall, and answer completeness for a robust, trustworthy RAG pipeline.",
+    "configuration_targets": [
+      {
+        "diagnostic_area": "Retrieval quality",
+        "metrics": [
+          "Context Relevancy",
+          "Context Recall"
+        ],
+        "sections": [
+          "Knowledge Base",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "chunking_strategy",
+          "embedding_deployment_id",
+          "retrieval_mode",
+          "top_k",
+          "reranker_deployment_id"
+        ]
+      },
+      {
+        "diagnostic_area": "Faithfulness and grounding",
+        "metrics": [
+          "Context Adherence",
+          "Factuality"
+        ],
+        "sections": [
+          "Generator target & prompts",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "generator_deployment_id",
+          "system_prompt",
+          "predefined_prompt",
+          "citations_enabled"
+        ]
+      },
+      {
+        "diagnostic_area": "Relevance and intent",
+        "metrics": [
+          "Answer Relevancy"
+        ],
+        "sections": [
+          "Adaptive RAG",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "route_mode",
+          "classifier_deployment_id",
+          "planner_deployment_id",
+          "response_structure"
+        ]
+      },
+      {
+        "diagnostic_area": "Structure and style",
+        "metrics": [
+          "Grading Note"
+        ],
+        "sections": [
+          "General",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "response_structure",
+          "tone",
+          "humor_level",
+          "system_prompt",
+          "predefined_prompt"
+        ]
+      }
+    ]
+  },
+  "prompt": {
+    "insights": {
+      "context_relevancy": {
+        "analysis": "The average Context Relevancy score of 0.7 indicates moderate performance, suggesting the retrieved context is somewhat relevant but not consistently precise. Analysis of stratified examples shows that high-scoring cases provide direct, specific answers closely aligned with the question, while lower-scoring cases retrieve related but off-target information that partially overlaps the topic without fully addressing the query. To improve, focus on enhancing the retriever’s ability to better match query intent by refining query formulation, incorporating semantic search techniques, or improving indexing to prioritize context that directly answers the question. Additionally, filtering or reranking retrieved passages based on relevance signals could reduce noise and increase precision in the context provided to the generator.",
+        "metric_name": "Context Relevancy",
+        "metric_description": "How relevant retrieved context is to the question.",
+        "avg_score": 0.7,
+        "min_score": 0.4,
+        "max_score": 1.0
+      },
+      "context_adherence": {
+        "analysis": "The Context Adherence metric shows an excellent overall performance with an average score of 1.0, indicating that the model consistently generates answers strictly based on the retrieved context without adding unsupported information. The stratified examples confirm this pattern, as all responses are direct excerpts from the provided documents, demonstrating strong fidelity to source material. Given this perfect adherence, there is minimal room for improvement in this aspect; efforts should instead focus on other metrics such as answer completeness or relevance if needed. Maintaining this strict context usage is beneficial for trustworthiness and factual accuracy in RAG systems.",
+        "metric_name": "Context Adherence",
+        "metric_description": "How faithfully the answer uses only retrieved context.",
+        "avg_score": 1.0,
+        "min_score": 1.0,
+        "max_score": 1.0
+      },
+      "answer_relevancy": {
+        "analysis": "The average Answer Relevancy score of 0.5 indicates moderate performance, suggesting the system sometimes provides relevant answers but often falls short. Analysis of stratified examples reveals that while some responses partially address the question, they lack completeness or detailed guidance, and others are off-topic due to retrieval of irrelevant documents. To improve, focus on enhancing the retriever's precision to better match queries with pertinent documents and refining the generation step to produce more comprehensive, directly relevant answers. Additionally, implementing query reformulation or relevance feedback could help reduce off-topic responses and increase answer alignment with user intent.",
+        "metric_name": "Answer Relevancy",
+        "metric_description": "How well the answer addresses the question.",
+        "avg_score": 0.5,
+        "min_score": 0.2,
+        "max_score": 0.8
+      },
+      "context_recall": {
+        "analysis": "The overall Context Recall metric performance is moderate, with an average score of 0.5, indicating that retrieved contexts sometimes contain essential information but often miss key details. Common issues include incomplete coverage of critical facts and retrieval of context that is related but lacks the specific information needed to fully answer the question. To improve, focus on enhancing the retriever’s precision by refining query formulation and expanding the knowledge base with more comprehensive, well-indexed documents. Additionally, implementing better context filtering or reranking strategies could help prioritize passages that contain the most relevant and complete information, thereby increasing recall and answer faithfulness.",
+        "metric_name": "Context Recall",
+        "metric_description": "Whether retrieved context contains information needed for ground truth.",
+        "avg_score": 0.5,
+        "min_score": 0.2,
+        "max_score": 0.8
+      },
+      "factuality": {
+        "analysis": "The overall factuality metric shows moderate performance with an average score of 0.5, indicating that while some answers contain mostly correct information, others fail to address the user's query accurately. Common issues include incomplete coverage of essential details (e.g., missing key procedural steps) and retrieval of context irrelevant to the question, leading to off-topic or incorrect answers. To improve, focus on enhancing the retriever's precision to better match queries with relevant documents and refining the generation model to ensure it fully incorporates critical facts from retrieved content. Additionally, implementing stronger faithfulness checks and answer validation could reduce hallucinations and improve factual correctness.",
+        "metric_name": "Factuality",
+        "metric_description": "Answer correctness vs ground truth reference.",
+        "avg_score": 0.5,
+        "min_score": 0.2,
+        "max_score": 0.8
+      },
+      "grading_note": {
+        "analysis": "The overall metric performance is low (average score 0.4), indicating significant shortcomings in the generated grading notes. Common issues include incomplete or off-topic responses that fail to fully address the user's question or provide clear, actionable steps as required by the grading criteria. To improve, the system should enhance retrieval relevance to ensure context directly matches the query intent and refine generation prompts to produce structured, step-by-step guidance with necessary details. Additionally, incorporating explicit checks for coverage of key points in the grading note could help reduce omissions and improve completeness.",
+        "metric_name": "Grading Note",
+        "metric_description": "Two-stage grading note generation then scoring.",
+        "avg_score": 0.4,
+        "min_score": 0.4,
+        "max_score": 0.4
+      }
+    },
+    "examples": {
+      "example_0": {
+        "question": "how to transfer a business email away from Wix",
+        "candidate_answer": "Based on the retrieved workflow context: [S1] Google Workspace: FAQs | score=3.7244 | chunk=0\nFAQs: Google Workspace and your Wix accountClick on the arrows next to each FAQ to see the answers to these common questions.Can I transfer a Google Workspace business email from my Wix account to Google?Yes, you can transfer a Google Workspace business email from Wix to Google. This action disconnects the Workspace business email from your Wix account. To do so, contact Wix Customer Care for assistance. This is an irreversible action. Once transferred to Google, you cannot repurchase the business email through Wix.FAQs: Google WorkspaceClick on the questions below to be taken to Google Workspace help center to view answers. I'm having trouble logging in with my username and password I forgot my admin password. How can I access my account? How can I change a business email username? Is there a limit to how many emails I can send per da",
+        "gt_answer": "To transfer a business email away from Wix, ensure access to your Google Admin Console, disable the email's auto-renewal, and contact a Customer Care Expert for assistance",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.8823529411764701,
+        "answer_overlap": 0.6923076923076921,
+        "token_f1": 0.21989528795811503,
+        "bleu": 0.025940333766235002,
+        "rouge_1": 0.21989528795811503,
+        "rouge_2": 0.063492063492063,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 0.8,
+        "context_recall_score": 0.8,
+        "factuality_score": 0.8,
+        "grading_note_score": 0.4
+      },
+      "example_1": {
+        "question": "can I buy a premium plan but build my website on other platforms",
+        "candidate_answer": "Based on the retrieved workflow context: [S1] Wix Analytics: FAQs | score=2.9454 | chunk=0\nHere are some commonly asked questions about Wix Analytics.General Wix Analytics FAQsDo I need to upgrade my site to access Wix Analytics tools?All Wix sites include Wix Analytics, regardless of whether or not you have purchased a Premium plan. View overviews for site traffic, sales, marketing and more. You an also see specific reports for any Wix apps you have installed such as Wix Restaurants or Wix Stores.There are some Wix Analytics features only available with a site plan, such as: Sales reports for payments accepted on your site (Business and eCommerce plans). The ability to create custom reports (Business VIP Premium plan). The ability to duplicate and edit reports (Business VIP Premium plan).Where can I learn more about the terminology used in Wix Analytics?Every Wix Analytics report includes a glossary where you can learn more ab",
+        "gt_answer": "Wix Premium Plans are designed to be used with websites built on the Wix platform. If you purchase a Premium Plan, it will apply to your Wix site, and you cannot use Wix Premium Plans for a site built on another platform.",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.893617021276595,
+        "answer_overlap": 0.551724137931034,
+        "token_f1": 0.261306532663316,
+        "bleu": 0.025902261411926003,
+        "rouge_1": 0.261306532663316,
+        "rouge_2": 0.040609137055837005,
+        "context_relevancy_score": 0.4,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 0.2,
+        "context_recall_score": 0.2,
+        "factuality_score": 0.2,
+        "grading_note_score": 0.4
+      }
+    },
+    "configs": {
+      "rag_configs": {
+        "run_id": "eval-1db818c858f38646f92d616adbc57683",
+        "name": "Fixed L3 - WixQA Simulated",
+        "dataset_name": "WixQA Simulated",
+        "knowledge_base_id": "kb-d4069abadfb54ef39af3f49153145532",
+        "knowledge_base_name": "WixQA Curpus 100",
+        "chat_configuration_id": "cfg-8096408e924b49dca679721ee5bb70df",
+        "chat_configuration": {
+          "id": "cfg-8096408e924b49dca679721ee5bb70df",
+          "name": "Fixed L3",
+          "tone": "Professional",
+          "metadata": {
+            "top_k": 1,
+            "runtime": "model-farm",
+            "classifier": "DistilBERT",
+            "route_mode": "complex_rag",
+            "retrieval_mode": "hybrid",
+            "route_strategy": "L3 Complex RAG",
+            "welcome_message": "Welcome to Adaptive RAG Studio. Workflow assistant 4 (Fixed L3) will assist you.",
+            "actual_generator": "deployment",
+            "configuration_id": "Yfg473DSrB0t",
+            "reranker_enabled": false,
+            "citations_enabled": true,
+            "agent_max_iterations": 5,
+            "agent_max_tool_calls": 8,
+            "retrieval_mode_label": "Hybrid",
+            "agent_timeout_seconds": 90,
+            "conversation_starters": [
+              "What are the main steps in this workflow?"
+            ],
+            "generation_parameters": {},
+            "planner_deployment_id": "",
+            "reranker_deployment_id": "",
+            "fallback_deployment_ids": [],
+            "generator_deployment_id": "model-local-extractive",
+            "agent_public_web_enabled": false,
+            "classifier_deployment_id": "",
+            "classifier_margin_threshold": 0,
+            "conversation_awareness_enabled": false,
+            "conversation_history_exchanges": 3,
+            "classifier_confidence_threshold": 0,
+            "conversation_history_characters": 4000
+          },
+          "description": "Default configuration for concise business workflow answers.",
+          "humor_level": 0,
+          "system_prompt": "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
+          "generator_model": "extractive",
+          "citations_enabled": true,
+          "predefined_prompt": "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.",
+          "generator_provider": "Local",
+          "response_structure": "Concise answer with bullets and cited workflow context",
+          "generation_parameters": {},
+          "planner_deployment_id": "",
+          "reranker_deployment_id": "",
+          "fallback_deployment_ids": [],
+          "generator_deployment_id": "model-local-extractive",
+          "agent_public_web_enabled": false,
+          "conversation_awareness_enabled": false
+        },
+        "retrieval_mode": "hybrid",
+        "top_k": 1,
+        "route_distribution": {
+          "l3_complex_rag": 2
+        },
+        "wixqa_metrics": {
+          "mrr": 0.5,
+          "bleu": 0.01990170741022058,
+          "rouge_1": 0.2406009103107159,
+          "rouge_2": 0.05205060027395053,
+          "hit_at_k": 0.5,
+          "token_f1": 0.2406009103107159,
+          "ndcg_at_k": 0.5,
+          "factuality": 0.4,
+          "recall_at_k": 0.5,
+          "context_recall": 0.45,
+          "judge_coverage": 1.0,
+          "precision_at_k": 0.5,
+          "retrieval_coverage": 1.0
+        }
+      }
+    },
+    "rag_traditional_metrics": {
+      "routing_match": 0.0,
+      "context_relevance_proxy": 0.0,
+      "faithfulness_proxy": 0.8879849812265326,
+      "answer_overlap": 0.622015915119363,
+      "token_f1": 0.2406009103107155,
+      "bleu": 0.025921297589080503,
+      "rouge_1": 0.2406009103107155,
+      "rouge_2": 0.052050600273950004
+    }
+  }
+}

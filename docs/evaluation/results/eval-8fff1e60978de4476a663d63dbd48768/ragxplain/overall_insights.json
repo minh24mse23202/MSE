@@ -1,0 +1,392 @@
+{
+  "analysis": {
+    "executive_summary": "The RAG system demonstrates strong answer relevancy and well-structured responses, effectively addressing user questions with a professional tone and clear formatting. However, retrieval quality is moderate, with only partial coverage of essential information and occasional retrieval of tangential or incomplete context, limiting the generator's ability to produce fully factual and strictly grounded answers. The generation stage shows moderate faithfulness, with some hallucination or unsupported additions beyond retrieved context, impacting factual accuracy. Improving retrieval precision and recall, alongside enforcing stricter grounding in generation, will yield the most significant gains.",
+    "executive_summary_gist": "The system excels at producing relevant, well-structured answers but struggles with incomplete and sometimes imprecise retrieval, leading to moderate factuality and adherence scores. Enhancing retrieval completeness and grounding generation strictly in retrieved context are key improvement areas.",
+    "insights": [
+      {
+        "title": "Boost Retrieval Precision and Coverage to Enhance Context Relevancy and Recall",
+        "priority": "critical",
+        "problem_detection": "The retrieval stage yields only moderate context relevancy (avg ~0.57) and recall (~0.5), often returning tangential or incomplete information that lacks key procedural details necessary for accurate answers.",
+        "problem_detection_gist": "Retrieval returns partially relevant and incomplete context, missing critical procedural details.",
+        "root_cause_analysis": "The hybrid retrieval with top_k=2 and no reranker enabled likely limits the breadth and precision of retrieved passages. The knowledge base indexing and query formulation may not sufficiently capture fine-grained user intents or prioritize exact procedural steps, causing retrieval of generic or off-topic content. Lack of passage-level reranking or filtering further reduces precision.",
+        "root_cause_analysis_gist": "Limited top_k and absence of reranking reduce retrieval precision and coverage of key procedural details.",
+        "evidence_trace": "Metrics show moderate average scores for `context_relevancy` (0.57) and `context_recall` (0.5), with minimums as low as 0.2 indicating frequent retrieval failures. Examples like the stray logo issue question retrieved context with only 0.4 relevancy and 0.2 recall, missing critical instructions. Another example about setting emails showed 0.6 relevancy and recall but still lacked exact step coverage. These patterns confirm retrieval gaps in topical alignment and completeness.",
+        "evidence_trace_gist": "Moderate `context_relevancy` and `context_recall` scores with low outliers and examples missing key procedural steps highlight retrieval gaps.",
+        "recommended_protocol": "### 1. Increase `top_k` in retrieval from 2 to at least 5 to broaden candidate contexts and improve recall.\n\n### 2. Enable or integrate a passage-level reranker to refine retrieval precision, prioritizing passages with high semantic and lexical overlap to query and known procedural keywords.\n\n### 3. Refine query formulation by incorporating query expansion with synonyms and key procedural terms, and improve knowledge base indexing granularity (e.g., smaller passage chunks) to better capture fine-grained intents.\n\n> Note: Increasing `top_k` and reranking will increase latency and computational cost; mitigate by caching frequent queries and optimizing reranker efficiency.",
+        "recommended_protocol_gist": "- Increase retrieval `top_k` to 5 for better recall.\n- Enable passage-level reranking to improve precision.\n- Refine query formulation and index granularity for finer intent capture."
+      },
+      {
+        "title": "Enforce Stronger Generation Grounding to Improve Context Adherence and Factuality",
+        "priority": "critical",
+        "problem_detection": "Generation exhibits moderate context adherence (~0.6) and factuality (~0.63), with frequent hallucination or unsupported additions beyond retrieved context, reducing answer trustworthiness.",
+        "problem_detection_gist": "Generated answers often include unsupported or hallucinated information beyond retrieved context.",
+        "root_cause_analysis": "The current generation prompt and constraints allow the model to introduce assumptions or external knowledge when retrieved context is incomplete or ambiguous. Lack of explicit grounding enforcement or context verification modules permits drift from source context. The fallback to generic or assumed details reduces factual accuracy and adherence.",
+        "root_cause_analysis_gist": "Generation prompt and constraints insufficiently restrict model to retrieved context, enabling hallucination.",
+        "evidence_trace": "The average `context_adherence` score is 0.6 with lows at 0.2, and `factuality` averages 0.63, indicating partial correctness but missing key steps or introducing unsupported details. For example, the og:image update answers included plausible but unsupported info not in context (adherence 0.4). The email setup answer added assumptions about configuration steps beyond retrieved data (adherence 0.6). These illustrate generation drift from context.",
+        "evidence_trace_gist": "Moderate adherence and factuality with examples showing hallucinated or unsupported details beyond retrieved context.",
+        "recommended_protocol": "### 1. Strengthen prompt engineering to explicitly instruct the model to only use retrieved context and to clearly state when information is unavailable.\n\n### 2. Implement a context verification or grounding module post-generation to detect unsupported claims and either flag or remove them.\n\n### 3. Consider retrieval-augmented constrained decoding or token-level grounding penalties to reduce hallucination.\n\n> Note: Stricter grounding may reduce answer completeness; balance by improving retrieval completeness and allowing explicit disclaimers when context is insufficient.",
+        "recommended_protocol_gist": "- Refine prompts to enforce strict use of retrieved context.\n- Add post-generation verification to detect unsupported info.\n- Explore constrained decoding to reduce hallucination."
+      },
+      {
+        "title": "Enhance Procedural Completeness to Address Minor Gaps in Answer Relevancy and Factuality",
+        "priority": "high",
+        "problem_detection": "While answer relevancy is very high (~0.97), some answers lack detailed, step-by-step instructions or explicit coverage of requested specifics, causing minor completeness gaps.",
+        "problem_detection_gist": "Answers sometimes miss detailed procedural steps despite high overall relevancy.",
+        "root_cause_analysis": "Incomplete or partially relevant retrieval limits the generator’s ability to produce fully detailed instructions. Additionally, generation may prioritize conciseness or omit less frequent procedural nuances. The knowledge base may lack comprehensive procedural templates or examples for complex multi-step tasks.",
+        "root_cause_analysis_gist": "Partial retrieval and generation conciseness cause minor procedural detail omissions.",
+        "evidence_trace": "High average `answer_relevancy` (0.97) contrasts with moderate `factuality` (0.63) and `context_recall` (0.5), indicating relevant but sometimes incomplete answers. For instance, the email setup example scored 0.8 in answer relevancy but missed explicit step details present in ground truth. The grading note metric (0.9 avg) also shows minor gaps in explicit instructions.",
+        "evidence_trace_gist": "High answer relevancy but moderate factuality and recall reveal minor procedural detail omissions.",
+        "recommended_protocol": "### 1. Augment the knowledge base with detailed procedural templates and step-by-step workflows for common complex tasks.\n\n### 2. Adjust retrieval to prioritize documents rich in procedural detail, possibly via metadata or keyword boosting.\n\n### 3. Tune generation parameters or prompts to encourage inclusion of explicit stepwise instructions without sacrificing conciseness.\n\n> Note: Adding procedural detail may increase answer length; balance with user preferences for brevity.",
+        "recommended_protocol_gist": "- Enrich knowledge base with detailed procedural templates.\n- Prioritize retrieval of detailed procedural documents.\n- Tune generation to include explicit stepwise instructions."
+      },
+      {
+        "title": "Maintain High Answer Structure and Formatting While Improving Contextual Specificity",
+        "priority": "medium",
+        "problem_detection": "The grading note metric is high (~0.9), indicating strong formatting and clarity, but minor issues remain with occasional lack of explicit instructions and fallback on generic advice due to incomplete context.",
+        "problem_detection_gist": "Answer formatting is strong but sometimes relies on generic fallback due to incomplete context.",
+        "root_cause_analysis": "Incomplete retrieval forces generation to fallback on generic or external documentation, which while well formatted, reduces answer specificity and user satisfaction. The current response structure and prompt encourage clarity but cannot compensate for missing content.",
+        "root_cause_analysis_gist": "Incomplete retrieval leads to fallback on generic advice despite strong formatting.",
+        "evidence_trace": "The `grading_note` average is 0.9 with minimum 0.8, showing consistent clarity and structure. Examples with lower grading note scores include the email setup and preview picture change questions, where answers were clear but lacked detailed instructions due to missing context. This suggests formatting is not the bottleneck but retrieval completeness is.",
+        "evidence_trace_gist": "High grading note scores with minor drops linked to incomplete retrieval causing fallback on generic advice.",
+        "recommended_protocol": "### 1. Continue enforcing structured response templates with clear bullets and citations as per current prompt.\n\n### 2. Improve retrieval completeness to reduce fallback on generic instructions.\n\n### 3. Add dynamic disclaimers or suggestions for users to consult official docs when context is insufficient, maintaining transparency.\n\n> Note: Maintaining strong formatting supports user trust and comprehension even when content is incomplete.",
+        "recommended_protocol_gist": "- Keep structured, bullet-pointed response templates.\n- Improve retrieval to reduce generic fallback.\n- Add disclaimers when context is insufficient."
+      }
+    ],
+    "strategic_conclusion": "The RAG system’s primary bottleneck lies in retrieval precision and coverage, which cascades into moderate factuality and adherence challenges during generation. Prioritizing retrieval improvements—via increased `top_k`, reranking, and refined query/indexing—will provide richer, more relevant context that enables the generator to produce accurate, fully grounded, and complete answers. Complementing this with stronger grounding constraints in generation and enriched procedural knowledge will maximize answer quality and user trust without sacrificing clarity or relevance.",
+    "configuration_targets": [
+      {
+        "diagnostic_area": "Retrieval quality",
+        "metrics": [
+          "Context Relevancy",
+          "Context Recall"
+        ],
+        "sections": [
+          "Knowledge Base",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "chunking_strategy",
+          "embedding_deployment_id",
+          "retrieval_mode",
+          "top_k",
+          "reranker_deployment_id"
+        ]
+      },
+      {
+        "diagnostic_area": "Faithfulness and grounding",
+        "metrics": [
+          "Context Adherence",
+          "Factuality"
+        ],
+        "sections": [
+          "Generator target & prompts",
+          "Adaptive RAG"
+        ],
+        "fields": [
+          "generator_deployment_id",
+          "system_prompt",
+          "predefined_prompt",
+          "citations_enabled"
+        ]
+      },
+      {
+        "diagnostic_area": "Relevance and intent",
+        "metrics": [
+          "Answer Relevancy"
+        ],
+        "sections": [
+          "Adaptive RAG",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "route_mode",
+          "classifier_deployment_id",
+          "planner_deployment_id",
+          "response_structure"
+        ]
+      },
+      {
+        "diagnostic_area": "Structure and style",
+        "metrics": [
+          "Grading Note"
+        ],
+        "sections": [
+          "General",
+          "Generator target & prompts"
+        ],
+        "fields": [
+          "response_structure",
+          "tone",
+          "humor_level",
+          "system_prompt",
+          "predefined_prompt"
+        ]
+      }
+    ]
+  },
+  "prompt": {
+    "insights": {
+      "context_relevancy": {
+        "analysis": "The overall Context Relevancy metric shows moderate performance with an average score of about 0.57, indicating that retrieved contexts are somewhat relevant but often lack direct alignment with user questions. Common issues include retrieved content being tangentially related or incomplete, missing specific troubleshooting steps or exact feature guidance, and sometimes providing generic or partially relevant information rather than precise answers. To improve, focus on enhancing the retriever’s precision by refining query formulation and indexing strategies to better capture exact user intents and key terms, and consider incorporating more fine-grained passage ranking or filtering to prioritize highly relevant snippets. Additionally, improving the integration between retrieval and generation to better leverage retrieved context for completeness and specificity can help raise relevancy scores.",
+        "metric_name": "Context Relevancy",
+        "metric_description": "How relevant retrieved context is to the question.",
+        "avg_score": 0.5666666666666667,
+        "min_score": 0.2,
+        "max_score": 1.0
+      },
+      "context_adherence": {
+        "analysis": "The average Context Adherence score of 0.6 indicates moderate performance, showing that while many answers partially rely on retrieved context, they often introduce unsupported or external information. Common issues include adding assumptions or details not present in the context, such as platform-specific behaviors or troubleshooting steps beyond the retrieved data. To improve, the system should enhance strict grounding by better filtering or constraining generation to only use explicitly retrieved context, possibly via stronger prompt engineering or context verification modules. Additionally, clarifying when context is insufficient and explicitly stating limitations can maintain adherence without sacrificing helpfulness.",
+        "metric_name": "Context Adherence",
+        "metric_description": "How faithfully the answer uses only retrieved context.",
+        "avg_score": 0.6,
+        "min_score": 0.2,
+        "max_score": 1.0
+      },
+      "answer_relevancy": {
+        "analysis": "The overall Answer Relevancy metric shows a very high performance with an average score of 0.967, indicating that the generated answers effectively address user questions. The stratified examples reveal that even the slightly lower-scoring responses (around 0.8) still provide relevant information but occasionally lack detailed, step-by-step instructions or explicit coverage of certain requested specifics, suggesting minor gaps in completeness rather than relevance. To further improve, focusing on enhancing the granularity and completeness of instructions—especially for complex or multi-step tasks—would be beneficial, possibly by augmenting retrieval with more precise procedural documents or templates. Given the high current performance, improvements should be targeted and incremental, as the system already delivers highly relevant and user-focused answers.",
+        "metric_name": "Answer Relevancy",
+        "metric_description": "How well the answer addresses the question.",
+        "avg_score": 0.9666666666666667,
+        "min_score": 0.8,
+        "max_score": 1.0
+      },
+      "context_recall": {
+        "analysis": "The Context Recall metric shows moderate performance with an average score of 0.5, indicating that retrieved contexts only partially contain the necessary information to answer user queries accurately. Low-scoring examples reveal frequent retrieval of irrelevant or off-topic content that fails to cover key procedural steps or specific features mentioned in the ground truth, highlighting retrieval gaps in topical alignment and coverage. Moderate examples demonstrate partial coverage of essential information but often miss critical details or instructions, suggesting the need for improved retrieval precision and completeness. To improve, focus on enhancing retriever relevance by refining query formulation, expanding or better indexing the knowledge base to cover key procedural details, and incorporating context filtering to exclude unrelated documents. Additionally, integrating feedback loops that prioritize retrieval of passages with high overlap to ground truth procedural steps can boost context recall and downstream answer quality.",
+        "metric_name": "Context Recall",
+        "metric_description": "Whether retrieved context contains information needed for ground truth.",
+        "avg_score": 0.5,
+        "min_score": 0.2,
+        "max_score": 1.0
+      },
+      "factuality": {
+        "analysis": "The overall factuality performance is moderate with an average score of 0.63, indicating the system provides partially correct answers but often misses key details or specific step-by-step instructions found in the ground truth. Common issues include incomplete coverage of essential procedural steps, omission of critical shortcuts or UI navigation details, and occasional introduction of irrelevant or unsupported information. To improve, focus on enhancing retrieval precision to surface more relevant, detailed context and refining generation to better incorporate exact procedural instructions and avoid adding unsupported features. Emphasizing alignment with ground truth workflows and verifying inclusion of all critical steps will help raise factual accuracy.",
+        "metric_name": "Factuality",
+        "metric_description": "Answer correctness vs ground truth reference.",
+        "avg_score": 0.6333333333333334,
+        "min_score": 0.4,
+        "max_score": 1.0
+      },
+      "grading_note": {
+        "analysis": "The average score of 0.9 indicates high overall performance in grading note generation, reflecting strong, clear, and comprehensive responses across most examples. Common minor issues in moderate-scoring samples include occasional lack of detailed, explicit instructions and reliance on external documentation due to incomplete retrieved context, suggesting room for improvement in coverage and specificity. To enhance performance further, focus on enriching retrieval to provide more precise, step-by-step procedural details within the generated answers and reduce dependence on generic fallback advice. Given the high average and well-satisfied grading criteria in top examples, the system is performing well with limited potential for major gains beyond fine-tuning retrieval completeness and contextual grounding.",
+        "metric_name": "Grading Note",
+        "metric_description": "Two-stage grading note generation then scoring.",
+        "avg_score": 0.8999999999999999,
+        "min_score": 0.8,
+        "max_score": 1.0
+      }
+    },
+    "examples": {
+      "example_0": {
+        "question": "I need help with setting up two different emails on my website. One for receiving order invoices and the other for general inquiries. Im specifically looking for guidance on how to set the email address for order confirmations in the Business Info section of my sites settings.",
+        "candidate_answer": "To set up two different emails on your website—one for order invoices and another for general inquiries—and configure the order confirmation email in the Business Info section, follow these steps:\n\n- **Create additional business email addresses** for your domain, such as orders@yourdomain.com and info@yourdomain.com. This requires purchasing additional business emails through your account [S1].\n- To set up these emails:\n  - Go to Business Email in your Wix account.\n  - Click \"Show User Info\" on the relevant account.\n  - Click the \"More Actions\" icon and select \"Set Up User.\"\n  - Sign in to your Google Workspace account.\n  - Add new users with the desired email addresses (e.g., orders@yourdomain.com, info@yourdomain.com) [S1, S2].\n- After creating the emails, **configure the order confirmation email address in the Business Info section** of your site settings by entering the orders@yourdomain.com email where order notifications are sent. (Note: Specific steps for this configuration in Business Info are not detailed in the retrieved context, but typically this is done in site settings under Business Info or Notifications.)\n- Allow up to 24 hours for the new email accounts to become active [S2].\n\nIf you need detailed guidance on setting the order confirmation email specifically in the Business Info section, please check your site settings under Business Info or contact Wix support for exact navigation steps.\n\nReferences: [S1], [S2]",
+        "gt_answer": "To set the email address for order confirmations in the Business Info section of your site's settings, follow these steps: \n\n1. Go to the Business Info section of your site's settings. \n2. Scroll down to the Location & Contact Info section. \n3. Enter an email address in the Email field. \n\nFor setting up additional business emails for different purposes, such as general inquiries, you can manage your incoming emails by setting up additional business email addresses for different parts of your company. If you own a company called Clothes by Wix, for example, and have the domain name clothesbywix.com, you can create more business emails for the different departments: info@clothesbywix.com, contact@clothesbywix.com, orders@clothesbywix.com, etc. To set up additional business emails, go to Business Email in your account, click Show User Info on the relevant account, click the More Actions icon next to the account you want to set up, select Set Up User, sign in to your Google Workspace account, enter your email address, click Next, enter your password, click Users, click Add new user, enter the user details and set a password (optional), and click Add.",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.5370370370370371,
+        "answer_overlap": 0.632183908045977,
+        "token_f1": 0.582338902147971,
+        "bleu": 0.25900131303331303,
+        "rouge_1": 0.582338902147971,
+        "rouge_2": 0.30215827338129403,
+        "context_relevancy_score": 0.6,
+        "context_adherence_score": 0.6,
+        "answer_relevancy_score": 0.8,
+        "context_recall_score": 0.6,
+        "factuality_score": 0.8,
+        "grading_note_score": 0.8
+      },
+      "example_1": {
+        "question": "I need to update the og:image for my entire site to ensure the correct image appears when the link is posted on social media. I also want to know if this will affect the image when the link is posted in an email or on Instagram.",
+        "candidate_answer": "To update the og:image for your entire site:\n\n- Go to your site's settings in the Wix Editor.\n- Click \"Website settings.\"\n- Scroll down to \"General social image\" and click \"Upload Image.\"\n- Select or upload the desired image, then click \"Choose File\" and save.\n- Publish your site to apply changes [S1].\n\nRegarding the impact on image display:\n\n- The og:image primarily controls the thumbnail shown when your site link is shared on social media platforms like Facebook and X.\n- For email clients, the image display depends on the email service and how it handles link previews; og:image may or may not be used consistently.\n- Instagram does not generate link previews with og:image, so the image will not appear automatically when posting links there.\n\nTherefore, updating the og:image ensures consistent social media sharing thumbnails but may not affect email or Instagram link previews [S1, S2].",
+        "gt_answer": "To update the og:image for your entire site, you can follow these steps: \n1. Open your site's settings in the Wix Editor.\n2. Click on 'Website settings'.\n3. Scroll down to 'General social image' and click 'Upload Image'.\n4. Select an image or upload a new one, then click 'Choose File' to add it.\n5. Click 'Save' at the top of the dashboard and publish your site.\n\nThis will ensure the correct image appears when your site link is shared on social media platforms like Facebook and Twitter or other social networks.",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.45238095238095205,
+        "answer_overlap": 0.597014925373134,
+        "token_f1": 0.5477178423236511,
+        "bleu": 0.28834526997701204,
+        "rouge_1": 0.5477178423236511,
+        "rouge_2": 0.35983263598326304,
+        "context_relevancy_score": 0.8,
+        "context_adherence_score": 0.4,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 1.0,
+        "factuality_score": 1.0,
+        "grading_note_score": 1.0
+      },
+      "example_2": {
+        "question": "Im experiencing trouble with the website editor. Theres a stray logo on the published version that doesnt show up in the editor, making it impossible to correct.",
+        "candidate_answer": "The issue of a stray logo appearing on the published website but not in the editor may be due to cached content or a discrepancy between the editor view and the live site. Here are steps to troubleshoot:\n\n- Clear your browser cache or try viewing the site in an incognito/private window to rule out caching issues.\n- Check if the logo is part of any hidden or conditional elements, such as repeaters or dynamic content connected via CMS, which might not be visible in the editor by default [S2].\n- Review any Logo + Website plan settings, as logos purchased are digital goods and cannot be refunded or altered after download, meaning the logo might be embedded in the plan or template [S1].\n- If the logo is part of a repeater or dynamic section, verify the repeater content and layout in Editor X to ensure no hidden items are causing the display [S2].\n\nIf these steps do not resolve the issue, contacting support with specific site details is recommended for further investigation.",
+        "gt_answer": "If you are unable to select or find an element in the editor, it is possible that it has been placed behind another element. Follow the steps below to locate and select your elements in the editor.\n\n## Use the Layers panel to locate an element\nIf an element is placed outside the editor gridlines or behind another element, you may not be able to see it on your screen. Use the Layers panel to locate the element on the page.\n## To open the Layers panel and find elements:\n1. [Go to your editor](https://manage.wix.com/account/site-selector/?actionUrl=https%3A%2F%2Fwww.wix.com%2Feditor%2F%7BmetaSiteId%7D%3FeditorSessionId%3D%7Besi%7D%26).\n2. Click the **Layers** icon ![](https://lh6.googleusercontent.com/gK9dfcU80SWT9YOMhPhN62hW4YUDMmaf17w7O0LfSHLFn46W1Nugy_36zibPxclwtc5OmziXxiJ-zGwzz956EAjx8MqPYVd_i7KRCOZU9Sq7-7KUE-tjh3C5Lhgyto4oz9h2J5E5-59p__W4gjiJwg) at the bottom of your editor.\n3. Click **Header**, **Page** or **Footer**.\n4. Find the relevant element on the list and click to select it.\n\n## Use Ctrl + Shift + M to toggle through your elements\nIf you see an element on your live site or in Preview mode, but not in the editor, it might be placed outside of the site's gridlines. Toggle through your page elements to locate the element.\nTo toggle through elements on a page:\n1. Hold down Ctrl (Cmd on Mac) + Shift on your keyboard.\n2. Press M to scroll through the elements on your site until you reach the desired element.\n",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.461538461538461,
+        "answer_overlap": 0.21495327102803702,
+        "token_f1": 0.28361858190709,
+        "bleu": 0.041479652165344,
+        "rouge_1": 0.28361858190709,
+        "rouge_2": 0.06388206388206301,
+        "context_relevancy_score": 0.4,
+        "context_adherence_score": 0.6,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 0.2,
+        "factuality_score": 0.4,
+        "grading_note_score": 1.0
+      },
+      "example_4": {
+        "question": "Im unable to access the Google Maps element in the footer of my Wix site. Im having trouble removing it, and I dont know where the overlapping items feature is located.",
+        "candidate_answer": "To access and remove the Google Maps element in your Wix site's footer when it's difficult to select:\n\n- Open the Layers panel in the Wix Editor by clicking the Layers icon at the bottom of the editor. Navigate to the Footer section to locate the Google Maps element and select it directly from the list.\n- Use the Overlapping Items feature by right-clicking on the element that is covering the Google Maps element. Then hover over \"Overlapping Items\" in the context menu and select the Google Maps element from the submenu.\n- If the Overlapping Items feature does not work, right-click the covering element, hover over \"Arrange,\" and select \"Move Backward\" repeatedly until the Google Maps element becomes accessible.\n- Alternatively, use the keyboard shortcut Ctrl + Shift + M (Cmd + Shift + M on Mac) to toggle through the elements on the page until the Google Maps element is selected.\n\nThese steps will help you locate and remove the Google Maps element even if it is hidden behind other elements or outside the gridlines [S1][S2].",
+        "gt_answer": "If you are unable to select or find an element in the Editor, it is possible that it has been placed behind another element.\n\nIf an element is placed outside the Editor gridlines or behind another element, you may not be able to see it on your screen. Use the Layers panel to locate the element on the page.\n\nTo open the Layers panel, find element and delete it:\n1. Go to your [editor] (https://manage.wix.com/account/site-selector/?actionUrl=https%3A%2F%2Fwww.wix.com%2Feditor%2F%7BmetaSiteId%7D%3FeditorSessionId%3D%7Besi%7D%26).\n2. Click the Layers icon  at the bottom of your editor.\n3. Click Header, Page or Footer.\n4. Find the relevant element on the list and click to select it.\n5. Press Delete on your keyboard.\n\n  If you see an element on your live site or in Preview mode, but not in the Editor, it might be placed outside of the site's gridlines. Toggle through your page elements to locate the element.\n  To toggle through elements on a page:\n  Hold down Ctrl (Cmd on Mac) + Shift on your keyboard.\n  Press M to scroll through the elements on your site until you reach the desired element.\n\nWhen your header or footer are frozen, you may be unable to select an element. You can unfreeze the header and footer by selecting a new scroll setting, or disabling the Freeze option.\nTo unfreeze your footer:\n1. Click the footer.\n2. Click the Settings icon .\n3. Click the Freeze Footer toggle to disable it.",
+        "routing_match": 1,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.647727272727272,
+        "answer_overlap": 0.431192660550458,
+        "token_f1": 0.443418013856812,
+        "bleu": 0.085828791048715,
+        "rouge_1": 0.443418013856812,
+        "rouge_2": 0.171693735498839,
+        "context_relevancy_score": 1.0,
+        "context_adherence_score": 0.8,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 0.8,
+        "factuality_score": 0.8,
+        "grading_note_score": 1.0
+      },
+      "example_5": {
+        "question": "I want to change the preview picture that shows when using my URL.",
+        "candidate_answer": "To change the preview picture that appears when sharing your URL, you typically need to update the \"social preview\" or \"thumbnail\" image in your website's settings or CMS. However, the retrieved workflow context does not explicitly cover changing the preview picture for URLs.\n\nBased on standard practice (not directly from retrieved context):\n- Look for a \"social sharing\" or \"SEO\" settings section in your website editor or CMS.\n- Upload or select the desired preview image there.\n- Save and publish your changes to update the preview image shown when sharing the URL.\n\nIf you are working with dynamic pages, previewing and editing is covered in [S2], but it does not mention preview image changes.\n\nPlease check your platform's documentation or settings for \"social preview\" or \"open graph\" image options to update the preview picture.\n\nNo direct workflow context was found for this specific action.",
+        "gt_answer": "To change the preview picture that shows when using your URL, follow these steps:\n\n1. Open [your site's settings](https://www.wix.com/my-account/site-selector/?buttonText=Edit%20Site%20Info&title=Select%20a%20Site&autoSelectOnSingleSite=true&actionUrl=https://www.wix.com/dashboard/{{metaSiteId}}/settings/).\n2. Click **Website settings**.\n3. Scroll down to General social image and click **Upload Image**.\n4. Select an image or click **\\+ Upload Media** to upload a new one.\n5. Click **Choose File** to add it.\n6. Click **Save** at the top of the dashboard.\n7. [Publish your site](https://support.wix.com/en/article/wix-editor-saving-previewing-and-publishing-your-site#publishing-your-site).\n\nIf you want to change the og:image for an individual page:\n\n1. Click **Pages & Menu** on the left Editor menu.\n2. Click the relevant page.\n3. Click More Actions.\n4. Select **Social share**.\n5. Click **Upload Image**.\n6. Select an image or click **\\+ Upload Media** to upload a new one.\n7. Click **Add to Page**.\n8. [Publish your site](https://support.wix.com/en/article/wix-editor-saving-previewing-and-publishing-your-site#publishing-your-site).",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.37349397590361405,
+        "answer_overlap": 0.329670329670329,
+        "token_f1": 0.30722891566265004,
+        "bleu": 0.053096597936110004,
+        "rouge_1": 0.30722891566265004,
+        "rouge_2": 0.060606060606060004,
+        "context_relevancy_score": 0.4,
+        "context_adherence_score": 1.0,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 0.2,
+        "factuality_score": 0.4,
+        "grading_note_score": 0.8
+      },
+      "example_3": {
+        "question": "I want to update the picture that appears when I share my website link with someone using my editor.",
+        "candidate_answer": "To update the picture that appears when you share your website link, you need to change the social sharing image (also known as the social preview or Open Graph image) in your website editor settings. This image controls what displays when your link is shared on platforms like Facebook.\n\nKey steps typically include:\n- Access your website editor's SEO or social sharing settings.\n- Upload or select a new image for social sharing.\n- Save and publish your changes.\n\nNote: The retrieved workflow context does not specifically cover updating the social sharing image, so please refer to your website editor's help documentation for exact instructions.\n\nNo direct citation available from the retrieved context for this specific task.",
+        "gt_answer": "Go to your editor and publish your site.To update the picture that appears when you share your website link, you need to change the og:image settings in your Wix Editor. Here are the steps you can follow:\n\n1. **For an individual page:**\n   - Go to your Wix Editor and click on 'Pages & Menu' on the left side.\n   - Hover over the relevant page and click the More Actions icon.\n   - Choose 'Social Share' and click 'Upload Image' to select a new image.\n   - Click 'Add to Page'.\n   - [Publish](https://support.wix.com/en/article/wix-editor-saving-previewing-and-publishing-your-site#publishing-your-site) your site.\n\n2. **For the whole site:**\n   - Open [your site's settings](https://www.wix.com/my-account/site-selector/?buttonText=Edit%20Site%20Info&title=Select%20a%20Site&autoSelectOnSingleSite=true&actionUrl=https://www.wix.com/dashboard/{{metaSiteId}}/settings/) and click on 'Website settings'.\n   - Scroll down to 'General social image' and click 'Upload Image'.\n   - Select a new image or upload a new one, then click 'Choose File' and 'Save'.\n   - Go to your editor and [publish your site](https://support.wix.com/en/article/wix-editor-saving-previewing-and-publishing-your-site#publishing-your-site).",
+        "routing_match": 0,
+        "context_relevance_proxy": 0,
+        "faithfulness_proxy": 0.40789473684210503,
+        "answer_overlap": 0.36363636363636304,
+        "token_f1": 0.35256410256410203,
+        "bleu": 0.109835603749173,
+        "rouge_1": 0.35256410256410203,
+        "rouge_2": 0.148387096774193,
+        "context_relevancy_score": 0.2,
+        "context_adherence_score": 0.2,
+        "answer_relevancy_score": 1.0,
+        "context_recall_score": 0.2,
+        "factuality_score": 0.4,
+        "grading_note_score": 0.8
+      }
+    },
+    "configs": {
+      "rag_configs": {
+        "run_id": "eval-8fff1e60978de4476a663d63dbd48768",
+        "name": "Fixed L2 - WixQA ExpertWritten",
+        "dataset_name": "WixQA ExpertWritten",
+        "knowledge_base_id": "kb-d4069abadfb54ef39af3f49153145532",
+        "knowledge_base_name": "WixQA Curpus 100",
+        "chat_configuration_id": "cfg-d5eabad574f04c209ccd1c5a80c512a2",
+        "chat_configuration": {
+          "id": "cfg-d5eabad574f04c209ccd1c5a80c512a2",
+          "name": "Fixed L2",
+          "tone": "Professional",
+          "metadata": {
+            "top_k": 2,
+            "runtime": "model-farm",
+            "classifier": "Built-in trained classifier",
+            "route_mode": "simple_rag",
+            "retrieval_mode": "hybrid",
+            "route_strategy": "L2 Simple RAG",
+            "welcome_message": "Welcome to Adaptive RAG Studio. Workflow assistant 3 (Fixed L2) will assist you.",
+            "actual_generator": "deployment",
+            "configuration_id": "nUcjS2lW2ean",
+            "reranker_enabled": false,
+            "citations_enabled": true,
+            "agent_max_iterations": 5,
+            "agent_max_tool_calls": 8,
+            "retrieval_mode_label": "Hybrid",
+            "agent_timeout_seconds": 90,
+            "conversation_starters": [
+              "What are the main steps in this workflow?",
+              "Summarize the selected knowledge base."
+            ],
+            "generation_parameters": {},
+            "planner_deployment_id": "",
+            "reranker_deployment_id": "",
+            "fallback_deployment_ids": [
+              "model-e7c1d1c6dfbb455e8951ec7d7d6c6e8d"
+            ],
+            "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+            "agent_public_web_enabled": false,
+            "classifier_deployment_id": "",
+            "classifier_margin_threshold": 0,
+            "conversation_awareness_enabled": false,
+            "conversation_history_exchanges": 3,
+            "classifier_confidence_threshold": 0,
+            "conversation_history_characters": 4000
+          },
+          "description": "Default configuration for concise business workflow answers.",
+          "humor_level": 0,
+          "system_prompt": "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
+          "generator_model": "gpt-4.1-mini",
+          "citations_enabled": true,
+          "predefined_prompt": "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.",
+          "generator_provider": "openai",
+          "response_structure": "Concise answer with bullets and cited workflow context",
+          "generation_parameters": {},
+          "planner_deployment_id": "",
+          "reranker_deployment_id": "",
+          "fallback_deployment_ids": [
+            "model-e7c1d1c6dfbb455e8951ec7d7d6c6e8d"
+          ],
+          "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+          "agent_public_web_enabled": false,
+          "conversation_awareness_enabled": false
+        },
+        "retrieval_mode": "hybrid",
+        "top_k": 2,
+        "route_distribution": {
+          "l2_simple_rag": 6
+        },
+        "wixqa_metrics": {
+          "mrr": 0.5,
+          "bleu": 0.1459675152882154,
+          "rouge_1": 0.4194810597437132,
+          "rouge_2": 0.18442664435428607,
+          "hit_at_k": 0.5,
+          "token_f1": 0.4194810597437132,
+          "ndcg_at_k": 0.8154648767857288,
+          "factuality": 0.7833333333333333,
+          "recall_at_k": 0.5,
+          "context_recall": 0.4,
+          "judge_coverage": 1.0,
+          "precision_at_k": 0.5,
+          "retrieval_coverage": 1.0
+        }
+      }
+    },
+    "rag_traditional_metrics": {
+      "routing_match": 0.6666666666666666,
+      "context_relevance_proxy": 0.0,
+      "faithfulness_proxy": 0.48001207273824026,
+      "answer_overlap": 0.4281085763840497,
+      "token_f1": 0.4194810597437127,
+      "bleu": 0.13959787131827783,
+      "rouge_1": 0.4194810597437127,
+      "rouge_2": 0.18442664435428535
+    }
+  }
+}

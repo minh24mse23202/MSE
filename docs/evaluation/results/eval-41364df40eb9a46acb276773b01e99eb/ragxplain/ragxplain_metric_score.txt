@@ -1,0 +1,7 @@
+answer_relevancy: 1.00
+context_adherence: 0.53
+context_recall: 0.47
+context_relevancy: 0.50
+factuality: 0.63
+grading_note: 0.90
+overall_average: 0.67

@@ -1,4 +1,9 @@
-const API_BASE_URL = import.meta.env.VITE_ARAGBIZ_API_URL || "http://127.0.0.1:8000";
+function normalizeApiBase(value) {
+  const normalized = String(value || "/api").trim().replace(/\/+$/, "");
+  return normalized || "/api";
+}
+
+const API_BASE_URL = normalizeApiBase(import.meta.env.VITE_ARAGBIZ_API_URL);
 const AUTH_STORAGE_KEY = "aragbiz:auth-token";
 
 function authHeaders(extra = {}) {
@@ -701,7 +706,7 @@ export async function deleteEvaluationRun(runId) {
 
 export function getRagxplainViewerUrl(runId) {
   const encodedRunId = encodeURIComponent(runId);
-  const insightsPath = `/evaluation/runs/${encodedRunId}/ragxplain/overall-insights`;
+  const insightsPath = `${API_BASE_URL}/evaluation/runs/${encodedRunId}/ragxplain/overall-insights`;
   return `${API_BASE_URL}/evaluation/ragxplain/viewer?insights=${encodeURIComponent(insightsPath)}`;
 }
 export async function submitFeedback(assistantMessageId, payload) {

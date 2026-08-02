@@ -1,0 +1,120 @@
+{
+  "experiment_info": {
+    "experiment_name": "Adaptive with T5-small - WixQA Simulated",
+    "timestamp": "2026-08-02T00:04:00.150652",
+    "git_commit": "96adfc74549534f468bc4056a7d9cc947c1b2f6d"
+  },
+  "system_info": {
+    "python_version": "3.11.9",
+    "platform": "Windows-10-10.0.19045-SP0",
+    "processor": "Intel64 Family 6 Model 142 Stepping 9, GenuineIntel",
+    "pytorch_version": "2.5.1+cpu",
+    "cuda_available": false,
+    "cuda_version": null
+  },
+  "rag_run_config_snapshot": {
+    "run_id": "eval-9593c0d38509f7f3b05ccfc6e9441f80",
+    "name": "Adaptive with T5-small - WixQA Simulated",
+    "dataset_name": "WixQA Simulated",
+    "knowledge_base_id": "kb-d4069abadfb54ef39af3f49153145532",
+    "knowledge_base_name": "WixQA Curpus 100",
+    "chat_configuration_id": "cfg-8d6d02b430344e56a17ddb1cffca2927",
+    "chat_configuration": {
+      "id": "cfg-8d6d02b430344e56a17ddb1cffca2927",
+      "name": "Adaptive with T5-small",
+      "tone": "Professional",
+      "metadata": {
+        "top_k": 1,
+        "runtime": "model-farm",
+        "classifier": "query_classifier_t5_v2",
+        "route_mode": "adaptive",
+        "retrieval_mode": "hybrid",
+        "route_strategy": "Adaptive",
+        "welcome_message": "Welcome to Adaptive RAG Studio. Workflow assistant 2 (Adaptive with T5-small) will help you.",
+        "actual_generator": "deployment",
+        "configuration_id": "fgc8mE9Cz6tF",
+        "reranker_enabled": false,
+        "citations_enabled": true,
+        "agent_max_iterations": 5,
+        "agent_max_tool_calls": 8,
+        "retrieval_mode_label": "Hybrid",
+        "agent_timeout_seconds": 90,
+        "conversation_starters": [
+          "What are the main steps in this workflow?"
+        ],
+        "generation_parameters": {},
+        "planner_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+        "reranker_deployment_id": "",
+        "fallback_deployment_ids": [
+          "model-e7c1d1c6dfbb455e8951ec7d7d6c6e8d"
+        ],
+        "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+        "agent_public_web_enabled": false,
+        "classifier_deployment_id": "model-local-t5-classifier-v2",
+        "classifier_margin_threshold": 0,
+        "conversation_awareness_enabled": false,
+        "conversation_history_exchanges": 3,
+        "classifier_confidence_threshold": 0,
+        "conversation_history_characters": 4000
+      },
+      "description": "Default configuration for concise business workflow answers.",
+      "humor_level": 0,
+      "system_prompt": "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
+      "generator_model": "gpt-4.1-mini",
+      "citations_enabled": true,
+      "predefined_prompt": "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.",
+      "generator_provider": "openai",
+      "response_structure": "Concise answer with bullets and cited workflow context",
+      "generation_parameters": {},
+      "planner_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+      "reranker_deployment_id": "",
+      "fallback_deployment_ids": [
+        "model-e7c1d1c6dfbb455e8951ec7d7d6c6e8d"
+      ],
+      "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+      "agent_public_web_enabled": false,
+      "conversation_awareness_enabled": false
+    },
+    "retrieval_mode": "hybrid",
+    "top_k": 1,
+    "route_distribution": {
+      "l2_simple_rag": 2
+    },
+    "wixqa_metrics": {
+      "mrr": 0.5,
+      "bleu": 0.10078640395161603,
+      "rouge_1": 0.45235892691951896,
+      "rouge_2": 0.1863216621777607,
+      "hit_at_k": 0.5,
+      "token_f1": 0.45235892691951896,
+      "ndcg_at_k": 0.5,
+      "factuality": 0.45,
+      "recall_at_k": 0.5,
+      "context_recall": 0.45,
+      "judge_coverage": 1.0,
+      "precision_at_k": 0.5,
+      "retrieval_coverage": 1.0
+    }
+  },
+  "ragxplain_config_snapshot": {
+    "metrics": [
+      "context_relevancy",
+      "context_adherence",
+      "answer_relevancy",
+      "context_recall",
+      "factuality",
+      "grading_note"
+    ],
+    "random_state": 42,
+    "traditional_metrics_per_example": [
+      "routing_match",
+      "context_relevance_proxy",
+      "faithfulness_proxy",
+      "answer_overlap",
+      "token_f1",
+      "bleu",
+      "rouge_1",
+      "rouge_2"
+    ]
+  }
+}

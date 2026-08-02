@@ -1,0 +1,84 @@
+{
+  "chat_configuration": {
+    "agent_public_web_enabled": false,
+    "citations_enabled": true,
+    "conversation_awareness_enabled": false,
+    "description": "Default configuration for concise business workflow answers.",
+    "fallback_deployment_ids": [
+      "model-e7c1d1c6dfbb455e8951ec7d7d6c6e8d"
+    ],
+    "generation_parameters": {},
+    "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+    "generator_model": "gpt-4.1-mini",
+    "generator_provider": "openai",
+    "humor_level": 0,
+    "id": "cfg-8d6d02b430344e56a17ddb1cffca2927",
+    "metadata": {
+      "actual_generator": "deployment",
+      "agent_max_iterations": 5,
+      "agent_max_tool_calls": 8,
+      "agent_public_web_enabled": false,
+      "agent_timeout_seconds": 90,
+      "citations_enabled": true,
+      "classifier": "query_classifier_t5_v2",
+      "classifier_confidence_threshold": 0,
+      "classifier_deployment_id": "model-local-t5-classifier-v2",
+      "classifier_margin_threshold": 0,
+      "configuration_id": "fgc8mE9Cz6tF",
+      "conversation_awareness_enabled": false,
+      "conversation_history_characters": 4000,
+      "conversation_history_exchanges": 3,
+      "conversation_starters": [
+        "What are the main steps in this workflow?"
+      ],
+      "fallback_deployment_ids": [
+        "model-e7c1d1c6dfbb455e8951ec7d7d6c6e8d"
+      ],
+      "generation_parameters": {},
+      "generator_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+      "planner_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+      "reranker_deployment_id": "",
+      "reranker_enabled": false,
+      "retrieval_mode": "hybrid",
+      "retrieval_mode_label": "Hybrid",
+      "route_mode": "adaptive",
+      "route_strategy": "Adaptive",
+      "runtime": "model-farm",
+      "top_k": 1,
+      "welcome_message": "Welcome to Adaptive RAG Studio. Workflow assistant 2 (Adaptive with T5-small) will help you."
+    },
+    "name": "Adaptive with T5-small",
+    "planner_deployment_id": "model-ecb786693c1647a890f0e81dff6b00eb",
+    "predefined_prompt": "Answer clearly, mention uncertainty, and cite relevant workflow evidence when retrieval is used.",
+    "reranker_deployment_id": "",
+    "response_structure": "Concise answer with bullets and cited workflow context",
+    "system_prompt": "You are an Adaptive RAG assistant for business workflow question answering. Answer using retrieved workflow context when available.",
+    "tone": "Professional"
+  },
+  "chat_configuration_id": "cfg-8d6d02b430344e56a17ddb1cffca2927",
+  "dataset_name": "WixQA ExpertWritten",
+  "knowledge_base_id": "kb-d4069abadfb54ef39af3f49153145532",
+  "knowledge_base_name": "WixQA Curpus 100",
+  "name": "Adaptive with T5-small - WixQA ExpertWritten",
+  "retrieval_mode": "hybrid",
+  "route_distribution": {
+    "l2_simple_rag": 6
+  },
+  "run_id": "eval-41364df40eb9a46acb276773b01e99eb",
+  "top_k": 1,
+  "wixqa_metrics": {
+    "bleu": 0.13955443830853695,
+    "context_recall": 0.4,
+    "factuality": 0.7,
+    "hit_at_k": 0.5,
+    "judge_coverage": 1.0,
+    "mrr": 0.5,
+    "ndcg_at_k": 0.5,
+    "precision_at_k": 0.5,
+    "recall_at_k": 0.5,
+    "retrieval_coverage": 1.0,
+    "rouge_1": 0.4147435504159688,
+    "rouge_2": 0.1968531503217561,
+    "token_f1": 0.4147435504159688
+  }
+}
