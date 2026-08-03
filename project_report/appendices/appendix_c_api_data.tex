@@ -1,0 +1,117 @@
+\AppendixChapter{API and Persistence Overview}{app:api-data}
+
+\section{API Groups}
+
+\begin{longtable}{p{0.25\textwidth}p{0.58\textwidth}}
+  \caption{Principal API groups.}
+  \label{tab:api-groups}\\
+  \toprule
+  Group & Representative operations\\
+  \midrule
+  \endfirsthead
+  \toprule
+  Group & Representative operations\\
+  \midrule
+  \endhead
+  Authentication and users &
+  Login, sign-up, current profile, profile update, and admin/user role
+  enforcement.\\
+  Answers &
+  Synchronous answer, SSE streaming, cancellation, retry, regeneration, and
+  agent-tool availability.\\
+  Chat &
+  Conversation list/search/create/update/delete, pinning, messages, versions,
+  and configuration presets.\\
+  Knowledge Bases &
+  CRUD, upload, website, prepared WixQA import, re-indexing, documents,
+  pagination, chunks, index versions, and jobs.\\
+  AI Models &
+  Provider templates, connections, model discovery, deployment CRUD, health
+  tests, usage events, and summaries.\\
+  Evaluation &
+  Datasets, experiments, runs, cases, leaderboard, cancellation/resume,
+  RAGXplain diagnosis, insights, and embedded viewer.\\
+  Traces &
+  Trace by ID, trace by answer version, and strict JSON download.\\
+  Feedback and analytics &
+  Per-answer-version feedback, overview, trends, breakdowns, usage events,
+  filter options, and paginated feedback.\\
+  \bottomrule
+\end{longtable}
+
+\section{Core Persistence Entities}
+
+\begin{longtable}{p{0.27\textwidth}p{0.58\textwidth}}
+  \caption{Core PostgreSQL entities and responsibility.}
+  \label{tab:persistence-entities}\\
+  \toprule
+  Entity & Responsibility\\
+  \midrule
+  \endfirsthead
+  \toprule
+  Entity & Responsibility\\
+  \midrule
+  \endhead
+  Users & Authentication identity, role, profile, and activity attribution.\\
+  Knowledge bases and sources & KB configuration, external-processing policy,
+  source identity, status, and counts.\\
+  Documents and chunks & Normalized content, hashes, ordered chunks, metadata,
+  and active-index ownership.\\
+  Chunk embeddings & Dimension-aware vector, actual embedding deployment,
+  model, and dimension.\\
+  Knowledge index versions & Immutable draft/active index snapshots and
+  activation status.\\
+  Background jobs & Durable payload, lease, attempts, progress, cancellation,
+  errors, and related resource.\\
+  Model connections and deployments & Provider access path, encrypted
+  credentials, capabilities, model identity, limits, budget, health, and
+  enabled state.\\
+  Model usage events & Purpose, tokens, cost, latency, status, fallback, user,
+  conversation, KB, configuration, and evaluation attribution.\\
+  Conversations and messages & Persistent chat configuration, canonical
+  messages, lifecycle status, contexts, trace metadata, and ownership.\\
+  Message versions & Ordered answer attempts for initial, regenerated, failed,
+  cancelled, and retried responses.\\
+  Chat configurations & Reusable route, retrieval, model, prompt, style,
+  history, citation, and L4 settings.\\
+  Evaluation experiments/runs/cases & Matrix definition, snapshots, metrics,
+  answers, sources, traces, status, and RAGXplain metadata.\\
+  Trace metadata & Searchable trace summary and compressed artifact location.\\
+  Feedback & User rating/comment linked to exact assistant message version,
+  KB, configuration, and trace.\\
+  \bottomrule
+\end{longtable}
+
+\section{Selected Interface Contracts}
+
+\begin{lstlisting}[language=Python,caption={Stable conceptual service interfaces.}]
+QueryClassifier.predict(query) -> complexity_label
+QueryClassifier.predict_scored(query) -> scored_result
+Retriever.search(query, top_k, mode) -> contexts
+Retriever.search_with_diagnostics(...) -> contexts, diagnostics
+ModelGateway.generate(...) -> normalized_generation_result
+ModelGateway.stream(...) -> model_stream_events
+ModelGateway.embed(...) -> normalized_embedding_result
+ModelGateway.rerank(...) -> normalized_rerank_result
+AdaptiveRAGAnswerService.answer(...) -> answer_result
+AdaptiveRAGAnswerService.answer_stream(...) -> answer_stream_events
+Evaluator.evaluate(dataset) -> metrics
+\end{lstlisting}
+
+\section{SSE Event Contract}
+
+\begin{longtable}{p{0.22\textwidth}p{0.63\textwidth}}
+  \toprule
+  Event & Purpose\\
+  \midrule
+  \texttt{started} & Request, conversation, user message, assistant message,
+  and version identifiers.\\
+  \texttt{trace} & Incremental route, retrieval, planner, or model progress.\\
+  \texttt{sources} & Selected contexts available before generation completes.\\
+  \texttt{delta} & Provider/local generated text increment.\\
+  \texttt{model\_completed} & Model finish metadata before answer finalization.\\
+  \texttt{completed} & Canonical answer response and message/version metadata.\\
+  \texttt{cancelled} & Partial content and durable cancelled status.\\
+  \texttt{error} & Partial content, sanitized error, and durable failed status.\\
+  \bottomrule
+\end{longtable}

@@ -1,0 +1,52 @@
+\begin{center}
+  {\Large\ReportTitle\par}
+  \vspace{0.15cm}
+  {\large\StudentName\par}
+  \vspace{0.15cm}
+  {\large Degree \DegreeName\par}
+  \vspace{0.15cm}
+  {\large\InstitutionName\par}
+  \vspace{0.15cm}
+  {\large\CopyrightYear\par}
+\end{center}
+
+\vspace{0.8cm}
+\phantomsection
+\addcontentsline{toc}{chapter}{Abstract}
+\noindent{\huge\bfseries Abstract\par}
+\vspace{0.8cm}
+
+Enterprise question-answering systems must retrieve organization-specific
+knowledge, follow business workflow dependencies, and provide evidence that users can
+trace back. A static Retrieval-Augmented Generation (RAG) pipeline applies the
+same retrieval strategy to every request, even though business questions range
+from direct definitions to multi-document and tool-assisted investigations.
+This project designs and implements \SystemName, an Adaptive RAG system for
+business workflow question answering. The system predicts query complexity
+and supports four execution levels: direct generation, single-step retrieval,
+decomposed multi-query retrieval, and a bounded agentic route.
+
+The implementation combines a React web-based RAG studio, a FastAPI service,
+a PostgreSQL relational database, pgVector retrieval, and an LLM model farm.
+Its knowledge pipeline supports
+document ingestion, metadata extraction, deduplication, versioned indexes,
+token-aware structure-preserving chunking, embedding, and hybrid BM25/dense
+retrieval. Query-time processing adds conversation-aware reformulation,
+optional reranking, context budgeting, grounded prompts, citation validation,
+streaming generation, and full-fidelity execution traces. 
+Evaluation integrates the enterprise-oriented WixQA benchmark with lexical, 
+retrieval, judge-based, latency, token, and cost measurements. 
+RAGXplain converts metric outputs into diagnostic findings and
+configuration-level recommendations.
+
+Both DistilBERT and T5-small complexity classifiers achieved 98.75\% accuracy and 98.74\%
+macro F1 on a 481 validation records. In the primary 20-case, 
+100-document WixQA configuration experiment,
+Adaptive routing with DistilBERT ranked first with a quality score of 0.5449.
+RAGXplain consistently identified retrieval coverage and grounding as the
+principal improvement targets. However, it remains limited by the compatible sample size 
+and configuration differences among the compared systems.
+
+\noindent\textbf{Keywords:} Adaptive RAG, business workflow question
+answering, query complexity, WixQA, RAGXplain, explainable
+evaluation, large language models.

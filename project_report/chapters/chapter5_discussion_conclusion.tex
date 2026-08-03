@@ -1,0 +1,229 @@
+\chapter{Discussion, Conclusion, and Future Work}
+\label{chap:discussion}
+
+\section{Discussion of Research Questions}
+
+\subsection{RQ1: Complexity Classification and Routing}
+
+The implementation demonstrates that a business-workflow QA system can expose
+query-complexity classification as a runtime deployment rather than a hidden
+hard-coded heuristic. The classifier result carries probabilities, confidence,
+margin, latency, configured deployment, actual deployment, and fallback status.
+Adaptive routing consumes the scored result, while explicit modes permit
+controlled route experiments.
+
+RQ1 is answered for the prepared source-grouped validation split. DistilBERT
+and T5-small both achieved \FinalDistilBERTAccuracy{} accuracy and
+\FinalDistilBERTMacroFOne{} macro F1, with perfect advanced-class
+precision/recall/F1. Their only errors were six complex questions routed as
+moderate, producing \FinalUnderRouting{} under-routing and no over-routing.
+DistilBERT was substantially faster at \FinalDistilBERTLatency{} versus
+\FinalTFiveLatency{}, while T5-small was better calibrated
+(\FinalTFiveECE{} versus \FinalDistilBERTECE{} expected calibration error).
+The models are therefore equal on held-out predictive quality but differ in
+the latency--calibration trade-off.
+
+Adding \texttt{advanced} creates a clearer ownership boundary. L3 remains
+decomposition plus multi-query evidence aggregation. L4 owns bounded iterative
+planning and tools. This distinction prevents every difficult question from
+being called ``agentic.'' It also creates a more demanding classification
+problem because complex and advanced questions can share surface features.
+Outcome-derived labels and route-cost regret are therefore more appropriate
+than a purely linguistic labeling rule.
+
+\subsection{RQ2: Groundedness, Quality, and Efficiency}
+
+The system can execute and compare direct, fixed-retrieval, decomposed, and
+agentic configurations using the same orchestration service. Query embeddings
+are tied to active indexes, citations are validated, remote data egress is
+explicit, and every model attempt records tokens, cost, and latency. These are
+necessary conditions for a meaningful accuracy--efficiency comparison.
+
+The completed configuration experiment provides primary current evidence for
+RQ2. Adaptive with DistilBERT ranked first at quality
+\DistilConfigQuality{}, followed by Fixed L2 at \LTwoConfigQuality{}, Adaptive
+with T5-small at \TFiveConfigQuality{}, and Fixed L3 at
+\LThreeConfigQuality{}. The DistilBERT configuration averaged
+\DistilConfigLatency{} per case; the T5-small configuration averaged
+\TFiveConfigLatency{}, demonstrating that router latency can materially affect
+end-to-end responsiveness even when both classifiers predict the same route.
+
+This result is evidence that Adaptive routing is competitive in the tested
+configuration matrix, not proof of general superiority. The experiment used
+only \PrimaryExperimentCases{} compatible cases from a
+\PrimaryExperimentKBDocuments-document KB, and both Adaptive classifiers routed
+every case to L2. Furthermore, top-\textit{k} and generator settings differ
+between configurations. A causal route comparison therefore requires a larger
+compatible sample and one-factor-at-a-time controls.
+
+\subsection{RQ3: Explainable Evaluation}
+
+RAGXplain is operationally integrated rather than represented by a mock report.
+It receives real questions, contexts, answers, ground truths, configuration
+snapshots, and judge deployment. Its executive summary and protocols load
+automatically in the application. Diagnosis completed for all twelve runs and
+consistently identified retrieval breadth, evidence coverage, and generator
+grounding as the primary constraints. Recommended changes correspond to actual
+fields: \textit{top-k}, reranker, structure-aware chunking, query expansion,
+grounding prompt, citations, and response structure.
+
+This supports the mechanism proposed by RQ3: a metric can be translated into a
+specific configuration hypothesis. It does not yet establish that applying the
+recommendation causes a statistically reliable improvement. The required next
+experiment is a closed loop: preserve the original configuration, clone and
+change only the recommended factors, rerun the same case sample, and compare
+quality, latency, and cost. RAGXplain should be considered decision support,
+not an autonomous optimizer.
+
+\section{Engineering Trade-offs}
+
+\subsection{Quality, Latency, and Cost}
+
+Increasing \textit{top-k} may improve recall but consumes context tokens and can
+introduce distractors. Reranking can recover precision but adds another model
+call. L3 can retrieve missing evidence but multiplies searches. L4 can recover
+from uncertain plans but has the largest latency and failure surface. The
+Adaptive approach is valuable only when routing savings and quality gains
+outweigh classifier overhead and misrouting cost.
+
+The AI Model Gateway makes those trade-offs measurable. Local deterministic
+models support inexpensive functional tests. OpenRouter supports
+experimentation. Direct OpenAI or Gemini connections provide stable provider
+paths. Ollama and vLLM support self-hosted deployments. Fallback improves
+availability, but it is intentionally blocked after streamed output begins so
+one answer never combines providers invisibly.
+
+\subsection{Observability and Privacy}
+
+Full payload traces accelerate diagnosis because they preserve prompts,
+retrieval candidates, scores, model parameters, responses, and usage. The same
+payloads can contain sensitive organization content. The prototype mitigates
+this through JWT access, redaction, retention, compression, and size limits,
+but a production deployment would require tenant isolation, finer-grained trace
+authorization, encrypted artifact storage, audit logs, retention policy
+approval, and data-loss prevention.
+
+\subsection{Flexibility and Complexity}
+
+The application exposes a large configuration surface because the capstone
+studies RAG component choices. This is useful for researchers but can overwhelm
+ordinary users. Saved configurations, provider capability filtering, inherited
+embeddings, presets, and collapsible sections reduce that complexity. A
+production product should separate an administrator/research workspace from a
+minimal end-user chat.
+
+\section{Limitations and Threats to Validity}
+
+\begin{itemize}
+  \item \textbf{Small compatible sample.} The primary experiment contains
+  \PrimaryExperimentCases{} cases: \PrimarySimulatedCases{} Simulated,
+  \PrimarySyntheticCases{} Synthetic, and \PrimaryExpertCases{}
+  ExpertWritten. This is insufficient for significance or confidence-interval
+  claims.
+  \item \textbf{Partial knowledge corpus.} The experiment indexed
+  \PrimaryExperimentKBDocuments{} of \PreparedCorpusDocuments{} prepared WixQA
+  documents. Results apply only to questions compatible with those records.
+  \item \textbf{Configuration confounding.} Top-\textit{k} differs between
+  configurations, and Fixed L3 uses a local extractive generator while the
+  other configurations use GPT-4.1-mini. The leaderboard does not isolate a
+  single causal component.
+  \item \textbf{Limited route coverage.} Both Adaptive classifiers routed all
+  twenty compatible cases to L2. The experiment therefore does not validate
+  Adaptive L1, L3, or L4 selection behavior.
+  \item \textbf{Judge dependence.} Factuality, context recall, and RAGXplain
+  metrics depend on an LLM judge and may vary by model, prompt, and provider.
+  \item \textbf{Template-label bias.} The balanced four-class dataset includes
+  \PreparedTemplateRecords{} template examples. Although source groups are
+  disjoint, templates may be easier to classify than authentic questions.
+  \item \textbf{Domain limitation.} Wix support content is enterprise-like but
+  represents one product ecosystem and language distribution.
+  \item \textbf{Prototype operations.} The system is tested primarily on a
+  Windows workstation and local PostgreSQL. It is not a high-availability,
+  multi-tenant production deployment.
+  \item \textbf{L4 maturity.} Tool availability is intentionally limited.
+  Unavailable Drive, OneDrive, and database connectors constrain evaluation of
+  broad research tasks.
+\end{itemize}
+
+\section{Future Work}
+
+\subsection{Immediate Experimental Work}
+
+The next priority is to extend the completed experiment into a controlled
+matrix over a larger compatible sample and, when resources permit, the full
+\PreparedCorpusDocuments-document WixQA corpus. Each comparison should change
+one factor while preserving case IDs, KB index version, generator, prompts,
+judge, and unrelated settings. Required experiments include:
+
+\begin{itemize}
+  \item L4 Advanced RAG against matched Adaptive, L2, and L3 controls;
+  \item BM25, dense, and hybrid retrieval with the same generator and cases;
+  \item reranking disabled and enabled over the same first-stage candidates;
+  \item top-\textit{k} values 2, 5, and 7; and
+  \item baseline versus RAGXplain-recommended prompt and retrieval settings.
+\end{itemize}
+
+Classifier confidence and margin thresholds should be selected on validation
+data and frozen before the expanded route benchmark. Repeated or bootstrapped
+runs should report uncertainty in addition to means.
+
+\subsection{Model and Retrieval Enhancements}
+
+Future work can add cross-encoder rerankers, multilingual embeddings,
+query-expansion models, learned hybrid weights, and answer-confidence models.
+Index-level experiments should compare fixed, structure-aware, semantic, and
+parent-child chunking while holding generator and case sample constant.
+
+The classifier could use outcome-based labels generated from repeated route
+trials rather than one deterministic snapshot. Cost-aware training could
+penalize under-routing more strongly than over-routing while still discouraging
+unnecessary L4 execution.
+
+\subsection{Connectors and L4 Tools}
+
+Google Drive, OneDrive, SharePoint, and database ingestion require production
+OAuth, incremental synchronization, deletion propagation, permission mapping,
+and connector-specific rate limits. Only after those controls exist should the
+tools become visible to L4 planners. Public web retrieval should gain domain
+allowlists, content provenance, and stronger prompt-injection filtering.
+
+\subsection{Production Hardening}
+
+Production work includes external identity integration, multi-tenant
+authorization, managed secret storage, artifact encryption, distributed
+cancellation, horizontally scalable workers, object storage, backups,
+disaster recovery, rate limits, formal threat modeling, and load tests.
+Telemetry can later be exported to OpenTelemetry while preserving current
+trace/span identifiers.
+
+\subsection{Human Evaluation}
+
+Automated metrics should be complemented by workflow experts who assess
+correctness, completeness, actionability, source support, and harmful
+omissions. The implemented answer-version feedback model provides a starting
+point, but a controlled human study should randomize configurations, blind
+reviewers where possible, and measure agreement.
+
+\section{Conclusion}
+
+This capstone transformed the proposal for adaptive business-workflow QA into a
+working full-stack research system. \SystemName{} connects knowledge
+processing, versioned embedding indexes, hybrid retrieval, four-level adaptive
+routing, local and hosted models, streaming interaction, citations, durable
+traces, configuration-based evaluation, RAGXplain diagnostics, and analytics.
+Its architecture is designed so each component can be independently tested and
+its runtime behavior can be reconstructed.
+
+The implementation evidence shows that the complete experimental workflow is
+operational, both four-class classifiers achieve strong grouped-validation
+performance, and Adaptive with DistilBERT is the highest-ranked configuration
+in the current 20-case experiment. It also shows why disciplined evaluation
+matters: corpus compatibility and controlled configuration snapshots are
+preconditions for valid route comparison, and explainable metrics are most
+useful when they map to concrete configuration changes.
+
+The project does not claim statistically significant Adaptive RAG superiority
+from the current sample. Its contribution is a transparent, reproducible
+system with trained routers, persisted configuration experiments, explainable
+diagnosis, and sufficient observability to run and defend the larger controlled
+matrix without rebuilding the system.

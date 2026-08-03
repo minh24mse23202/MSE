@@ -1,0 +1,22 @@
+\begin{figure}[H]
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{tikzpicture}[node distance=8mm]
+    \node[aragbox] (select) {Select KB, WixQA subset, RAG configuration, and judge};
+    \node[aragbox,right=of select] (queue) {Queue durable evaluation experiment};
+    \node[aragbox,right=of queue] (execute) {Run each case through configured L1--L4 pipeline};
+    \node[aragbox,below=12mm of execute] (metrics) {Compute retrieval, lexical, judge, latency, token, and cost metrics};
+    \node[aragbox,left=of metrics] (persist) {Persist run, cases, snapshots, traces, and leaderboard};
+    \node[aragbox,left=of persist] (diagnose) {Run bounded RAGXplain diagnosis};
+    \node[aragbox,below=of diagnose] (viewer) {Embedded executive insights and configuration actions};
+
+    \draw[aragarrow] (select) -- (queue);
+    \draw[aragarrow] (queue) -- (execute);
+    \draw[aragarrow] (execute) -- (metrics);
+    \draw[aragarrow] (metrics) -- (persist);
+    \draw[aragarrow] (persist) -- (diagnose);
+    \draw[aragarrow] (diagnose) -- (viewer);
+  \end{tikzpicture}}
+  \caption{Configuration-based WixQA evaluation and RAGXplain diagnosis workflow.}
+  \label{fig:evaluation-workflow}
+\end{figure}

@@ -1,0 +1,201 @@
+\documentclass[12pt,a4paper,oneside]{report}
+
+\usepackage[english]{babel}
+\usepackage{fontspec}
+\setmainfont{Times New Roman}
+\setsansfont{Times New Roman}
+\renewcommand{\ttdefault}{\rmdefault}
+\usepackage{unicode-math}
+% Times New Roman supplies the thesis text; Cambria Math supplies complete
+% mathematical symbols while preserving a compatible serif appearance.
+\setmathfont{Cambria Math}
+\usepackage{geometry}
+\geometry{left=3cm,right=2.8cm,top=2.54cm,bottom=2.54cm}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{pdflscape}
+\graphicspath{{assets/}}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,backgrounds,calc,fit,positioning,shapes.geometric}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage{listings}
+\usepackage{url}
+\usepackage{cite}
+\usepackage{tocloft}
+\usepackage{appendix}
+\usepackage[nottoc]{tocbibind}
+\usepackage{hyperref}
+\usepackage[nameinlink,noabbrev]{cleveref}
+\usepackage{fancyhdr}
+
+% Define color for generated diagrams and listings.
+\definecolor{aragprimary}{HTML}{476F7D}
+\definecolor{aragsecondary}{HTML}{A76565}
+\definecolor{aragaccent}{HTML}{5046E5}
+\definecolor{araglight}{HTML}{EDF3F5}
+\definecolor{aragline}{HTML}{CBD5E1}
+\definecolor{aragmuted}{HTML}{64748B}
+\definecolor{codebackground}{HTML}{F8FAFC}
+
+\hypersetup{%
+  colorlinks=false,
+  pdftitle={Building an Adaptive RAG System for Business Workflow Question Answering},
+  pdfauthor={Tran Quang Minh}
+}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.15em}
+\setcounter{tocdepth}{2}
+\setcounter{secnumdepth}{3}
+\renewcommand{\cftchapleader}{\cftdotfill{\cftdotsep}}
+
+% Right-align page numbers on regular pages and chapter-opening pages.
+\fancypagestyle{thesis}{%
+  \fancyhf{}
+  \fancyfoot[R]{\thepage}
+  \renewcommand{\headrulewidth}{0pt}
+  \renewcommand{\footrulewidth}{0pt}
+}
+\fancypagestyle{plain}{%
+  \fancyhf{}
+  \fancyfoot[R]{\thepage}
+  \renewcommand{\headrulewidth}{0pt}
+  \renewcommand{\footrulewidth}{0pt}
+}
+\pagestyle{thesis}
+
+\lstdefinestyle{aragcode}{%
+  backgroundcolor=\color{codebackground},
+  basicstyle=\rmfamily\small,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{aragline},
+  keywordstyle=\bfseries,
+  commentstyle=\itshape,
+  showstringspaces=false,
+  columns=fullflexible
+}
+\lstset{style=aragcode}
+
+\tikzset{%
+  aragbox/.style={%
+    draw=aragline,
+    fill=white,
+    rounded corners=2pt,
+    minimum height=9mm,
+    text width=34mm,
+    align=center,
+    font=\small
+  },
+  araglayer/.style={%
+    aragbox,
+    draw=aragprimary,
+    fill=araglight,
+    font=\small\bfseries
+  },
+  aragdecision/.style={%
+    diamond,
+    draw=aragsecondary,
+    fill=white,
+    aspect=2.2,
+    align=center,
+    font=\small
+  },
+  aragarrow/.style={-{Latex[length=2.2mm]},thick,draw=aragprimary},
+  aragsoftarrow/.style={-{Latex[length=2mm]},draw=aragmuted}
+}
+
+\newcommand{\Code}[1]{\textrm{#1}}
+\newcommand{\SystemName}{Aragbiz}
+
+\newcommand{\ReportAsset}[4][0.92\textwidth]{%
+  \begin{figure}[H]
+    \centering
+    \IfFileExists{assets/#2}{%
+      \includegraphics[width=#1]{#2}
+    }{%
+      \fbox{\begin{minipage}[c][5.2cm][c]{0.88\textwidth}
+        \centering
+        \textbf{Report asset placeholder}\\[0.4em]
+        Add \textrm{project\_report/assets/#2}\\
+        before the submission build.
+      \end{minipage}}
+    }
+    \caption{#3}
+    \label{#4}
+  \end{figure}
+}
+
+\newlistof{reportappendix}{loa}{List of Appendices}
+\newcommand{\AppendixChapter}[2]{%
+  \chapter{#1}
+  \label{#2}
+  \addcontentsline{loa}{reportappendix}{\protect\numberline{\thechapter}#1}
+}
+
+\input{report_metadata}
+\input{results_values}
+
+\begin{document}
+
+\hypersetup{pageanchor=false}
+\input{frontmatter/titlepage}
+\hypersetup{pageanchor=true}
+
+\pagenumbering{roman}
+\setcounter{page}{1}
+\input{frontmatter/abstract}
+\clearpage
+\input{frontmatter/acknowledgments}
+\clearpage
+
+\tableofcontents
+\clearpage
+\listoftables
+\clearpage
+\listoffigures
+\clearpage
+\input{frontmatter/abbreviations}
+\clearpage
+\phantomsection
+\addcontentsline{toc}{chapter}{List of Appendices}
+\listofreportappendix
+\clearpage
+
+\pagenumbering{arabic}
+\setcounter{page}{1}
+\include{chapters/chapter1_introduction}
+\include{chapters/chapter2_background}
+\include{chapters/chapter3_methodology}
+\include{chapters/chapter4_implementation_results}
+\include{chapters/chapter5_discussion_conclusion}
+
+\clearpage
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\clearpage
+\appendix
+\include{appendices/appendix_a_reproducibility}
+\include{appendices/appendix_b_dataset}
+\include{appendices/appendix_c_api_data}
+\include{appendices/appendix_d_evaluation}
+\include{appendices/appendix_e_evidence}
+
+\clearpage
+\input{frontmatter/copyright_acknowledgements}
+
+\end{document}

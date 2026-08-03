@@ -1,0 +1,239 @@
+\chapter{Background and Related Works}
+\label{chap:background}
+
+\section{Retrieval-Augmented Generation}
+
+RAG combines a generator's parametric knowledge with evidence retrieved from an
+external collection \cite{lewis2020rag}. A typical pipeline transforms a user
+question into a search query, retrieves a set of passages, assembles a prompt,
+and asks a language model to generate an answer. The approach supports
+knowledge updates without model retraining and makes source attribution
+possible. It also introduces dependencies that a generator-only system does not
+have: document preprocessing, index quality, search recall, ranking, context
+limits, prompt construction, and grounding behavior.
+
+The distinction between retrieval and generation is important for diagnosis.
+If the required information is absent from the retrieved context, even a strong
+generator cannot produce a fully grounded answer. Conversely, a relevant
+context does not guarantee a faithful answer because the generator may ignore,
+misinterpret, or supplement it. The evaluation design must therefore measure
+both stages rather than reporting only final answer similarity.
+
+\subsection{Sparse Retrieval}
+
+Sparse retrieval represents a query and document using lexical terms. BM25 is a
+widely used probabilistic ranking function that rewards term matches while
+controlling for document length and repeated term saturation
+\cite{robertson2009bm25}. It performs well when the question contains exact
+product names, menu labels, error codes, or workflow terminology. It is also
+deterministic, inexpensive, and easy to inspect.
+
+Its limitation is vocabulary mismatch. A user may describe ``changing the main
+colour'' while a source uses ``site colour palette.'' If the important terms do
+not overlap, lexical ranking may miss a semantically relevant passage. The
+project therefore treats BM25 as one retrieval mode and as one component of
+hybrid search rather than as a universal retriever.
+
+\subsection{Dense Retrieval and Embeddings}
+
+Dense retrieval maps queries and documents into vectors whose proximity
+represents semantic similarity. Dense Passage Retrieval demonstrated the value
+of learned encoders for open-domain QA \cite{karpukhin2020dpr}. Sentence-BERT
+made transformer representations practical for semantic similarity and search
+\cite{reimers2019sentencebert}. The implementation uses
+\texttt{sentence-transformers/all-MiniLM-L6-v2} as its principal local
+384-dimensional embedding model, with a deterministic hash embedding retained
+for dependency-light tests.
+
+Dense retrieval improves semantic matching but introduces a strict integrity
+requirement: document vectors and query vectors must be produced by the same
+embedding model and compatible preprocessing. A silent model change can make
+similarity scores meaningless. This constraint motivates immutable knowledge
+index versions and a read-only inherited query-embedding selection in the Main
+screen.
+
+Approximate nearest-neighbour indexes, including HNSW
+\cite{malkov2018hnsw}, allow vector search to scale without comparing every
+vector. PostgreSQL with pgVector was selected so vector similarity can coexist
+with relational filters, document metadata, user data, jobs, and evaluation
+records \cite{pgvector2026,postgresql2026}.
+
+\subsection{Hybrid Retrieval and Reranking}
+
+Lexical and dense retrievers make different errors. Hybrid retrieval combines
+their scores after normalization, allowing exact terminology and semantic
+similarity to contribute to the final rank. In \SystemName, retrieval
+diagnostics retain the raw BM25 score, raw dense score, normalized components,
+weights, hybrid score, rank, and selection status. This makes a poor rank
+explainable rather than reducing retrieval to an opaque list of chunks.
+
+A reranker operates on a smaller candidate set after first-stage retrieval. It
+can improve precision by evaluating the query and candidate together, but it
+adds latency and model cost. The system exposes reranking as an optional
+capability selected through a saved RAG configuration. A lexical reranker is
+available locally, while hosted rerankers can be registered through the AI
+Models layer.
+
+\section{Adaptive Retrieval}
+
+Static RAG applies one retrieval strategy to every question. Adaptive-RAG
+instead trains a smaller classifier to select among no retrieval, single-step
+retrieval, and iterative retrieval based on question complexity
+\cite{jeong2024adaptiverag}. Its labels are derived from strategy outcomes and
+dataset inductive biases, which supports the least-complex successful strategy
+rather than equating surface length with complexity.
+
+\begin{table}[H]
+  \centering
+  \caption{Relationship between Adaptive-RAG and the implemented routes.}
+  \label{tab:related-route-comparison}
+  \begin{tabularx}{\textwidth}{p{0.18\textwidth}p{0.22\textwidth}X}
+    \toprule
+    Complexity & \SystemName{} route & Execution behavior\\
+    \midrule
+    Simple & L1 Direct & Generation without knowledge retrieval.\\
+    Moderate & L2 Simple RAG & One BM25, dense, or hybrid retrieval followed by generation.\\
+    Complex & L3 Complex RAG & Deterministic or model-assisted decomposition, retrieval per subquery, deduplication, aggregation, and generation.\\
+    Advanced & L4 Advanced RAG & Bounded planner iterations and authorized tools, with L3 fallback. This is a project extension.\\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Confidence matters because the cost of under-routing and over-routing differs.
+Under-routing an advanced question can omit evidence, while over-routing a
+simple question increases latency and cost. The four-class design therefore
+supports probabilities, confidence, top-two margin, and configurable
+escalation. Explicit route selection bypasses escalation so evaluation can test
+a fixed configuration.
+
+\section{Query Complexity Classification}
+
+BERT introduced deep bidirectional transformer pre-training for language
+understanding \cite{devlin2019bert}. DistilBERT compresses BERT through
+knowledge distillation to reduce model size and inference cost
+\cite{sanh2019distilbert,hinton2015distilling}. It is suitable for a
+sequence-classification router because the output labels are finite and
+probabilities can be calibrated.
+
+T5 frames every task as text-to-text generation \cite{raffel2020t5}. For
+complexity routing, the model receives a question and assigns probability to
+candidate label strings. Candidate scoring is preferable to unrestricted
+generation because it guarantees a label from the supported vocabulary. The
+project provides both DistilBERT and T5-small training paths through Hugging
+Face Transformers \cite{wolf2020transformers}. A deterministic heuristic
+remains as a dependency-light runtime fallback.
+
+The implemented classifier uses four labels. The \texttt{advanced} label covers
+cross-source dependencies, long conditional chains, and questions that may
+require bounded tool use. This is an Aragbiz extension of the original
+Adaptive-RAG study's no-retrieval, single-step, and iterative choices.
+
+\section{Iterative and Agentic RAG}
+
+Iterative retrieval refines or decomposes a question and performs multiple
+searches. L3 in this project uses a constrained form: two to four subqueries are
+produced, each is retrieved independently, repeated chunks are deduplicated,
+and evidence is aggregated before one generation call. This increases recall
+without granting an open-ended agent control over the system.
+
+Agentic approaches interleave model reasoning with actions. ReAct demonstrated
+the value of combining reasoning and action trajectories
+\cite{yao2023react}. Self-RAG adds retrieval and critique decisions
+\cite{asai2024selfrag}, while Corrective RAG uses retrieval evaluation and
+corrective actions \cite{yan2024crag}. These methods motivate L4 but do not
+justify an unrestricted production agent. The implemented planner chooses one
+validated action per iteration from an authorized registry. Iterations, tool
+calls, duration, budgets, egress, and cancellation are bounded. Reasons stored
+in traces are concise action rationales rather than private chain-of-thought.
+
+\section{Enterprise Benchmarking with WixQA}
+
+Many QA benchmarks use Wikipedia and do not represent support procedures or
+enterprise workflows. WixQA releases a fixed help-centre knowledge base and
+three aligned QA sources \cite{cohen2025wixqa}:
+
+\begin{table}[H]
+  \centering
+  \caption{WixQA sources used by the project.}
+  \label{tab:wixqa-sources}
+  \begin{tabularx}{\textwidth}{p{0.22\textwidth}p{0.17\textwidth}X}
+    \toprule
+    Source & Paper size & Characteristics\\
+    \midrule
+    ExpertWritten & 200 & Authentic user questions with expert-authored,
+    detailed answers, frequently requiring multiple articles or steps.\\
+    Simulated & 200 & Expert-validated QA pairs distilled from user--expert
+    support conversations.\\
+    Synthetic & 6,222 & LLM-generated article-grounded QA pairs intended for
+    broad corpus coverage.\\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+The local preprocessing snapshot contains \PreparedCorpusDocuments{}
+non-empty normalized knowledge documents and 6,221 Synthetic QAC rows. This is
+one fewer than the paper's reported 6,222 Synthetic pairs. The report preserves
+both facts: the publication count describes the released benchmark, while
+\PreparedCorpusDocuments{} describes the deterministic artifact actually
+audited and used by this repository. Reproducibility metadata records hashes
+and counts so the difference is visible rather than silently corrected.
+
+\section{RAG Evaluation and Explainability}
+
+RAGAS proposes reference-free and reference-aware measurements for RAG
+components, including faithfulness and answer relevance
+\cite{es2023ragas}. This project implements RAGAS-style proxies alongside
+WixQA-oriented metrics. Retrieval measurements include hit rate, MRR,
+precision, recall, and NDCG. Generation measurements include token F1, BLEU,
+ROUGE-1, ROUGE-2, judge-based factuality, and context recall. Operational
+measurements include route distribution, latency, tokens, cost, failures, and
+retrieved-context count.
+
+Metrics do not directly prescribe an engineering change. RAGXplain evaluates
+the relationship among the question, retrieved context, candidate answer, and
+ground truth, then produces an executive summary and prioritized improvement
+protocols \cite{cohen2025ragxplain}. In this project, a selected AI Model
+deployment acts as the judge. Artifacts are stored per evaluation run and
+loaded automatically into an embedded insights viewer. The recommendations are
+mapped to concrete RAG Customizer or Knowledge Base fields, such as
+\texttt{top\_k}, reranker, chunking strategy, prompt, and citation policy.
+
+\section{Technology Selection}
+
+\begin{table}[H]
+  \centering
+  \caption{Technology selection and rationale.}
+  \label{tab:technology-selection}
+  \begin{tabularx}{\textwidth}{p{0.24\textwidth}p{0.21\textwidth}X}
+    \toprule
+    Concern & Selection & Rationale\\
+    \midrule
+    API and validation & FastAPI & Async Python, typed validation, OpenAPI,
+    SSE-compatible responses, and direct integration with ML code
+    \cite{fastapi2026}.\\
+    Studio interface & React & Component-based stateful UI for streaming chat,
+    resizable panels, configuration workflows, charts, and modals
+    \cite{react2026}.\\
+    Relational storage & PostgreSQL & Transactions, constraints, JSON metadata,
+    row locking, indexing, and mature operational tooling
+    \cite{postgresql2026}.\\
+    Vector storage & pgVector & Vector similarity within PostgreSQL, including
+    dimension-aware storage and HNSW indexing \cite{pgvector2026}.\\
+    Model access & Local adapters and LiteLLM & One provider-neutral gateway for
+    local, OpenRouter, OpenAI, Gemini, Ollama, and vLLM inference
+    \cite{litellm2026}.\\
+    ML development & Hugging Face Transformers & Reproducible loading,
+    fine-tuning, tokenization, and export for DistilBERT, T5, MiniLM, and
+    FLAN-T5 \cite{wolf2020transformers}.\\
+    Migrations & Alembic & Versioned PostgreSQL schema evolution and data
+    backfills \cite{alembic2026}.\\
+    Authentication & JWT and RBAC & Stateless API authentication using a
+    standardized token representation \cite{rfc7519}.\\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+The selected stack supports the research requirements while remaining usable
+on a Windows development workstation and in Docker. PostgreSQL is mandatory
+for paid-model execution and full analytics; bounded JSON repositories remain
+available for deterministic tests and offline development.

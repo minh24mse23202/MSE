@@ -1,0 +1,22 @@
+\begin{figure}[H]
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{tikzpicture}[x=2.4cm,y=0.72cm,font=\small]
+    \foreach \name/\x in {UI/0,API/1,Orchestrator/2,Gateway/3,Database/4} {
+      \node[font=\bfseries] at (\x,0) {\name};
+      \draw[aragline] (\x,-0.35) -- (\x,-10.7);
+    }
+    \draw[aragarrow] (0,-1) -- node[above]{POST /answer/stream} (1,-1);
+    \draw[aragarrow] (1,-2) -- node[above]{create pending messages} (4,-2);
+    \draw[aragarrow] (1,-3) -- node[above]{prepare query} (2,-3);
+    \draw[aragarrow] (1,-4) -- node[above]{started + trace events} (0,-4);
+    \draw[aragarrow] (2,-5) -- node[above]{stream deployment} (3,-5);
+    \draw[aragarrow] (3,-6) -- node[above]{model deltas} (2,-6);
+    \draw[aragarrow] (2,-7) -- node[above]{delta SSE} (0,-7);
+    \draw[aragarrow] (2,-8) -- node[above]{persist content, trace, status} (4,-8);
+    \draw[aragarrow] (2,-9) -- node[above]{completed/cancelled/error} (1,-9);
+    \draw[aragarrow] (1,-10) -- node[above]{terminal SSE payload} (0,-10);
+  \end{tikzpicture}}
+  \caption{True provider streaming and durable message-state sequence.}
+  \label{fig:streaming-sequence}
+\end{figure}

@@ -1,0 +1,30 @@
+\begin{figure}[H]
+  \centering
+  \resizebox{0.98\textwidth}{!}{%
+  \begin{tikzpicture}[node distance=10mm and 12mm]
+    \node[aragbox,text width=40mm] (query) {Original user query};
+    \node[aragbox,text width=40mm,right=of query] (rewrite) {Conversation-aware standalone query};
+    \node[aragbox,text width=40mm,right=of rewrite] (classifier) {Four-class complexity classifier};
+
+    \node[aragdecision,below=17mm of classifier] (route) {Predicted and\\routed label};
+    \node[aragbox,text width=31mm,below left=18mm and 58mm of route] (l1) {\textbf{L1 Direct}\\No retrieval};
+    \node[aragbox,text width=31mm,below left=18mm and 18mm of route] (l2) {\textbf{L2 Simple RAG}\\One retrieval pass};
+    \node[aragbox,text width=31mm,below right=18mm and 18mm of route] (l3) {\textbf{L3 Complex RAG}\\Decompose and aggregate};
+    \node[aragbox,text width=31mm,below right=18mm and 58mm of route] (l4) {\textbf{L4 Advanced RAG}\\Bounded planner/tools};
+    \node[araglayer,text width=145mm,below=17mm of route,yshift=-27mm] (generate) {Context budgeting, prompt assembly, generation, citation validation, persistence, and trace finalization};
+
+    \draw[aragarrow] (query) -- (rewrite);
+    \draw[aragarrow] (rewrite) -- (classifier);
+    \draw[aragarrow] (classifier) -- (route);
+    \draw[aragarrow] (route) -- node[above left,font=\scriptsize]{simple} (l1);
+    \draw[aragarrow] (route) -- node[left,font=\scriptsize]{moderate} (l2);
+    \draw[aragarrow] (route) -- node[right,font=\scriptsize]{complex} (l3);
+    \draw[aragarrow] (route) -- node[above right,font=\scriptsize]{advanced} (l4);
+    \draw[aragarrow] (l1) -- (generate);
+    \draw[aragarrow] (l2) -- (generate);
+    \draw[aragarrow] (l3) -- (generate);
+    \draw[aragarrow] (l4) -- (generate);
+  \end{tikzpicture}}
+  \caption{Adaptive query routing from L1 to L4. L4 is an extension introduced by this project.}
+  \label{fig:adaptive-routes}
+\end{figure}

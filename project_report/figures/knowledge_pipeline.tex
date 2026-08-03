@@ -1,0 +1,27 @@
+\begin{figure}[H]
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{tikzpicture}[node distance=7mm]
+    \node[aragbox] (source) {Local files, prepared WixQA corpus, or safe public URL};
+    \node[aragbox,right=of source] (load) {Load and normalize document text};
+    \node[aragbox,right=of load] (meta) {Extract metadata and content hash};
+    \node[aragbox,right=of meta] (dedup) {Deduplicate documents};
+    \node[aragbox,below=12mm of dedup] (chunk) {Configured chunking and token diagnostics};
+    \node[aragbox,left=of chunk] (embed) {Embedding through active deployment};
+    \node[aragbox,left=of embed] (draft) {Persist draft index version in PostgreSQL/pgVector};
+    \node[aragdecision,left=of draft] (valid) {All batches\\successful?};
+    \node[aragbox,left=of valid] (activate) {Atomically activate new index};
+
+    \draw[aragarrow] (source) -- (load);
+    \draw[aragarrow] (load) -- (meta);
+    \draw[aragarrow] (meta) -- (dedup);
+    \draw[aragarrow] (dedup) -- (chunk);
+    \draw[aragarrow] (chunk) -- (embed);
+    \draw[aragarrow] (embed) -- (draft);
+    \draw[aragarrow] (draft) -- (valid);
+    \draw[aragarrow] (valid) -- node[above,font=\scriptsize]{yes} (activate);
+    \draw[aragsoftarrow] (valid.south) -- ++(0,-9mm) node[below,font=\scriptsize,align=center]{no: retain previous\\active index};
+  \end{tikzpicture}}
+  \caption{Versioned knowledge ingestion and index activation workflow.}
+  \label{fig:knowledge-pipeline}
+\end{figure}

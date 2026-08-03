@@ -1,0 +1,24 @@
+\begin{figure}[H]
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{tikzpicture}[node distance=9mm and 13mm]
+    \node[araglayer,text width=50mm] (consumer) {RAG, knowledge worker, evaluation, and analytics consumers};
+    \node[aragbox,text width=50mm,below=of consumer] (policy) {Deployment resolution, capability validation, budget and egress policy};
+    \node[araglayer,text width=50mm,below=of policy] (gateway) {Provider-neutral Model Gateway};
+    \node[aragbox,text width=42mm,below left=of gateway] (builtin) {LocalBuiltinAdapter\\Extractive, FLAN-T5, hash, MiniLM, reranker, classifiers};
+    \node[aragbox,text width=42mm,below right=of gateway] (lite) {LiteLLMAdapter\\Generate, stream, embed, rerank, judge, planner};
+    \node[aragbox,text width=27mm,below=of lite,xshift=-34mm] (exp) {OpenRouter\\experimentation};
+    \node[aragbox,text width=27mm,below=of lite] (direct) {OpenAI/Gemini\\direct};
+    \node[aragbox,text width=27mm,below=of lite,xshift=34mm] (self) {Ollama/vLLM\\self-hosted};
+
+    \draw[aragarrow] (consumer) -- (policy);
+    \draw[aragarrow] (policy) -- (gateway);
+    \draw[aragarrow] (gateway) -- (builtin);
+    \draw[aragarrow] (gateway) -- (lite);
+    \draw[aragarrow] (lite) -- (exp);
+    \draw[aragarrow] (lite) -- (direct);
+    \draw[aragarrow] (lite) -- (self);
+  \end{tikzpicture}}
+  \caption{Unified AI Model Gateway and runtime access paths.}
+  \label{fig:model-gateway}
+\end{figure}

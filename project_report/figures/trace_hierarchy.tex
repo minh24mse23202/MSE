@@ -1,0 +1,20 @@
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[node distance=7mm and 12mm]
+    \node[araglayer,text width=45mm] (trace) {Answer trace\\request, route, total latency, tokens, cost};
+    \node[aragbox,text width=40mm,below left=of trace] (prepare) {Preparation spans\\chat input, history, rewrite, classification, route};
+    \node[aragbox,text width=40mm,below right=of trace] (execution) {Execution spans\\retrieval, reranking, prompt, model attempts};
+    \node[aragbox,text width=34mm,below=of prepare] (retrieval) {Retrieval diagnostics\\raw/normalized scores and ranks};
+    \node[aragbox,text width=34mm,below=of execution] (generation) {Generation diagnostics\\messages, usage IDs, finish reason};
+    \node[aragbox,text width=45mm,below=16mm of trace,yshift=-32mm] (final) {Finalization spans\\citations, persistence, chat output};
+
+    \draw[aragarrow] (trace) -- (prepare);
+    \draw[aragarrow] (trace) -- (execution);
+    \draw[aragarrow] (prepare) -- (retrieval);
+    \draw[aragarrow] (execution) -- (generation);
+    \draw[aragarrow] (retrieval) -- (final);
+    \draw[aragarrow] (generation) -- (final);
+  \end{tikzpicture}
+  \caption{Hierarchical full-fidelity observability trace model.}
+  \label{fig:trace-hierarchy}
+\end{figure}

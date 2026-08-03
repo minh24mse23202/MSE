@@ -1,0 +1,320 @@
+\chapter{Methodology}
+\label{chap:methodology}
+
+\section{Research and Development Approach}
+
+The project follows an iterative design-and-evaluate approach. Each phase
+produces a component with stable interfaces and tests before the next phase
+depends on it. The six phases are: literature and dataset preparation, model
+specialization, Adaptive RAG development, evaluation and optimization,
+prototype integration, and final reporting. This reduces the risk that a model
+experiment becomes inseparable from a particular user interface or storage
+implementation.
+
+The unit of comparison in the final evaluation is a saved RAG configuration
+applied to a deterministic subset of WixQA. A configuration records route,
+classifier, planner, retrieval mode, \textit{top-k}, reranking, citation policy,
+generator, fallback, response structure, tone, and prompts. Knowledge-base
+embedding remains outside the chat configuration because query vectors must
+inherit the active index embedding. This separation allows a configuration to
+be reproduced while preventing an invalid query/document vector combination.
+
+\section{Dataset Acquisition and Normalization}
+
+The WixQA download script acquires ExpertWritten, Simulated, Synthetic, and the
+knowledge-base corpus. QA rows are normalized to a QAC schema containing:
+
+\begin{itemize}
+  \item stable record and source identifiers;
+  \item question and reference answer;
+  \item supporting context or source-document references;
+  \item subset and provenance metadata; and
+  \item a complexity label with its provenance.
+\end{itemize}
+
+The prepared knowledge corpus is stored as UTF-8 JSONL. Each non-empty row is
+treated as one article document with a stable record ID, title, URL, article
+type, text, checksum, and source revision. The import pipeline validates the
+expected count and duplicate identifiers before creating documents.
+
+The repository audit records 200 ExpertWritten rows, 200 Simulated rows, 6,221
+Synthetic rows, and \PreparedCorpusDocuments{} prepared knowledge documents.
+Dataset hashes are recorded in the preparation manifest so another environment
+can detect a changed source snapshot.
+
+\section{Four-Class Complexity Dataset}
+
+\subsection{Label Definitions}
+
+\begin{table}[H]
+  \centering
+  \caption{Operational complexity-label definitions.}
+  \label{tab:complexity-labels}
+  \begin{tabularx}{\textwidth}{p{0.14\textwidth}p{0.15\textwidth}X}
+    \toprule
+    Label & Intended route & Evidence requirement\\
+    \midrule
+    Simple & L1 & Answerable without retrieving organization-specific
+    evidence, for example a conversational or general direct request.\\
+    Moderate & L2 & Requires one article, one coherent passage, or a single
+    retrieval pass. One-document WixQA questions default to this class rather
+    than no retrieval.\\
+    Complex & L3 & Requires two or three evidence groups, multiple workflow
+    steps, decomposition, or synthesis across retrieved passages.\\
+    Advanced & L4 & Requires four or more dependencies, conditional or
+    exception chains, cross-source investigation, or bounded tool-assisted
+    research.\\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Labels can be produced through a hybrid silver-label procedure. L1, L2, L3,
+and L4 are executed with fixed snapshots. The least-complex successful route
+is selected. Answer overlap at or above 0.65 is a deterministic pass, below
+0.35 is a deterministic failure, and retrieval routes additionally require a
+faithfulness proxy of at least 0.60. Ambiguous outcomes may be resolved by a
+registered judge. If execution evidence remains unresolved, structural rules
+based on source count and dependency depth provide a fallback label. Every
+label records provenance, route outcomes, judge, metrics, cost, latency, and
+configuration snapshot.
+
+\subsection{Balancing and Leakage Control}
+
+The current training artifact contains \PreparedDatasetRecords{} records,
+balanced at \PreparedDatasetPerClass{} per class. It retains all 200
+ExpertWritten and 200 Simulated rows, deterministically samples 200 official
+Synthetic rows, and uses 1,800 independently named template examples to fill
+class deficits. The template supplement is not represented as official WixQA
+Synthetic data.
+
+\input{figures/dataset_distribution}
+
+Records are split using source-document groups rather than independent random
+rows. Questions that share a source group cannot appear in both training and
+validation. With seed 42, the manifest contains \PreparedSourceGroups{} source
+groups, \PreparedTrainRecords{} training records, and
+\PreparedValidationRecords{} validation records. The validation class counts
+are 120 simple, 119 moderate, 119 complex, and 123 advanced. The audit reports
+no duplicate IDs, duplicate question groups, conflicting labels, or
+train/validation source leakage.
+
+\section{Classifier Training and Routing}
+
+Two model families were trained and evaluated on the same source-grouped
+validation split:
+
+\begin{enumerate}
+  \item DistilBERT sequence classification with four logits, softmax
+  probabilities, confidence, top-two margin, and calibrated validation
+  outputs; and
+  \item T5-small sequence scoring over the four candidate labels, followed by
+  probability normalization.
+\end{enumerate}
+
+The common interface preserves \Code{predict(query) -> label} and adds a scored
+prediction containing probabilities, confidence, margin, deployment identity,
+runtime, and latency. Comparison metrics include accuracy, macro F1,
+per-label recall, advanced precision/recall/F1, expected calibration error,
+latency, under-routing, over-routing, and route-cost regret.
+
+Adaptive routing maps simple to L1, moderate to L2, complex to L3, and advanced
+to L4. A low-confidence prediction may be escalated one route when confidence
+is below 0.60 or top-two margin below 0.15. Saved configurations can change
+these thresholds. Explicit L1--L4 mode does not use escalation, which is
+necessary for controlled route experiments. A selected classifier failure
+falls back to the process-default classifier and produces a prominent trace
+warning.
+
+\input{figures/adaptive_routes}
+
+\section{Knowledge and Index Processing}
+
+\subsection{Source Loading and Safety}
+
+The source registry supports TXT, JSON, JSONL, Markdown, PDF, and DOCX uploads,
+prepared WixQA corpus records, and public website URLs. Custom \texttt{aratxt},
+\texttt{arajson}, and \texttt{aramd} extensions remain disabled until their
+schemas are defined. Website loading rejects private-network destinations,
+unsafe redirects, oversized responses, unsupported content types, and
+timeouts, following SSRF-prevention principles \cite{owaspssrf2026}.
+
+Each document receives source type, URI, MIME type, size, imported timestamp,
+title, stable hash, and source-specific metadata. Deduplication occurs before
+chunking. Prepared WixQA rows skip file parsing because their text and metadata
+have already been normalized.
+
+\subsection{Chunking}
+
+Existing knowledge bases can use fixed-size, sliding-overlap, header-based,
+recursive, semantic, parent-child, or structure-aware recursive chunking.
+Legacy configurations retain character-based behavior. The WixQA MiniLM
+profile uses the exact MiniLM BERT tokenizer and applies the settings in
+\Cref{tab:wixqa-chunk-profile}.
+
+\begin{table}[H]
+  \centering
+  \caption{WixQA MiniLM structure-aware chunking profile.}
+  \label{tab:wixqa-chunk-profile}
+  \begin{tabularx}{\textwidth}{p{0.34\textwidth}X}
+    \toprule
+    Parameter & Configured behavior\\
+    \midrule
+    Parent identity & WixQA article ID; chunks never cross articles.\\
+    Target and soft body size & 180 and 210 WordPieces.\\
+    Minimum and overlap & 60 and up to 30 WordPieces.\\
+    Hard embedding input limit & 240 WordPieces including prefix and special tokens.\\
+    Separator order & Heading, subheading, paragraph, list, sentence, token.\\
+    Metadata prefix & Title and heading path, capped at 40 WordPieces.\\
+    Structural rules & Preserve fitting numbered/bullet lists, merge small
+    adjacent chunks, and overlap only inside the same section.\\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Stored chunk text remains clean. The title and section prefix is composed only
+for embedding. Diagnostics store article ID, heading path, section ID, body,
+prefix, embedding, and overlap token counts, profile ID, forced-split flag, and
+below-minimum warning.
+
+\subsection{Embedding and Atomic Indexes}
+
+Knowledge bases select an embedding deployment and whether external processing
+is permitted. Ingestion constructs the embedder from that KB configuration.
+Remote embedding requires explicit egress permission and confirmation. The
+same model, tokenizer limit, dimension, and active index version are applied to
+query embeddings.
+
+Indexing is asynchronous and durable. Chunks are embedded and persisted in
+batches, a draft index version records the resolved configuration, and
+activation occurs only after every batch succeeds. Failure or cancellation
+leaves the previous index active. This prevents a query from observing a
+partially built or mixed-model index.
+
+\input{figures/knowledge_pipeline}
+
+\section{Query-Time Adaptive RAG}
+
+\subsection{Conversation Context and Reformulation}
+
+When enabled, the service loads only completed user--assistant exchanges that
+precede the current request. Failed, cancelled, pending, and streaming messages
+are excluded. The number of exchanges and character budget are configurable,
+subject to server ceilings of six exchanges and 10,000 characters.
+Evaluation disables conversation context because each benchmark case is an
+independent QA observation.
+
+Referential follow-ups are converted into a standalone query. Deterministic
+rewriting is always available. A selected planner can perform the rewrite
+through the Model Gateway; invalid output, provider failure, or blocked egress
+falls back without failing the answer. The original query is retained for the
+answer, while classification, retrieval, reranking, and decomposition use the
+standalone query.
+
+\subsection{Retrieval Routes}
+
+L1 calls the generator without knowledge retrieval. L2 performs one configured
+retrieval pass. BM25 uses a complete active-index lexical cache; dense search
+uses pgVector; hybrid search normalizes and weights both result sets. A
+document filter restricts all retrieval to selected document IDs.
+
+L3 creates two to four subqueries, retaining the standalone query as the global
+subquery. Each query is retrieved independently. Repeated chunks are
+deduplicated by stable identity, then ranked using retrieval score, original
+rank, and subquery coverage. Planner decomposition must return a validated JSON
+list; otherwise deterministic decomposition is used.
+
+L4 exposes only available, authorized tools: KB hybrid search, chunk/document
+inspection, evidence reranking, SSRF-safe public URL retrieval when enabled,
+and final-answer completion. The defaults are five planning iterations, eight
+tool calls, and 90 seconds. Planner errors are structured observations that may
+be recovered. A missing or repeatedly invalid planner falls back to L3.
+
+\subsection{Prompting, Generation, and Citations}
+
+Prompt construction combines system prompt, predefined instructions, response
+structure, tone, humor level, bounded conversation history, original question,
+standalone query, and labelled evidence. Retrieved contexts receive stable
+labels such as \texttt{[S1]}. History and retrieved documents are explicitly
+treated as untrusted context rather than system instructions.
+
+The selected generator executes through the Model Gateway. Local extractive
+generation provides a deterministic baseline; FLAN-T5 provides optional local
+generation; remote or self-hosted models use LiteLLM. A fallback deployment is
+permitted only for retryable failure and, during streaming, only before the
+first text delta. Citation validation detects missing and unknown labels.
+Validation is advisory: it returns a warning rather than triggering a second
+paid generation call.
+
+\section{Model Governance Method}
+
+The AI Models catalog separates reusable provider connections from
+deployments. Connections contain access path, API base, encrypted credentials,
+locality, and health. Deployments contain provider-native model ID,
+capabilities, parameters, limits, pricing, budget, health, and enabled status.
+Only tested and enabled deployments appear in runtime selectors.
+
+\input{figures/model_gateway}
+
+Credentials entered through the UI are encrypted using a versioned AES-GCM
+envelope. API responses expose only credential readiness, never the value.
+Each model attempt records purpose, deployment, connection, requested and
+resolved model, latency, tokens, estimated cost, status, fallback index, and
+related conversation, KB, or evaluation identifiers. Embeddings never fall
+back to a different model because that would violate vector compatibility.
+
+\section{Evaluation Design}
+
+An experiment selects one or more saved RAG configurations, one or more WixQA
+subsets, a knowledge base, a judge deployment, a case limit, and deterministic
+sampling seed. Each configuration--dataset cell runs independently. There is
+no hidden static-L2 baseline; Adaptive and L2 are compared by selecting two
+saved configurations.
+
+\begin{table}[H]
+  \centering
+  \caption{Evaluation dimensions and representative metrics.}
+  \label{tab:evaluation-metrics}
+  \begin{tabularx}{\textwidth}{p{0.24\textwidth}X}
+    \toprule
+    Dimension & Metrics\\
+    \midrule
+    Routing & Accuracy, macro F1, confusion matrix, per-label recall,
+    under-routing, over-routing, route distribution, route-cost regret.\\
+    Retrieval & Hit@\textit{k}, MRR, precision@\textit{k}, recall@\textit{k},
+    NDCG@\textit{k}, retrieval coverage, context relevancy, context recall.\\
+    Generation & Token F1, BLEU, ROUGE-1, ROUGE-2, answer overlap,
+    factuality, context adherence, answer relevancy, grading note.\\
+    Operations & End-to-end and stage latency, tokens, estimated cost, model
+    calls, retrieved contexts, failures, cancellations, and fallback use.\\
+    Human feedback & Per-answer-version thumbs up/down and optional comment,
+    linked to configuration, KB, user, and trace.\\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Judge calls use structured output and one malformed-JSON repair attempt. Runs
+remain failed rather than silently complete when required metrics are absent.
+RAGXplain diagnosis is a separate bounded job over selected cases. This avoids
+unexpected judge costs and allows normal evaluation results to remain valid if
+diagnosis fails.
+
+\input{figures/evaluation_workflow}
+
+\section{Validity, Reproducibility, and Ethics}
+
+Internal validity is supported by immutable configuration snapshots,
+deterministic sampling, grouped splits, artifact hashes, route traces, and
+recorded model identities. Construct validity remains limited because lexical
+overlap and LLM judges approximate answer quality. External validity is limited
+to Wix business support content and the configurations actually tested.
+Conclusion validity remains limited by the 20-case compatible sample reported
+in \Cref{chap:implementation-results}; larger controlled samples are required
+for statistical claims.
+
+The repository records the Git commit, Python version, model deployment, KB
+index, prompts, and evaluation settings. Full traces improve reproducibility
+but may contain prompts and retrieved enterprise content. They are retained for
+a bounded period, compressed, size-limited, and sanitized to exclude secrets,
+authorization headers, encrypted credentials, and raw numerical vectors.
+Remote processing is blocked unless enabled for the KB, providing an explicit
+data-egress decision.

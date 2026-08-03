@@ -1,0 +1,7 @@
+$pdf_mode = 1;
+$pdflatex = 'xelatex -synctex=1 %O %S';
+$interaction = 'nonstopmode';
+$halt_on_error = 1;
+$file_line_error = 1;
+$max_repeat = 5;
+$clean_ext = 'acn acr alg bbl bcf blg fdb_latexmk fls loa out run.xml synctex.gz toc lof lot';

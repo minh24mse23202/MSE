@@ -1,0 +1,222 @@
+\chapter{Introduction}
+\label{chap:introduction}
+
+\section{Background}
+
+Large language models can generate fluent explanations and procedural
+instructions, but their parameters are not an auditable or easily updated
+repository of organizational knowledge. Retrieval-Augmented Generation (RAG)
+addresses this limitation by combining parametric generation with a
+non-parametric document collection \cite{lewis2020rag}. Instead of relying only
+on facts remembered during pre-training, a RAG system searches an external
+knowledge base, places relevant passages in the model prompt, and asks the model
+to produce an answer grounded in those passages.
+
+This pattern is attractive for enterprise question answering because policies,
+work instructions, support articles, and operational procedures change more
+frequently than foundation models can be retrained. Retrieval also provides
+provenance: a user can inspect which source was used and an engineer can examine
+whether failure originated in retrieval or generation. These properties are
+particularly important for business workflows, where an answer must often
+preserve prerequisites, ordered steps, conditional branches, exceptions, and
+responsibility boundaries.
+
+However, the conventional RAG pipeline is usually static. Every question is
+processed with the same search method, the same number of retrieved chunks, and
+the same generation route. A direct definition may therefore incur unnecessary
+retrieval and model cost, while a multi-stage workflow question may receive only
+one retrieval pass and miss critical evidence. Adaptive-RAG addresses this
+problem by predicting query complexity with a smaller language model and
+selecting among no retrieval, single-step retrieval, and iterative retrieval
+\cite{jeong2024adaptiverag}. The central principle is to use the least expensive
+strategy that is sufficiently capable for the question.
+
+The suitability of an adaptive approach for enterprise QA cannot be established
+using implementation functionality alone. It requires a benchmark whose
+questions and answers are grounded in a fixed enterprise knowledge base. WixQA
+was created for this purpose and contains expert-written, simulated, and
+synthetic QA datasets aligned to a Wix Help Center corpus
+\cite{cohen2025wixqa}. Evaluation also needs to be actionable. Aggregate
+faithfulness or relevance scores indicate whether a system performs poorly, but
+do not necessarily identify whether the remedy is better chunking, a larger
+\textit{top-k}, reranking, prompt changes, or another route. RAGXplain addresses
+that gap by converting metric evidence into explanatory findings and
+recommendations \cite{cohen2025ragxplain}.
+
+\section{Problem Statement}
+
+Enterprise workflow QA creates four related engineering and research problems.
+First, incoming questions have different computational needs. A fixed route
+either wastes resources on easy questions or under-serves complex questions.
+Second, retrieval quality depends on a chain of decisions--document loading,
+deduplication, chunking, embedding, lexical indexing, vector compatibility,
+filtering, and reranking. An error at any point can remove the evidence needed
+by the generator. Third, model selection introduces operational concerns such
+as credentials, data egress, cost, provider availability, streaming, and
+fallback behavior. Fourth, a multi-stage answer is difficult to trust unless
+its sources, route, model calls, timings, and failures can be reconstructed.
+
+The problem addressed by this project is therefore:
+
+\begin{quote}
+How can a modular Adaptive RAG system classify the complexity of business
+workflow questions, select a proportionate execution strategy, produce
+source-grounded answers, and provide sufficient evaluation and observability
+evidence to improve the system?
+\end{quote}
+
+The work is not limited to a classifier experiment or a RAG chatbot mock-up. The
+classifier, knowledge pipeline, retrieval strategies, model gateway,
+evaluation workflow, and user interface must operate as one reproducible
+system. At the same time, research results must be reported conservatively due to resource constrainst:
+the completed 20-case compatible experiment establishes current evidence, but
+it cannot substitute for a larger controlled benchmark matrix.
+
+\section{Research Objectives}
+
+The research objectives from the proposal were retained and refined as the
+implementation matured. \Cref{tab:research-objectives} links each objective to
+its system evidence.
+
+\begin{table}[H]
+  \centering
+  \caption{Research objectives and implementation evidence.}
+  \label{tab:research-objectives}
+  \begin{tabularx}{\textwidth}{>{\bfseries}p{0.11\textwidth}X X}
+    \toprule
+    Objective & Research intent & Evidence produced by the project\\
+    \midrule
+    RO1 &
+    Develop a lightweight domain-specialized query-complexity classifier for
+    adaptive routing. &
+    Reproducible QAC preparation, a balanced four-class dataset, trained
+    DistilBERT and T5-small artifacts, calibrated routing interfaces, and
+    grouped-validation comparison metrics.\\
+    RO2 &
+    Design and implement an Adaptive RAG framework that selects an execution
+    path appropriate to query complexity. &
+    L1 direct generation, L2 single-step RAG, L3 decomposition and aggregated
+    retrieval, and bounded L4 planning with traceable fallback.\\
+    RO3 &
+    Evaluate answer quality, retrieval, routing, efficiency, and failure
+    causes. &
+    WixQA experiments, lexical and retrieval metrics, Model Farm judge calls,
+    RAGXplain diagnostics, trace artifacts, cost/latency telemetry, and user
+    feedback analytics.\\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Research Questions}
+
+\begin{description}[style=nextline,leftmargin=1.5cm]
+  \item[RQ1]
+  How accurately and efficiently can a lightweight, domain-specialized model
+  classify business workflow query complexity and route questions among direct,
+  single-step, multi-step, and advanced execution?
+
+  \item[RQ2]
+  Does the Adaptive RAG framework improve answer faithfulness and groundedness
+  while controlling latency, token consumption, and cost compared with fixed
+  configurations?
+
+  \item[RQ3]
+  Can explainable evaluation through RAGXplain turn metric outputs into
+  actionable recommendations for retrieval, generation, and configuration
+  improvement?
+\end{description}
+
+The original Adaptive-RAG study defines three strategies
+\cite{jeong2024adaptiverag}. The \texttt{advanced} class and L4 route in RQ1
+are a project extension motivated by questions that require bounded planning or
+tool use. They are not represented as an original contribution of that paper.
+
+\section{Scope}
+
+\subsection{Included Scope}
+
+The data acquisition and preprocessing scope covers the three official WixQA
+question-answering sources and the associated business-workflow knowledge
+corpus. The system normalizes these data into reproducible question--answer--
+context records and supports ingestion from local TXT, JSON, JSONL, Markdown,
+PDF, and DOCX files, the prepared WixQA corpus, and security-checked public web
+pages. Knowledge processing includes metadata extraction, content-hash
+deduplication, configurable and structure-aware chunking, embedding, and
+atomic activation of versioned indexes in PostgreSQL and pgVector.
+
+The model-specialization scope includes constructing a balanced four-class
+query-complexity dataset and training lightweight DistilBERT and T5-small
+classifiers. These models categorize questions as \textit{simple},
+\textit{moderate}, \textit{complex}, or \textit{advanced} and provide the
+evidence used by Adaptive routing. Foundation and hosted models are integrated
+through a provider-neutral Model Gateway rather than trained from scratch. The
+gateway supports local models and selected LiteLLM-compatible providers,
+encrypted credentials, deployment health checks, budget controls, and usage
+telemetry.
+
+The Adaptive RAG scope covers four bounded execution paths: L1 direct
+generation without retrieval, L2 single-step retrieval, L3 decomposed
+multi-query retrieval, and L4 iterative planning with authorized tools. The
+retrieval layer supports BM25, dense, and hybrid search, document filtering,
+and optional reranking. Query-time processing also includes conversation-aware
+reformulation, streaming responses, source citations, cancellation, answer
+regeneration, retry, and full-fidelity execution tracing.
+
+The prototype and evaluation scope consists of a React-based AI assistant and
+a FastAPI service backed by PostgreSQL. The application provides persistent
+conversation history, reusable RAG configurations, Knowledge Base and AI Model
+administration, feedback, and usage analytics. It evaluates saved
+configurations against compatible WixQA cases and integrates RAGXplain to
+translate semantic metrics into explainable findings and actionable
+configuration recommendations. This prototype supports iterative refinement
+and controlled comparison with fixed RAG routes, while remaining a capstone
+research platform rather than a production service.
+
+\subsection{Excluded or Deferred Scope}
+
+The project does not target general-purpose open-domain reasoning, real-time
+audio or video processing, or unrestricted multimodal interaction. It does not
+pre-train a foundation model from scratch; instead, it specializes existing
+pre-trained classifiers and consumes existing local or hosted generation,
+embedding, reranking, planning, and judging models.
+
+Large-scale decentralized multi-agent architectures are also excluded. L4 is
+implemented as a controlled agentic extension with explicit limits on planner
+iterations, tool calls, execution time, cost, data egress, and cancellation.
+Google Drive, OneDrive, and general database connectors remain unavailable
+extension points rather than production integrations. Production
+multi-tenancy, enterprise identity federation, high-availability deployment,
+managed disaster recovery, and formal penetration testing are deferred beyond
+the capstone.
+
+\section{Contributions}
+
+The principal contributions are:
+
+\begin{enumerate}
+  \item a full-stack Adaptive RAG reference architecture that keeps classifier,
+  retrieval, generation, evaluation, and observability interfaces separable;
+  \item a four-level routing model that preserves the least-complex-successful
+  principle and adds a bounded agentic extension;
+  \item a versioned knowledge-processing pipeline that prevents mixed embedding
+  indexes and supports a token-aware WixQA/MiniLM chunking profile;
+  \item a unified AI Model Gateway for in-process, hosted, direct-provider, and
+  self-hosted model deployments;
+  \item an evaluation workflow that treats each saved RAG configuration as a
+  reproducible experimental condition;
+  \item full-fidelity hierarchical traces that connect route decisions,
+  retrieval diagnostics, model usage, sources, costs, and answer versions; and
+  \item a practical studio interface for configuring, operating, evaluating,
+  and diagnosing the system.
+\end{enumerate}
+
+\section{Report Organization}
+
+\Cref{chap:background} reviews the research and technology foundations.
+\Cref{chap:methodology} defines the data, routing, knowledge-processing, and
+evaluation methods. \Cref{chap:implementation-results} describes the
+implementation and reports verified or preliminary evidence.
+\Cref{chap:discussion} discusses the research questions, limitations,
+conclusions, and future work. The appendices provide setup instructions,
+schemas, API and persistence summaries, detailed experiment references, and
+evidence placeholders.

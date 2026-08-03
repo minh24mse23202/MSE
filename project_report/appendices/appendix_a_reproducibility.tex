@@ -1,0 +1,97 @@
+\AppendixChapter{Reproducible Setup and Execution Guide}{app:reproducibility}
+
+\section{Repository and Runtime}
+
+\begin{longtable}{p{0.3\textwidth}p{0.62\textwidth}}
+  \toprule
+  Item & Value\\
+  \midrule
+  Repository & \href{\RepositoryURL}{\texttt{github.com/minh24mse23202/MSE}}\\
+  Evidence commit & \Code{\EvidenceCommitShort} (full hash in
+  \texttt{report\_metadata.tex})\\
+  Required Python & 3.11.x\\
+  Primary database & PostgreSQL 16 with pgVector\\
+  Frontend & React with Vite\\
+  API & FastAPI/Uvicorn\\
+  Worker & \texttt{python -m aragbiz.worker}\\
+  \bottomrule
+\end{longtable}
+
+\section{Local Environment}
+
+\begin{lstlisting}[language=bash,caption={Windows PowerShell environment setup.}]
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+python -m pip install -e ".[dev,api,app,ml,models]"
+Copy-Item .env.example .env
+\end{lstlisting}
+
+Before startup, replace placeholder values in \texttt{.env}. At minimum,
+configure the database URL, JWT secret, bootstrap administrator credentials,
+and model credential encryption key. Model provider credentials must not be
+placed in this report.
+
+\section{Database, API, and Worker}
+
+\begin{lstlisting}[language=bash,caption={Starting the backend services.}]
+docker compose up -d postgres
+alembic upgrade head
+python -m uvicorn api.main:app --reload --env-file .env
+\end{lstlisting}
+
+Run the worker in a second activated terminal:
+
+\begin{lstlisting}[language=bash]
+python -m aragbiz.worker
+\end{lstlisting}
+
+The worker is required for queued ingestion, re-indexing, prepared-corpus
+import, evaluation experiments, and RAGXplain diagnosis.
+
+\section{Frontend}
+
+\begin{lstlisting}[language=bash,caption={Starting the React studio.}]
+cd frontend
+npm install
+npm run dev
+\end{lstlisting}
+
+The default development URLs are
+\url{http://127.0.0.1:5173} for React and
+\url{http://127.0.0.1:8000} for FastAPI.
+
+\section{WixQA Preparation}
+
+\begin{lstlisting}[language=bash,caption={Preparing WixQA and the classifier dataset.}]
+$env:PYTHONPATH='src'
+python scripts/download_wixqa.py --subset all
+python scripts/generate_synthetic_qac.py --limit 2400
+python scripts/prepare_four_class_dataset.py
+\end{lstlisting}
+
+The preparation manifest and audit are written under
+\texttt{docs/evaluation}. Their hashes and counts should be compared before
+using a dataset produced in another environment.
+
+\section{Reproducing Classifier Training}
+
+\begin{lstlisting}[language=bash,caption={Four-class model training commands.}]
+python scripts/train_hf_query_classifier.py \
+  --dataset data/processed/four_class_qac.jsonl
+
+python scripts/train_t5_query_classifier.py \
+  --dataset data/processed/four_class_qac.jsonl
+\end{lstlisting}
+
+After training in a GPU environment, place the exported artifact directories
+at:
+
+\begin{itemize}
+  \item \texttt{data/artifacts/query\_classifier\_distilbert\_v2/}; and
+  \item \texttt{data/artifacts/query\_classifier\_t5\_v2/}.
+\end{itemize}
+
+The final artifacts used by this report are already present at these paths.
+Restart the API and worker after replacing them, then confirm that AI Models
+reports each deployment as ready before selecting it in a configuration.

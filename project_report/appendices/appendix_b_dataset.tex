@@ -1,0 +1,112 @@
+\AppendixChapter{Dataset Schemas and Complexity-Labeling Rubric}{app:dataset}
+
+\section{Normalized QAC Record}
+
+\begin{lstlisting}[language={},caption={Illustrative normalized QAC record.}]
+{
+  "id": "stable-record-id",
+  "question": "How do I complete this workflow?",
+  "answer": "Reference answer",
+  "context": "Grounding context",
+  "complexity_label": "moderate",
+  "metadata": {
+    "dataset": "wixqa_expertwritten",
+    "source_record_id": "source-id",
+    "source_document_ids": ["article-id"],
+    "label_provenance": "structural_or_outcome"
+  }
+}
+\end{lstlisting}
+
+Required text fields are normalized to UTF-8 and empty records are rejected.
+Metadata remains extensible so source identifiers, outcome scores, judge
+decisions, and split groups can be added without changing the core classifier
+interface.
+
+\section{Prepared Knowledge Document}
+
+\begin{lstlisting}[language={},caption={Illustrative prepared WixQA document.}]
+{
+  "source_record_id": "article-id",
+  "title": "Article title",
+  "text": "Normalized article body",
+  "url": "https://support.example/article",
+  "article_type": "help-center",
+  "source_type": "wixqa_corpus",
+  "checksum": "sha256..."
+}
+\end{lstlisting}
+
+Each imported row becomes one document. Chunking and embedding still occur
+inside the selected Knowledge Base configuration.
+
+\section{Labeling Rubric}
+
+\begin{longtable}{p{0.13\textwidth}p{0.24\textwidth}p{0.49\textwidth}}
+  \caption{Complexity-labeling decision rubric.}
+  \label{tab:appendix-label-rubric}\\
+  \toprule
+  Label & Positive indicators & Exclusion and boundary guidance\\
+  \midrule
+  \endfirsthead
+  \toprule
+  Label & Positive indicators & Exclusion and boundary guidance\\
+  \midrule
+  \endhead
+  Simple &
+  General conversational request or answer available without organizational
+  evidence. &
+  Do not label a one-document enterprise lookup as simple merely because the
+  answer is short; it is moderate when retrieval is required.\\
+  Moderate &
+  One article, one coherent source, one direct policy or procedural lookup. &
+  Escalate to complex when evidence is split across sources or the question
+  contains multiple dependent parts.\\
+  Complex &
+  Two or three evidence groups, multi-step synthesis, decomposition, or
+  cross-passage comparison. &
+  Escalate to advanced when the answer requires an iterative dependency chain,
+  connector action, or recovery across tool calls.\\
+  Advanced &
+  Four or more hops, long conditional/exception chain, iterative research, or
+  authorized external tool use. &
+  Do not use advanced merely because a question is long. There must be an
+  execution requirement beyond bounded multi-query aggregation.\\
+  \bottomrule
+\end{longtable}
+
+\section{Outcome-Derived Silver Labels}
+
+\begin{enumerate}
+  \item Execute fixed L1, L2, L3, and L4 snapshots.
+  \item Mark overlap $\geq 0.65$ as pass and overlap $<0.35$ as failure.
+  \item Require faithfulness proxy $\geq 0.60$ for retrieval routes.
+  \item Use the configured judge for unresolved or conflicting outcomes.
+  \item Select the least-complex successful route.
+  \item If unresolved, use the structural source/hop rubric.
+  \item Store every metric, route outcome, judge identity, latency, cost, and
+  configuration snapshot with the label.
+\end{enumerate}
+
+\section{Prepared Dataset Composition}
+
+\begin{table}[H]
+  \centering
+  \caption{Selected source contribution to the four-class artifact.}
+  \begin{tabular}{lrrrrr}
+    \toprule
+    Source & Simple & Moderate & Complex & Advanced & Total\\
+    \midrule
+    ExpertWritten & 0 & 148 & 52 & 0 & 200\\
+    Simulated & 0 & 173 & 27 & 0 & 200\\
+    Official Synthetic & 0 & 200 & 0 & 0 & 200\\
+    Template supplement & 600 & 79 & 521 & 600 & 1,800\\
+    \midrule
+    Total & 600 & 600 & 600 & 600 & 2,400\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The source distribution shows why final reporting must separate authentic
+business questions from template balancing examples. A high overall score can
+hide weak generalization to ExpertWritten or Simulated records.

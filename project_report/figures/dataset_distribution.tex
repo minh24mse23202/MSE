@@ -1,0 +1,29 @@
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}
+    \begin{axis}[
+      ybar,
+      width=0.9\textwidth,
+      height=7cm,
+      ymin=0,
+      ymax=700,
+      ylabel={Selected records},
+      symbolic x coords={Simple,Moderate,Complex,Advanced},
+      xtick=data,
+      nodes near coords,
+      nodes near coords align={vertical},
+      bar width=24pt,
+      axis line style={draw=aragline},
+      tick style={draw=aragline},
+      ymajorgrids=true,
+      grid style={draw=aragline,dashed},
+      every node near coord/.append style={font=\small}
+    ]
+      \addplot[fill=aragprimary,draw=aragprimary] coordinates {
+        (Simple,600) (Moderate,600) (Complex,600) (Advanced,600)
+      };
+    \end{axis}
+  \end{tikzpicture}
+  \caption{Balanced four-class classifier dataset after deterministic preparation.}
+  \label{fig:dataset-distribution}
+\end{figure}

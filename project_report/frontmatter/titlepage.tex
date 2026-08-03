@@ -1,0 +1,42 @@
+\begin{titlepage}
+  \thispagestyle{empty}
+  \centering
+
+  {\large\textbf{\MakeUppercase{\MinistryName}}\par}
+  \vspace{0.15cm}
+  {\large\textbf{\MakeUppercase{\InstitutionName}}\par}
+
+  \vspace{0.75cm}
+  \IfFileExists{assets/fpt-university-logo.png}{%
+    \includegraphics[width=0.28\textwidth]{fpt-university-logo.png}
+  }{%
+    \fbox{\begin{minipage}[c][2.6cm][c]{0.31\textwidth}
+      \centering\small Official FPT University logo
+    \end{minipage}}
+  }
+
+  \vspace{0.9cm}
+  {\LARGE\textbf{\ReportTitle}\par}
+
+  \vspace{1.7cm}
+  {\large by\par}
+
+  \vspace{1.15cm}
+  {\large \StudentName\par}
+
+  \vspace{1.4cm}
+  {\large
+    A thesis submitted in conformity with the requirements\par
+    for the degree of \DegreeName\par
+  }
+
+  \vspace{1.15cm}
+  {\large Supervisor:\par}
+  \vspace{0.35cm}
+  {\large 1. \SupervisorName\par}
+  \vspace{0.2cm}
+  {\large 2. \SecondSupervisorName\par}
+
+  \vfill
+  {\large \textcopyright{} Copyright by \StudentName{} \CopyrightYear\par}
+\end{titlepage}

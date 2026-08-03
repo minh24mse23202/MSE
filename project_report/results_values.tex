@@ -1,0 +1,95 @@
+% Verified classifier and evaluation evidence for the current report revision.
+% Keep shared values here to prevent numerical inconsistencies across chapters.
+
+% Four-class dataset audit.
+\newcommand{\PreparedDatasetRecords}{2,400}
+\newcommand{\PreparedDatasetPerClass}{600}
+\newcommand{\PreparedTrainRecords}{1,919}
+\newcommand{\PreparedValidationRecords}{481}
+\newcommand{\PreparedSourceGroups}{1,956}
+\newcommand{\PreparedOfficialExpertRecords}{200}
+\newcommand{\PreparedOfficialSimulatedRecords}{200}
+\newcommand{\PreparedOfficialSyntheticRecords}{200}
+\newcommand{\PreparedTemplateRecords}{1,800}
+\newcommand{\PreparedCorpusDocuments}{6,221}
+
+% Final four-class classifier validation results.
+\newcommand{\FinalClassifierValidationRecords}{481}
+\newcommand{\FinalDistilBERTAccuracy}{98.75\%}
+\newcommand{\FinalDistilBERTMacroFOne}{98.74\%}
+\newcommand{\FinalDistilBERTAdvancedPrecision}{100.00\%}
+\newcommand{\FinalDistilBERTAdvancedRecall}{100.00\%}
+\newcommand{\FinalDistilBERTAdvancedFOne}{100.00\%}
+\newcommand{\FinalDistilBERTECE}{3.56\%}
+\newcommand{\FinalDistilBERTLatency}{5.44~ms}
+\newcommand{\FinalTFiveAccuracy}{98.75\%}
+\newcommand{\FinalTFiveMacroFOne}{98.74\%}
+\newcommand{\FinalTFiveAdvancedPrecision}{100.00\%}
+\newcommand{\FinalTFiveAdvancedRecall}{100.00\%}
+\newcommand{\FinalTFiveAdvancedFOne}{100.00\%}
+\newcommand{\FinalTFiveECE}{1.19\%}
+\newcommand{\FinalTFiveLatency}{80.70~ms}
+\newcommand{\FinalComplexRecall}{94.96\%}
+\newcommand{\FinalUnderRouting}{1.25\%}
+\newcommand{\FinalOverRouting}{0.00\%}
+\newcommand{\FinalRoutingCostRegret}{0.0125}
+\newcommand{\FinalClassifierErrors}{6}
+
+% Completed configuration experiment identity and compatible sample.
+\newcommand{\PrimaryExperimentName}{Experiment: WixQA Curpus 100 | WixQA datasets 20 | RAG Configurations 4}
+\newcommand{\PrimaryExperimentID}{experiment-ed6d2e1b77064d3393d1d32293d61b06}
+\newcommand{\PrimaryExperimentCommit}{96adfc74549534f468bc4056a7d9cc947c1b2f6d}
+\newcommand{\PrimaryExperimentSeed}{42}
+\newcommand{\PrimaryExperimentKBDocuments}{100}
+\newcommand{\PrimaryExperimentCases}{20}
+\newcommand{\PrimaryExpertCases}{6}
+\newcommand{\PrimarySimulatedCases}{2}
+\newcommand{\PrimarySyntheticCases}{12}
+
+% Equal-dataset macro leaderboard.
+\newcommand{\DistilConfigQuality}{0.5449}
+\newcommand{\DistilConfigLatency}{5.880~s}
+\newcommand{\DistilConfigCost}{\$0.001052}
+\newcommand{\LTwoConfigQuality}{0.5324}
+\newcommand{\LTwoConfigLatency}{5.663~s}
+\newcommand{\LTwoConfigCost}{\$0.001053}
+\newcommand{\TFiveConfigQuality}{0.5152}
+\newcommand{\TFiveConfigLatency}{25.437~s}
+\newcommand{\TFiveConfigCost}{\$0.000889}
+\newcommand{\LThreeConfigQuality}{0.4585}
+\newcommand{\LThreeConfigLatency}{5.863~s}
+\newcommand{\LThreeConfigCost}{\$0.000556}
+
+% Equal-dataset macro standard metrics: token F1, BLEU, ROUGE-1, ROUGE-2,
+% WixQA context recall, and WixQA factuality.
+\newcommand{\DistilStdMetrics}{43.07\% & 10.67\% & 43.07\% & 20.18\% & 56.11\% & 81.11\%}
+\newcommand{\TFiveStdMetrics}{44.66\% & 11.54\% & 44.66\% & 21.97\% & 56.11\% & 69.17\%}
+\newcommand{\LTwoStdMetrics}{43.37\% & 11.36\% & 43.37\% & 20.82\% & 55.83\% & 76.67\%}
+\newcommand{\LThreeStdMetrics}{38.95\% & 18.43\% & 38.95\% & 22.72\% & 55.83\% & 53.89\%}
+
+% Equal-dataset macro RAGXplain metrics: context relevancy, context adherence,
+% answer relevancy, context recall, factuality, and grading note.
+\newcommand{\DistilRAGXMetrics}{73.33\% & 75.56\% & 95.56\% & 59.44\% & 82.78\% & 84.44\%}
+\newcommand{\TFiveRAGXMetrics}{71.11\% & 68.89\% & 96.11\% & 60.00\% & 68.89\% & 87.78\%}
+\newcommand{\LTwoRAGXMetrics}{73.33\% & 71.11\% & 95.00\% & 59.44\% & 75.00\% & 83.89\%}
+\newcommand{\LThreeRAGXMetrics}{72.22\% & 100.00\% & 60.56\% & 61.11\% & 52.78\% & 45.56\%}
+
+% Per-dataset quality scores from the persisted experiment leaderboard.
+\newcommand{\DistilDatasetScores}{0.5079 & 0.6986 & 0.4281}
+\newcommand{\TFiveDatasetScores}{0.4068 & 0.6785 & 0.4603}
+\newcommand{\LTwoDatasetScores}{0.4195 & 0.6922 & 0.4856}
+\newcommand{\LThreeDatasetScores}{0.3214 & 0.6708 & 0.3832}
+
+% Exact run registry: Simulated, Synthetic, ExpertWritten for each configuration.
+\newcommand{\TFiveSimulatedRunID}{eval-9593c0d38509f7f3b05ccfc6e9441f80}
+\newcommand{\TFiveSyntheticRunID}{eval-64b8117f4c6bffe97f1ea0bae00a55f1}
+\newcommand{\TFiveExpertRunID}{eval-41364df40eb9a46acb276773b01e99eb}
+\newcommand{\DistilSimulatedRunID}{eval-c8929798d39625bde0557b68532c5a8f}
+\newcommand{\DistilSyntheticRunID}{eval-3fabbad047bf8a9cac9b81048cd4ae65}
+\newcommand{\DistilExpertRunID}{eval-7c3dc18cb54bb3722ca1109d1ce1cd87}
+\newcommand{\LTwoSimulatedRunID}{eval-f4a02ccf7068cfc19dc2492215d1230d}
+\newcommand{\LTwoSyntheticRunID}{eval-fa5340a6e0751170db9605e14538a4db}
+\newcommand{\LTwoExpertRunID}{eval-8fff1e60978de4476a663d63dbd48768}
+\newcommand{\LThreeSimulatedRunID}{eval-1db818c858f38646f92d616adbc57683}
+\newcommand{\LThreeSyntheticRunID}{eval-9a384590f6d419f63e49fc9a24b3a3d3}
+\newcommand{\LThreeExpertRunID}{eval-f7095de1e7f9638fe9c514a9b4d911e6}

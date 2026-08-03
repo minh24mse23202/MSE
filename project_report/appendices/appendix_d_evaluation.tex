@@ -1,0 +1,160 @@
+\AppendixChapter{Evaluation Configurations and Detailed Metrics}{app:evaluation}
+
+\section{Primary Experiment Registry}
+
+The report's primary configuration experiment has the exact stored name:
+
+\begin{quote}
+  \textit{Experiment: WixQA Curpus 100 | WixQA datasets 20 | RAG
+  Configurations 4}
+\end{quote}
+
+Its persisted experiment ID is
+\path{experiment-ed6d2e1b77064d3393d1d32293d61b06}, and the code snapshot is
+\path{96adfc74549534f468bc4056a7d9cc947c1b2f6d}. The intentionally misspelled
+word ``Curpus'' is retained only when reproducing the stored experiment name.
+
+\begin{longtable}{p{0.43\textwidth}p{0.29\textwidth}p{0.17\textwidth}}
+  \caption{Runs in the completed four-configuration experiment.}
+  \label{tab:run-registry}\\
+  \toprule
+  Run ID & Configuration & Dataset\\
+  \midrule
+  \endfirsthead
+  \toprule
+  Run ID & Configuration & Dataset\\
+  \midrule
+  \endhead
+  \scriptsize\texttt{\DistilSimulatedRunID} & Adaptive with DistilBERT & Simulated\\
+  \scriptsize\texttt{\DistilSyntheticRunID} & Adaptive with DistilBERT & Synthetic\\
+  \scriptsize\texttt{\DistilExpertRunID} & Adaptive with DistilBERT & ExpertWritten\\
+  \scriptsize\texttt{\TFiveSimulatedRunID} & Adaptive with T5-small & Simulated\\
+  \scriptsize\texttt{\TFiveSyntheticRunID} & Adaptive with T5-small & Synthetic\\
+  \scriptsize\texttt{\TFiveExpertRunID} & Adaptive with T5-small & ExpertWritten\\
+  \scriptsize\texttt{\LTwoSimulatedRunID} & Fixed L2 & Simulated\\
+  \scriptsize\texttt{\LTwoSyntheticRunID} & Fixed L2 & Synthetic\\
+  \scriptsize\texttt{\LTwoExpertRunID} & Fixed L2 & ExpertWritten\\
+  \scriptsize\texttt{\LThreeSimulatedRunID} & Fixed L3 & Simulated\\
+  \scriptsize\texttt{\LThreeSyntheticRunID} & Fixed L3 & Synthetic\\
+  \scriptsize\texttt{\LThreeExpertRunID} & Fixed L3 & ExpertWritten\\
+  \bottomrule
+\end{longtable}
+
+Each run stores its RAG configuration snapshot, WixQA metric object,
+RAGXplain input JSONL, result CSV, metric insights, overall insights, and
+reproducibility metadata under:
+
+\begin{lstlisting}[language={}]
+docs/evaluation/results/<run_id>/ragxplain/
+\end{lstlisting}
+
+The classifier metrics used in \Cref{tab:final-classifier} are stored at:
+
+\begin{lstlisting}[language={}]
+docs/evaluation/hf_query_classifier_v2_metrics.json
+docs/evaluation/t5_query_classifier_v2_metrics.json
+data/artifacts/query_classifier_distilbert_v2/
+data/artifacts/query_classifier_t5_v2/
+\end{lstlisting}
+
+\section{Experiment Controls and Aggregation}
+
+The experiment used seed \PrimaryExperimentSeed{} and a Knowledge Base with
+\PrimaryExperimentKBDocuments{} prepared WixQA documents. Compatibility
+filtering selected \PrimarySimulatedCases{} Simulated,
+\PrimarySyntheticCases{} Synthetic, and \PrimaryExpertCases{} ExpertWritten
+questions. Conversation context was disabled so each record remained an
+independent benchmark case.
+
+\begin{table}[H]
+  \centering
+  \caption{Primary experiment configuration controls.}
+  \label{tab:appendix-config-controls}
+  \small
+  \begin{tabularx}{\textwidth}{p{0.2\textwidth}p{0.13\textwidth}p{0.2\textwidth}p{0.08\textwidth}X}
+    \toprule
+    Configuration & Route & Classifier & Top-\textit{k} & Generator\\
+    \midrule
+    Adaptive DistilBERT & Adaptive & DistilBERT v2 & 2 & GPT-4.1-mini\\
+    Adaptive T5-small & Adaptive & T5-small v2 & 1 & GPT-4.1-mini\\
+    Fixed L2 & L2 & Not used & 2 & GPT-4.1-mini\\
+    Fixed L3 & L3 & Not used & 1 & Local extractive\\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+All four configurations used hybrid retrieval, disabled reranking, enabled
+citations, and professional response settings. The leaderboard computes the
+quality score independently for each dataset and then applies an equal-dataset
+macro average. Its weights are shown in \Cref{tab:quality-weights}.
+
+\begin{table}[H]
+  \centering
+  \caption{Persisted quality-score weights.}
+  \label{tab:quality-weights}
+  \begin{tabular}{lr@{\hspace{1.4cm}}lr}
+    \toprule
+    Metric & Weight & Metric & Weight\\
+    \midrule
+    Factuality & 0.30 & Context recall & 0.30\\
+    ROUGE-1 & 0.15 & ROUGE-2 & 0.10\\
+    Token F1 & 0.10 & BLEU & 0.05\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The cost values in the experiment leaderboard include answer generation,
+query classification, and WixQA judge calls when applicable. They do not
+include the subsequent RAGXplain diagnosis. Failed or partial paid calls remain
+part of Model Gateway telemetry rather than being silently excluded.
+
+\section{Interpretation Constraints}
+
+The experiment compares saved configurations, not isolated components. Both
+Adaptive classifiers routed all \PrimaryExperimentCases{} cases to L2. Their
+top-\textit{k} values differ, and Fixed L3 uses a different generator. The
+observed rank therefore cannot be attributed solely to DistilBERT, T5-small,
+or route selection. The unequal compatible dataset counts also make
+equal-dataset macro averaging necessary.
+
+\section{RAGXplain Protocols}
+
+The twelve completed diagnoses repeatedly produced four actionable protocols:
+
+\begin{enumerate}
+  \item increase retrieval breadth with controlled top-\textit{k} comparisons;
+  \item enable and evaluate reranking to recover precision after broader
+  retrieval;
+  \item strengthen grounding and citation instructions so generation remains
+  within retrieved evidence; and
+  \item refine procedural chunking, query expansion, and response structure
+  for complete step-oriented answers.
+\end{enumerate}
+
+These protocols are hypotheses. Their value must be tested by cloning the
+current configuration and changing only the recommended factor over the same
+case IDs.
+
+\section{Next Controlled Experiment Matrix}
+
+\begin{table}[H]
+  \centering
+  \caption{Planned controlled extensions to the primary experiment.}
+  \label{tab:future-experiment-matrix}
+  \begin{tabularx}{\textwidth}{p{0.2\textwidth}p{0.22\textwidth}X}
+    \toprule
+    Factor & Values & Variables held constant\\
+    \midrule
+    Route & Adaptive, L2, L3, L4 & Cases, generator, retrieval, top-\textit{k}, prompts, and judge.\\
+    Retrieval & BM25, dense, hybrid & Route, index version, top-\textit{k}, and generator.\\
+    Top-\textit{k} & 2, 5, 7 & Retrieval mode, reranker, index, and generator.\\
+    Reranking & Disabled, enabled & Same first-stage candidates and top-\textit{k}.\\
+    RAGXplain change & Before, recommended & Same cases and all unrelated fields.\\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Expanded reporting should include per-subset values, equal-dataset macro
+averages, route distributions, tokens, latency, cost, judge coverage, and
+uncertainty estimates. Synthetic must not dominate ExpertWritten and Simulated
+merely because it provides more compatible rows.

@@ -1,0 +1,80 @@
+\AppendixChapter{User Interface and Trace Evidence}{app:evidence}
+
+\section{Screenshot Checklist}
+
+The report uses compile-safe placeholders until redacted screenshots are placed
+under \path{project_report/assets}. Capture screenshots at a consistent
+desktop viewport after applying the final database migration and selecting
+non-sensitive demonstration data.
+
+\begin{longtable}{p{0.3\textwidth}p{0.55\textwidth}}
+  \toprule
+  Asset & Required evidence\\
+  \midrule
+  \path{ui-main.png} & Explorer, assistant answer with citations, RAG
+  Customizer, and visible selected KB/configuration.\\
+  \path{ui-knowledge-bases.png} & WixQA KB, document count, active index,
+  chunking/embedding profile, and document accordion.\\
+  \path{ui-ai-models.png} & Grouped deployments and health state without
+  exposing any credential.\\
+  \path{ui-evaluation.png} & Selected experiment, WixQA metrics, status, and
+  run list.\\
+  \path{ui-trace.png} & Trace summary, waterfall, hierarchy, and selected
+  retrieval/model detail.\\
+  \path{ui-analytics.png} & Token/cost trend, grouped breakdown, engagement,
+  and paginated events or feedback.\\
+  \path{ragxplain-insights.png} & Executive summary and numbered recommended
+  protocol loaded automatically.\\
+  \bottomrule
+\end{longtable}
+
+\section{Trace Evidence Checklist}
+
+A defensible demonstration trace should include:
+
+\begin{itemize}
+  \item original and standalone query;
+  \item conversation-history count and reformulation strategy;
+  \item configured and actual classifier, probability, confidence, and route;
+  \item KB, active index version, embedding model, dimension, and tokenizer
+  limit;
+  \item BM25/dense/hybrid candidate scores and selected ranks;
+  \item L3 subqueries or L4 planner/tool actions when applicable;
+  \item prompt assembly, configured and actual generator, fallback index, token
+  usage, latency, and cost;
+  \item citation map and validation result; and
+  \item message persistence and terminal status.
+\end{itemize}
+
+\section{Demonstration Path}
+
+\begin{enumerate}
+  \item Sign in with a non-placeholder administrator account.
+  \item Confirm local and hosted deployment health in AI Models.
+  \item Open the prepared WixQA KB and confirm the active MiniLM index.
+  \item Select a saved Adaptive configuration in Main.
+  \item Ask a direct question, a single-article workflow question, and a
+  multi-step follow-up.
+  \item Open citation \texttt{[S1]}, Source, and Trace.
+  \item Stop and retry one streamed response to demonstrate durable states.
+  \item Run a bounded WixQA evaluation and open one case trace.
+  \item Run RAGXplain diagnosis and open the embedded insights viewer.
+  \item Open Analytics to show model usage and answer feedback attribution.
+\end{enumerate}
+
+\section{Evidence Redaction Rules}
+
+Before inclusion, inspect every screenshot and trace export. Remove:
+
+\begin{itemize}
+  \item API keys, bearer tokens, encryption keys, passwords, and environment
+  values;
+  \item private user email addresses unless the demonstration identity is
+  intentionally public;
+  \item local filesystem paths that reveal unnecessary personal information;
+  \item private business documents or prompts without permission; and
+  \item raw numerical embedding vectors.
+\end{itemize}
+
+Deployment IDs, run IDs, configuration IDs, trace IDs, and Git commit IDs may
+be retained because they support reproducibility and are not credentials.
