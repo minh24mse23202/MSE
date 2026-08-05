@@ -4,6 +4,7 @@
 \section{Discussion of Research Questions}
 
 \subsection{RQ1: Complexity Classification and Routing}
+\label{sec:rq1-classifier-discussion}
 
 The implementation demonstrates that a business-workflow QA system can expose
 query-complexity classification as a runtime deployment rather than a hidden
@@ -15,13 +16,54 @@ controlled route experiments.
 RQ1 is answered for the prepared source-grouped validation split. DistilBERT
 and T5-small both achieved \FinalDistilBERTAccuracy{} accuracy and
 \FinalDistilBERTMacroFOne{} macro F1, with perfect advanced-class
-precision/recall/F1. Their only errors were six complex questions routed as
-moderate, producing \FinalUnderRouting{} under-routing and no over-routing.
-DistilBERT was substantially faster at \FinalDistilBERTLatency{} versus
-\FinalTFiveLatency{}, while T5-small was better calibrated
-(\FinalTFiveECE{} versus \FinalDistilBERTECE{} expected calibration error).
-The models are therefore equal on held-out predictive quality but differ in
-the latency--calibration trade-off.
+precision/recall/F1. Both models made the same six record-level errors, each a
+complex question predicted as moderate. This produced \FinalUnderRouting{}
+under-routing and no over-routing. DistilBERT was substantially faster at
+\FinalDistilBERTLatency{} versus \FinalTFiveLatency{}, while T5-small was
+better calibrated (\FinalTFiveECE{} versus \FinalDistilBERTECE{} expected
+calibration error). The models are therefore equal on held-out predictive
+quality but differ in the latency--calibration trade-off.
+
+The aggregate complex recall of \FinalComplexRecall{} conceals a marked source
+difference. \Cref{tab:complex-errors-by-source} distributes the complex-class
+validation records by their originating subset. Both classifiers correctly
+identified all \FinalTemplateComplexRecords{} generated template examples but
+under-routed all \FinalOfficialComplexRecords{} complex questions from the
+official multi-document subsets. The official Synthetic subset contributes no
+complex rows to this validation class because its selected single-document
+records were labelled moderate by the preparation policy.
+
+\begin{table}[H]
+  \centering
+  \caption{Complex-class validation outcomes by source subset for both final classifiers.}
+  \label{tab:complex-errors-by-source}
+  \begin{tabular}{lrrr}
+    \toprule
+    Source subset & Complex records & Correct & Predicted moderate\\
+    \midrule
+    Template supplement & \FinalTemplateComplexRecords & \FinalTemplateComplexCorrect & 0\\
+    ExpertWritten & \FinalExpertComplexRecords & \FinalExpertComplexCorrect & 3\\
+    Simulated & \FinalSimulatedComplexRecords & \FinalSimulatedComplexCorrect & 3\\
+    Official Synthetic & 0 & -- & --\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Consequently, complex recall is \FinalTemplateComplexRecall{} for the template
+supplement but \FinalOfficialComplexRecall{} for the six official
+multi-document complex records. The missed questions are concise, naturally
+phrased requests concerning slideshow controls, shopping-cart information,
+business-email connection or delivery, domain ownership, and birthday-email
+automation. Their complexity comes from evidence requirements rather than
+from explicit words such as ``dependencies,'' ``branches,'' or ``approval
+order'' that occur frequently in the generated templates. This pattern
+suggests source- and template-conditioned learning that is not visible in the
+overall accuracy. The official complex sample contains only six records, so it
+is too small for a stable population estimate; nevertheless, the consistent
+under-routing across both models is a material validity warning. Future
+classifier evaluation should increase naturally phrased multi-document
+complex examples, report recall by source as well as by class, and prioritize
+outcome-derived route labels over template structure alone.
 
 Adding \texttt{advanced} creates a clearer ownership boundary. L3 remains
 decomposition plus multi-query evidence aggregation. L4 owns bounded iterative
@@ -145,6 +187,30 @@ minimal end-user chat.
   broad research tasks.
 \end{itemize}
 
+\section{Conclusion}
+
+This capstone transformed the proposal for adaptive business-workflow QA into a
+working full-stack research system. \SystemName{} connects knowledge
+processing, versioned embedding indexes, hybrid retrieval, four-level adaptive
+routing, local and hosted models, streaming interaction, citations, durable
+traces, configuration-based evaluation, RAGXplain diagnostics, and analytics.
+Its architecture is designed so each component can be independently tested and
+its runtime behavior can be reconstructed.
+
+The implementation evidence shows that the complete experimental workflow is
+operational, both four-class classifiers achieve strong grouped-validation
+performance, and Adaptive with DistilBERT is the highest-ranked configuration
+in the current 20-case experiment. It also shows why disciplined evaluation
+matters: corpus compatibility and controlled configuration snapshots are
+preconditions for valid route comparison, and explainable metrics are most
+useful when they map to concrete configuration changes.
+
+The project does not claim statistically significant Adaptive RAG superiority
+from the current sample. Its contribution is a transparent, reproducible
+system with trained routers, persisted configuration experiments, explainable
+diagnosis, and sufficient observability to run and defend the larger controlled
+matrix without rebuilding the system.
+
 \section{Future Work}
 
 \subsection{Immediate Experimental Work}
@@ -203,27 +269,3 @@ correctness, completeness, actionability, source support, and harmful
 omissions. The implemented answer-version feedback model provides a starting
 point, but a controlled human study should randomize configurations, blind
 reviewers where possible, and measure agreement.
-
-\section{Conclusion}
-
-This capstone transformed the proposal for adaptive business-workflow QA into a
-working full-stack research system. \SystemName{} connects knowledge
-processing, versioned embedding indexes, hybrid retrieval, four-level adaptive
-routing, local and hosted models, streaming interaction, citations, durable
-traces, configuration-based evaluation, RAGXplain diagnostics, and analytics.
-Its architecture is designed so each component can be independently tested and
-its runtime behavior can be reconstructed.
-
-The implementation evidence shows that the complete experimental workflow is
-operational, both four-class classifiers achieve strong grouped-validation
-performance, and Adaptive with DistilBERT is the highest-ranked configuration
-in the current 20-case experiment. It also shows why disciplined evaluation
-matters: corpus compatibility and controlled configuration snapshots are
-preconditions for valid route comparison, and explainable metrics are most
-useful when they map to concrete configuration changes.
-
-The project does not claim statistically significant Adaptive RAG superiority
-from the current sample. Its contribution is a transparent, reproducible
-system with trained routers, persisted configuration experiments, explainable
-diagnosis, and sufficient observability to run and defend the larger controlled
-matrix without rebuilding the system.

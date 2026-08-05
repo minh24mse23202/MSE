@@ -42,6 +42,54 @@ Synthetic rows, and \PreparedCorpusDocuments{} prepared knowledge documents.
 Dataset hashes are recorded in the preparation manifest so another environment
 can detect a changed source snapshot.
 
+\Cref{tab:wixqa-normalized-examples} illustrates how records with different
+origins are represented by the same schema. ExpertWritten answers preserve the
+detail of authentic support cases, Simulated answers condense user--expert
+dialogues, and Synthetic answers provide larger-scale single-article coverage.
+The displayed answers are shortened for readability; the prepared JSONL keeps
+the complete normalized text and source identifiers.
+
+\begin{table}[H]
+  \centering
+  \caption{Representative normalized WixQA records from the prepared dataset.}
+  \label{tab:wixqa-normalized-examples}
+  \small
+  \begin{tabularx}{\textwidth}{
+    >{\raggedright\arraybackslash}p{0.13\textwidth}
+    >{\raggedright\arraybackslash}p{0.37\textwidth}
+    >{\raggedright\arraybackslash}X}
+    \toprule
+    Subset & Normalized question & Reference-answer excerpt, support, and record ID\\
+    \midrule
+    ExpertWritten &
+    Can I start accepting payments while my Wix Payments account is still
+    under verification? &
+    Payments can be accepted almost immediately, but identity verification is
+    required before full activation. One supporting article is linked.
+    \textit{Record:} \Code{wixqa\_expertwritten-00001}.\\
+    Simulated &
+    How can I keep published changes as a draft? &
+    Edit and save the site without selecting Publish. One supporting article
+    is linked. \textit{Record:} \Code{wixqa\_simulated-00001}.\\
+    Synthetic &
+    How can I manage inventory updates after creating purchase orders in the
+    Wix dashboard? &
+    Inventory updates automatically when received merchandise is recorded in
+    Wix Stores POS. One supporting article is linked. \textit{Record:}
+    \Code{wixqa\_synthetic-00001}.\\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+The corresponding knowledge corpus uses a document rather than a QA schema.
+For example, record
+\Code{860475a2...09168}
+stores the article titled ``Wix Events: About the Event Details and Registration
+Form Pages,'' together with its normalized body, public support URL, and article
+type. During evaluation, QAC article identifiers are matched to these prepared
+documents so retrieval can be assessed against the intended evidence rather
+than an unrelated corpus sample.
+
 \section{Four-Class Complexity Dataset}
 
 \subsection{Label Definitions}
@@ -67,6 +115,58 @@ can detect a changed source snapshot.
     \bottomrule
   \end{tabularx}
 \end{table}
+
+The operational distinction is evidence requirement rather than question
+length alone. \Cref{tab:four-class-examples} gives representative records from
+the prepared classifier artifact. Long questions are abridged only in the
+table; their IDs refer to the complete stored records.
+
+\begin{table}[H]
+  \centering
+  \caption{Representative examples from the prepared four-class dataset.}
+  \label{tab:four-class-examples}
+  \small
+  \begin{tabularx}{\textwidth}{
+    >{\raggedright\arraybackslash}p{0.12\textwidth}
+    >{\raggedright\arraybackslash}p{0.48\textwidth}
+    >{\raggedright\arraybackslash}X}
+    \toprule
+    Label and route & Representative question & Label rationale and provenance\\
+    \midrule
+    Simple, L1 &
+    ``Define SLA.'' &
+    No organization-specific document is needed. The answer is a direct
+    workflow-vocabulary definition. Template record
+    \Code{template-four-class-00042}; zero evidence documents.\\
+    Moderate, L2 &
+    ``How can I manage inventory updates after creating purchase orders in the
+    Wix dashboard?'' &
+    One coherent article directly contains the required fact. Official
+    Synthetic record \Code{wixqa\_synthetic-00001}; one evidence document.\\
+    Complex, L3 &
+    ``I am having trouble finding the arrows and the Change Slide Background
+    option in a full-width slideshow on Wix.'' &
+    The answer combines slideshow-background instructions with navigation and
+    control settings. ExpertWritten record
+    \Code{wixqa\_expertwritten-00074}; two evidence documents.\\
+    Advanced, L4 &
+    Plan an end-to-end Wix Stores workflow combining currency conversion and
+    carrier integration, handling a cart-discount exception, and verifying
+    multiple-coupon behavior; identify branches, owners, recovery actions, and
+    approval order. &
+    The request contains a dependency chain, an exception, and final evidence
+    across four articles. Abridged template-balancing record
+    \Code{template-four-class-02095}; four evidence documents.\\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+These examples also clarify an important boundary: a short enterprise lookup
+is moderate when it still requires a source, whereas a longer general
+definition may remain simple if no private or organization-specific evidence
+is needed. Likewise, L4 is not assigned merely because a question is verbose;
+it requires an iterative dependency, exception, recovery, or tool-use pattern
+beyond L3's bounded multi-passage synthesis.
 
 Labels can be produced through a hybrid silver-label procedure. L1, L2, L3,
 and L4 are executed with fixed snapshots. The least-complex successful route

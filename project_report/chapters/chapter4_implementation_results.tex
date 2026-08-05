@@ -313,8 +313,10 @@ source-grouped validation split, label order, and seed.
   \end{tabularx}
 \end{table}
 
-Both models produced the same confusion matrix. The only errors were
-\FinalClassifierErrors{} complex questions predicted as moderate.
+Both models produced the same aggregate confusion matrix. All
+\FinalClassifierErrors{} errors occurred in the complex-to-moderate cell. The
+source-level distribution and its implications for RQ1 are examined in
+\Cref{sec:rq1-classifier-discussion}.
 
 \begin{table}[H]
   \centering
@@ -405,19 +407,20 @@ Synthetic subset does not dominate. The composite weights are 0.30 factuality,
 
 \begin{table}[H]
   \centering
-  \caption{Equal-dataset macro standard metrics.}
+  \caption{Equal-dataset macro standard metrics (R-1 denotes ROUGE-1, R-2 denotes ROUGE-2, and Fact. denotes factuality; all values in percent).}
   \label{tab:primary-standard-metrics}
-  \scriptsize
-  \begin{tabular}{lrrrrrr}
+  \small
+  \setlength{\tabcolsep}{2.9pt}
+  \begin{tabularx}{\textwidth}{X*{6}{>{\centering\arraybackslash}p{0.09\textwidth}}}
     \toprule
-    Configuration & Token F1 & BLEU & ROUGE-1 & ROUGE-2 & Context recall & Factuality\\
+    Configuration & \shortstack{Token\\F1} & BLEU & R-1 & R-2 & \shortstack{Context\\recall} & Fact.\\
     \midrule
     Adaptive with DistilBERT & \DistilStdMetrics\\
     Adaptive with T5-small & \TFiveStdMetrics\\
     Fixed L2 & \LTwoStdMetrics\\
     Fixed L3 & \LThreeStdMetrics\\
     \bottomrule
-  \end{tabular}
+  \end{tabularx}
 \end{table}
 
 The recorded cost includes answer-pipeline execution and WixQA factuality and

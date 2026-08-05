@@ -34,6 +34,15 @@
 \newcommand{\FinalOverRouting}{0.00\%}
 \newcommand{\FinalRoutingCostRegret}{0.0125}
 \newcommand{\FinalClassifierErrors}{6}
+\newcommand{\FinalTemplateComplexRecords}{113}
+\newcommand{\FinalTemplateComplexCorrect}{113}
+\newcommand{\FinalExpertComplexRecords}{3}
+\newcommand{\FinalExpertComplexCorrect}{0}
+\newcommand{\FinalSimulatedComplexRecords}{3}
+\newcommand{\FinalSimulatedComplexCorrect}{0}
+\newcommand{\FinalOfficialComplexRecords}{6}
+\newcommand{\FinalTemplateComplexRecall}{100.00\%}
+\newcommand{\FinalOfficialComplexRecall}{0.00\%}
 
 % Completed configuration experiment identity and compatible sample.
 \newcommand{\PrimaryExperimentName}{Experiment: WixQA Curpus 100 | WixQA datasets 20 | RAG Configurations 4}
@@ -60,12 +69,13 @@
 \newcommand{\LThreeConfigLatency}{5.863~s}
 \newcommand{\LThreeConfigCost}{\$0.000556}
 
-% Equal-dataset macro standard metrics: token F1, BLEU, ROUGE-1, ROUGE-2,
-% WixQA context recall, and WixQA factuality.
-\newcommand{\DistilStdMetrics}{43.07\% & 10.67\% & 43.07\% & 20.18\% & 56.11\% & 81.11\%}
-\newcommand{\TFiveStdMetrics}{44.66\% & 11.54\% & 44.66\% & 21.97\% & 56.11\% & 69.17\%}
-\newcommand{\LTwoStdMetrics}{43.37\% & 11.36\% & 43.37\% & 20.82\% & 55.83\% & 76.67\%}
-\newcommand{\LThreeStdMetrics}{38.95\% & 18.43\% & 38.95\% & 22.72\% & 55.83\% & 53.89\%}
+% Equal-dataset macro standard metrics in percent: token F1, BLEU, ROUGE-1,
+% ROUGE-2, WixQA context recall, and WixQA factuality. The table caption carries
+% the unit so individual cells remain compact.
+\newcommand{\DistilStdMetrics}{43.07 & 10.67 & 43.07 & 20.18 & 56.11 & 81.11}
+\newcommand{\TFiveStdMetrics}{44.66 & 11.54 & 44.66 & 21.97 & 56.11 & 69.17}
+\newcommand{\LTwoStdMetrics}{43.37 & 11.36 & 43.37 & 20.82 & 55.83 & 76.67}
+\newcommand{\LThreeStdMetrics}{38.95 & 18.43 & 38.95 & 22.72 & 55.83 & 53.89}
 
 % Equal-dataset macro RAGXplain metrics: context relevancy, context adherence,
 % answer relevancy, context recall, factuality, and grading note.

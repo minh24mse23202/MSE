@@ -40,4 +40,5 @@ project_report/*.out
 project_report/*.pdf
 project_report/*.synctex.gz
 project_report/*.toc
+project_report/*.xdv
 tmp/*

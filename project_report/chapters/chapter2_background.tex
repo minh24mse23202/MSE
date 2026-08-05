@@ -62,17 +62,37 @@ records \cite{pgvector2026,postgresql2026}.
 
 Lexical and dense retrievers make different errors. Hybrid retrieval combines
 their scores after normalization, allowing exact terminology and semantic
-similarity to contribute to the final rank. In \SystemName, retrieval
-diagnostics retain the raw BM25 score, raw dense score, normalized components,
-weights, hybrid score, rank, and selection status. This makes a poor rank
-explainable rather than reducing retrieval to an opaque list of chunks.
+similarity to contribute to the final rank. Convex score fusion is an
+established hybrid-retrieval method and can outperform rank-only fusion when
+its mixing parameter is tuned for the target domain \cite{bruch2024fusion}.
+For a query $q$ and candidate chunk $d$, \SystemName{} applies
+
+\begin{equation}
+  s_{\mathrm{hybrid}}(q,d)
+  = \alpha N_{\ell}\!\left(s_{\mathrm{BM25}}(q,d)\right)
+  + (1-\alpha)N_{d}\!\left(s_{\mathrm{dense}}(q,d)\right),
+  \label{eq:hybrid-score-fusion}
+\end{equation}
+
+\noindent where $N_{\ell}$ and $N_d$ independently apply min--max
+normalization over the lexical and dense candidate scores. A candidate absent
+from one result set receives zero for that component. The current default is
+$\alpha=0.65$, giving the dense component weight $0.35$; both values are loaded
+from the retrieval configuration. Retrieval diagnostics retain the raw BM25
+score, raw dense score, normalized components, weighted components, hybrid
+score, rank, and selection status. This makes a poor rank explainable rather
+than reducing retrieval to an opaque list of chunks.
 
 A reranker operates on a smaller candidate set after first-stage retrieval. It
 can improve precision by evaluating the query and candidate together, but it
-adds latency and model cost. The system exposes reranking as an optional
-capability selected through a saved RAG configuration. A lexical reranker is
-available locally, while hosted rerankers can be registered through the AI
-Models layer.
+adds latency and model cost; transformer cross-encoders are a well-established
+example of this second-stage approach \cite{nogueira2019passage}. The system
+exposes reranking as an optional capability selected through a saved RAG
+configuration. A lexical reranker is available locally, while hosted rerankers
+can be registered through the AI Models layer. Reranking is therefore distinct
+from the weighted fusion in \Cref{eq:hybrid-score-fusion}: fusion constructs the
+first-stage candidate ranking, after which an enabled reranker may reorder the
+selected candidates.
 
 \section{Adaptive Retrieval}
 
